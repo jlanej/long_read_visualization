@@ -322,7 +322,8 @@ align_ref_to_asm() {
         log "  ${bam} + index exist, skipping"
     else
         log "  Aligning reference to ${label} → ${bam}"
-        run minimap2 -a --eqx -x asm5 -t "${THREADS}" "${asm}" "${REFERENCE}" \
+        log "CMD: minimap2 -a --eqx -x asm5 -t ${THREADS} ${asm} ${REFERENCE} | samtools sort -@ ${THREADS} -o ${bam}"
+        minimap2 -a --eqx -x asm5 -t "${THREADS}" "${asm}" "${REFERENCE}" \
             | samtools sort -@ "${THREADS}" -o "${bam}"
         run samtools index -@ "${THREADS}" "${bam}"
     fi
