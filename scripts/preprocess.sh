@@ -37,7 +37,7 @@ Required inputs:
   --cram        FILE   Long-read CRAM file
   -o, --output-dir DIR Output directory
 
-Read type (required — controls minimap2 alignment preset):
+Read type (controls minimap2 alignment preset):
   --ont                Oxford Nanopore reads  (minimap2 -x map-ont)  [default]
   --hifi               PacBio HiFi reads      (minimap2 -x map-hifi)
 

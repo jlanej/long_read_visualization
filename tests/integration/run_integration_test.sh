@@ -26,8 +26,11 @@ echo "Testdir: ${TESTDIR}"
 echo ""
 
 # Helper: run a command inside the image with /testdata mounted.
+# Run as the current user so that output files are owned by the host user
+# and can be cleaned up by the EXIT trap without permission errors.
 docker_run() {
     docker run --rm --entrypoint "" \
+        --user "$(id -u):$(id -g)" \
         -v "${TESTDIR}:/testdata" \
         "${IMAGE}" "$@"
 }
@@ -66,6 +69,7 @@ echo ""
 # ── 3. End-to-end pipeline run ───────────────────────────────────────────────
 echo "--- 3. Running preprocess.sh ---"
 docker run --rm \
+    --user "$(id -u):$(id -g)" \
     -v "${TESTDIR}:/testdata" \
     "${IMAGE}" \
     --hap1       /testdata/hap1.fa.gz \

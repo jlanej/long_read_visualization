@@ -10,7 +10,7 @@ The pipeline takes three inputs for a sample:
 
 | Input | Description |
 |---|---|
-| **Hap1 / Hap2 assemblies** | FASTA (`.fa.gz`) with index (`.fa.gz.fai`) |
+| **Hap1 / Hap2 assemblies** | FASTA (`.fa` or `.fa.gz`) with index (`.fai`) |
 | **Long-read CRAM** | ONT or PacBio HiFi reads aligned to any reference |
 | **Target reference genome** | FASTA, or a named genome auto-downloaded with `--genome` |
 
@@ -51,6 +51,7 @@ filename (everything before the first `.`): `NA21110.t2t.cram` → `NA21110`.
 | `*_hap{1,2}_to_ref.paf` | PAF alignment for coordinate mapping |
 | `*_hap{1,2}_to_ref.mapping.bed.gz(.tbi)` | Tabix-indexed coordinate map |
 | `*_hap{1,2}_to_ref.mapping.json.gz` | JSON coordinate map for programmatic use |
+| `*_reads.fastq.gz` | Reads extracted from the input CRAM |
 | `*_reads_to_hap{1,2}.bam(.bai)` | Reads aligned to each haplotype |
 
 ---
