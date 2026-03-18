@@ -470,6 +470,8 @@ def main():
     # for each variant.  Passing duplicates to samtools faidx produces a FASTA
     # with duplicate sequence names, which causes downstream tools (minimap2,
     # samtools sort) to reject the file.
+    # dict.fromkeys() preserves insertion order (important for reproducible
+    # FASTA output) while removing duplicates in O(n) time.
     hap1_asm_regions = list(dict.fromkeys(hap1_asm_regions))
     hap2_asm_regions = list(dict.fromkeys(hap2_asm_regions))
 
