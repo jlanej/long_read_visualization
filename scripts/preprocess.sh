@@ -297,6 +297,37 @@ log "Step 6: Aligning reads to hap1 and hap2"
 align_reads_to_asm "${HAP1}" "hap1"
 align_reads_to_asm "${HAP2}" "hap2"
 
+# ── Step 7: Align reference to assemblies (ref-on-asm cross-check BAMs) ────
+#
+# These BAMs are coordinate-sorted in *assembly* space so the reference
+# sequence can be loaded as a second track in any assembly-space genome
+# browser (e.g. IGV.js).  They serve as a reciprocal cross-check for the
+# assembly-to-reference alignments produced in Step 2: every alignment
+# block that appears in the hap→ref BAM should have a complementary block
+# in the ref→hap BAM, making it straightforward to spot spurious mappings
+# or missed alignments.
+#
+# Preset: asm5  (≥99% identity, same as Step 2 — query and target are
+#               simply swapped so the output is sorted on assembly coords)
+# Flag:   --eqx  extended CIGAR (=/X instead of M) for precise
+#               match/mismatch visibility in the browser
+align_ref_to_asm() {
+    local asm="$1" label="$2"
+    local bam="${OUTPUT_DIR}/${SAMPLE_NAME}_ref_to_${label}.bam"
+    if [[ -f "${bam}" && -f "${bam}.bai" ]]; then
+        log "  ${bam} + index exist, skipping"
+    else
+        log "  Aligning reference to ${label} → ${bam}"
+        run minimap2 -a --eqx -x asm5 -t "${THREADS}" "${asm}" "${REFERENCE}" \
+            | samtools sort -@ "${THREADS}" -o "${bam}"
+        run samtools index -@ "${THREADS}" "${bam}"
+    fi
+}
+
+log "Step 7: Aligning reference to hap1 and hap2 (assembly-space cross-check BAMs)"
+align_ref_to_asm "${HAP1}" "hap1"
+align_ref_to_asm "${HAP2}" "hap2"
+
 # ── Done ────────────────────────────────────────────────────────────────────
 log "Pipeline complete. Outputs in ${OUTPUT_DIR}/"
 echo ""
