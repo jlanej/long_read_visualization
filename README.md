@@ -152,40 +152,82 @@ Optional:
 ### How it works
 
 Each haplotype assembly is aligned to the target reference genome with
-`minimap2 -x asm5`, which produces both a BAM file (for browsing) and a PAF
-file (for coordinate translation). The PAF records exact base-level
-correspondences between reference and assembly positions via extended CIGAR
-strings.
+`minimap2 -x asm5 -c`, which produces both a BAM file (for browsing) and a
+PAF file (for coordinate translation).  Passing `-c` causes minimap2 to emit
+a `cg:Z:` CIGAR tag for each alignment record, capturing every match,
+mismatch, insertion, and deletion at base-level resolution.
 
 Those alignments are parsed into a sorted interval index (compact JSON +
-tabix-indexed BED). For any reference coordinate range, a binary search
-locates every overlapping alignment record and recomputes the corresponding
-assembly position by walking the CIGAR — accounting for insertions, deletions,
-and reverse-complement (inversion) orientations. This gives O(log n) lookups
-over the full genome.
+tabix-indexed BED).  For any reference coordinate range a binary search
+locates every overlapping alignment record and **walks the CIGAR string** to
+project the query interval onto assembly space.  CIGAR-aware projection gives
+correct coordinates even when the block contains insertions or deletions —
+critical for structural-variant regions.  Blocks without a CIGAR tag fall
+back to linear interpolation for compatibility with older PAF files.
+
+### Structural-variant awareness
+
+Because SV breakpoints typically interrupt alignment blocks, a reference query
+that spans a breakpoint will overlap *two or more* blocks separated by a gap.
+The mapper detects these gaps and classifies them:
+
+| `event_type` | Condition | Meaning |
+|---|---|---|
+| `alignment` | within an alignment block | Reference bases have direct assembly equivalents |
+| `deletion` | same contig, same strand; assembly gap < reference gap | Assembly deleted sequence relative to reference |
+| `insertion` | same contig, same strand; assembly gap > reference gap | Assembly has novel sequence not in reference |
+| `inversion` | same contig, opposite strands at junction | Orientation flip — likely an inversion breakpoint |
+| `translocation` | different assembly contigs at junction | Inter-contig event |
+| `complex` | same contig, same strand; assembly gap is negative (overlap) | Duplication or other complex rearrangement |
+
+Every result dict returned by `query()` carries an `event_type` field.
+Callers can filter to `"alignment"` records for strict coordinate lookups or
+inspect all records to understand the full SV landscape of a region.
 
 ### Why it works
 
 `asm5` is minimap2's preset for sequences that are **≥99% identical** — the
 expected divergence between a high-quality human assembly (e.g., HPRC) and a
-population reference. Within well-assembled, collinear regions the mapping is
+population reference.  Within well-assembled, collinear regions the mapping is
 unambiguous and coordinates translate accurately even across small indels and
-SNPs.
+SNPs.  At SV boundaries, alignment blocks break at the structural rearrangement
+and the gap-classification logic exposes what kind of event is present, making
+those regions *visible* rather than silently absent.
 
-### Known limitations
+### Known limitations and how they are addressed
 
-| Situation | Effect |
-|---|---|
-| Unmapped / highly-divergent regions (centromeres, segmental duplications, novel insertions) | No alignment → coordinate query returns no result |
-| Large structural variants (inversions, translocations) | Alignment breaks at SV boundaries; coordinates spanning a breakpoint cannot be translated as a single interval |
-| Segmental duplications / copy-number variants | The same reference region may map to multiple assembly loci, producing ambiguous results |
-| Assembly gaps or low-quality sequence | Alignments may be clipped short, leaving bases near the gap untranslatable |
-| Supplementary / chimeric alignments | Multiple partial alignments for one contig can overlap in reference space; the index retains all of them, so queries in those regions may return multiple hits |
+| Situation | Status | Detail |
+|---|---|---|
+| **Large SVs (deletions, insertions)** | ✅ Addressed | CIGAR-aware projection handles indels within blocks; gaps between blocks are classified as `deletion` / `insertion` with accurate size estimates |
+| **Inversions** | ✅ Addressed | Opposite-strand blocks at a junction are detected and reported as `inversion` events |
+| **Translocations** | ✅ Addressed | Blocks from different assembly contigs at a junction are reported as `translocation` events |
+| **Complex rearrangements** | ✅ Addressed | Overlapping assembly ranges (negative asm gap) are classified as `complex` events |
+| **Segmental duplications / CNVs** | ⚠️ Annotated | The same reference region may map to multiple assembly loci; all hits are returned so the caller sees the full picture.  Use `min_mapq` to prefer primary alignments |
+| **Supplementary / chimeric alignments** | ⚠️ Handled | Multiple partial alignments are retained in the index; overlapping blocks all appear in results.  Pass `min_mapq` (e.g. `--min-mapq 5`) to exclude low-confidence supplementary hits |
+| **PAF without `-c` flag** | ⚠️ Fallback | No CIGAR → coordinate projection falls back to linear interpolation, which is less accurate across indels.  The pipeline uses `-c` by default |
+| **Unmapped / highly-divergent regions** | ❌ Inherent | No alignment → query returns no result.  Centromeres, acrocentric arms, and novel insertions without flanking alignment are invisible |
+| **Assembly gaps or low-quality sequence** | ❌ Inherent | Alignments may be clipped short, leaving bases near the gap untranslatable |
 
-These limitations are inherent to any alignment-based liftover approach. For
-the primary use-case — visualising long reads across well-assembled diploid
-genomes at specific variant sites — the vast majority of query coordinates fall
-in high-confidence, uniquely-mappable regions where the method works reliably.
+### Quality filtering
+
+Low-confidence alignments (supplementary hits with `mapq=0`, multi-mapped
+blocks in segmental duplications) can be excluded with the `min_mapq`
+parameter:
+
+```bash
+# CLI: exclude supplementary alignments with mapq < 5
+python3 src/coordinate_mapper.py query \
+    -i output_prefix.mapping.json.gz \
+    -r chr1:1000000-2000000 \
+    --min-mapq 5
+
+# Python API
+results = coordinate_mapper.query(index, "chr1", 1000000, 2000000, min_mapq=5)
+```
+
+When blocks are filtered by quality, gap events are computed between the
+*remaining* blocks only — ensuring that gap classifications reflect the
+high-confidence alignment landscape.
 
 ### Querying coordinate mappings
 
@@ -199,12 +241,18 @@ python3 src/coordinate_mapper.py query \
 tabix output/NA21110_hap1_to_ref.mapping.bed.gz chr1:1000000-2000000
 ```
 
+The TSV output includes an `event_type` column: `alignment` for regions with
+direct assembly equivalents, or `deletion` / `insertion` / `inversion` /
+`translocation` / `complex` for gap events at SV breakpoints.
+
 ### Coordinate mapper CLI
 
 ```bash
-# Build index from PAF
+# Build index from PAF (use -c to include CIGAR for precise SV mapping)
+minimap2 -x asm5 -c ref.fa asm.fa > asm_to_ref.paf
+
 python3 src/coordinate_mapper.py build \
-    -p hap1_to_ref.paf \
+    -p asm_to_ref.paf \
     -o output_prefix
 
 # Query index
@@ -214,9 +262,9 @@ python3 src/coordinate_mapper.py query \
 ```
 
 The JSON index uses sorted intervals with binary search for O(log n) overlap
-queries. Each query returns assembly coordinates corresponding to the
-requested reference region, correctly handling both forward and reverse strand
-alignments.
+queries.  When a `cg:Z:` CIGAR is present, coordinate projection walks the
+CIGAR for base-exact translation.  Gaps between alignment blocks are
+classified by SV type and returned alongside alignment results.
 
 ---
 
