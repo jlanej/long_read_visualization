@@ -465,6 +465,16 @@ def main():
         hap1_asm_regions.extend(r["hap1_regions"])
         hap2_asm_regions.extend(r["hap2_regions"])
 
+    # Deduplicate assembly regions — when multiple variants map to overlapping
+    # assembly regions, _collapse_asm_regions returns the same region string
+    # for each variant.  Passing duplicates to samtools faidx produces a FASTA
+    # with duplicate sequence names, which causes downstream tools (minimap2,
+    # samtools sort) to reject the file.
+    # dict.fromkeys() preserves insertion order (important for reproducible
+    # FASTA output) while removing duplicates in O(n) time.
+    hap1_asm_regions = list(dict.fromkeys(hap1_asm_regions))
+    hap2_asm_regions = list(dict.fromkeys(hap2_asm_regions))
+
     toy_hap1 = os.path.join(args.output_dir, "toy_hap1.fa")
     toy_hap2 = os.path.join(args.output_dir, "toy_hap2.fa")
     extract_fasta_regions(args.hap1, hap1_asm_regions, toy_hap1)
@@ -482,24 +492,7 @@ def main():
         reference=args.reference,
         cram_ref=args.cram_ref,
     )
-    # Convert to CRAM so the toy dataset exercises the same CRAM pipeline path
-    # as the real use case.  The toy reference (already built in Step 3) is used
-    # for CRAM encoding so the file is self-contained and ref-decodable.
-    toy_ref_gz = os.path.join(args.output_dir, "toy_reference.fa.gz")
-    toy_reads_cram = os.path.join(args.output_dir, "toy_reads.cram")
-    _run(
-        ["samtools", "view", "-C", "-T", toy_ref_gz, "-o", toy_reads_cram,
-         toy_reads_bam],
-        f"Converting reads to CRAM → {toy_reads_cram}",
-    )
-    _run(["samtools", "index", toy_reads_cram], f"Indexing {toy_reads_cram}")
-    try:
-        os.remove(toy_reads_bam)
-    except OSError as exc:
-        print(
-            f"  Warning: could not remove intermediate BAM {toy_reads_bam}: {exc}",
-            file=sys.stderr,
-        )
+    _run(["samtools", "index", toy_reads_bam], f"Indexing {toy_reads_bam}")
 
     # ── Step 6: Write manifest ──────────────────────────────────────────
     print("Step 6: Writing manifest", file=sys.stderr)

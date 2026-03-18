@@ -18,7 +18,12 @@ jobs:
       - name: Build Docker image
         run: docker build -t long_read_visualization:test .
 
-      - name: Run integration tests
+      - name: Run integration tests (synthetic data)
         run: bash tests/integration/run_integration_test.sh
+        env:
+          IMAGE: long_read_visualization:test
+
+      - name: Run integration tests (toy dataset)
+        run: bash tests/integration/run_toy_dataset_test.sh
         env:
           IMAGE: long_read_visualization:test
