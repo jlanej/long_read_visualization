@@ -11,7 +11,7 @@ set -euo pipefail
 THREADS=4
 READ_TYPE="ont"
 CRAM_REF=""
-REF_CACHE_DIR="${HOME}/.long_read_viz/references"
+REF_CACHE_DIR="${PWD}/references"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC_DIR="${SCRIPT_DIR}/../src"
 
