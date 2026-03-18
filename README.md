@@ -10,7 +10,7 @@ The pipeline takes three inputs for a sample:
 
 | Input | Description |
 |---|---|
-| **Hap1 / Hap2 assemblies** | FASTA (`.fa.gz`) with index (`.fa.gz.fai`) |
+| **Hap1 / Hap2 assemblies** | FASTA (`.fa` or `.fa.gz`) with index (`.fai`) |
 | **Long-read CRAM** | ONT or PacBio HiFi reads aligned to any reference |
 | **Target reference genome** | FASTA, or a named genome auto-downloaded with `--genome` |
 
@@ -51,6 +51,7 @@ filename (everything before the first `.`): `NA21110.t2t.cram` → `NA21110`.
 | `*_hap{1,2}_to_ref.paf` | PAF alignment for coordinate mapping |
 | `*_hap{1,2}_to_ref.mapping.bed.gz(.tbi)` | Tabix-indexed coordinate map |
 | `*_hap{1,2}_to_ref.mapping.json.gz` | JSON coordinate map for programmatic use |
+| `*_reads.fastq.gz` | Reads extracted from the input CRAM |
 | `*_reads_to_hap{1,2}.bam(.bai)` | Reads aligned to each haplotype |
 
 ---
@@ -229,6 +230,20 @@ coordinate-mapping indices to find the corresponding assembly regions, and
 extracts small subsets of the reference, assemblies, and reads.
 
 **Note:** this requires a completed pipeline run (it uses the mapping indices).
+
+### Data sources
+
+The curated training data is sourced from the following resources.  Please
+cite them if you use this dataset in your work:
+
+- **PMC12350158** — curated structural variant truth sets:
+  <https://www.ncbi.nlm.nih.gov/pmc/articles/PMC12350158/>
+- **1KG ONT Vienna** — population-scale long-read SV calls from 1,019 samples
+  across the 1000 Genomes Project (Oxford Nanopore, aligned to T2T-CHM13 v2.0):
+  Liao *et al.* (2025). *Nature* <https://doi.org/10.1038/s41586-025-09290-7>.
+  Data: <https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1KG_ONT_VIENNA/>
+- **shapeit5-phased callset** — phased, sequence-resolved SV VCF used as the
+  primary training truth set; included in `resources/`.
 
 ```bash
 bash scripts/generate_toy_dataset.sh \

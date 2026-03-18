@@ -15,13 +15,24 @@ reference.  It contains only the genomic regions surrounding a handful of
 large structural-variant deletions, making it small enough to commit to
 the repository and fast enough to run in CI.
 
+### Data sources and citations
+
+The curated training set is sourced from the following publicly available
+resources.  **Please cite them if you use this dataset in your work.**
+
+| Source | Description | Reference |
+|---|---|---|
+| **shapeit5-phased callset** | Phased, sequence-resolved SV VCF used as the primary truth set; included in `resources/` | Ebler *et al.* (2022). Pangenome-based genome inference. *Nat Genet* — and the 1KG ONT Vienna consortium (see below) |
+| **1KG ONT Vienna** | Population-scale long-read SV calls from 1,019 samples across the 1000 Genomes Project, sequenced with Oxford Nanopore | Liao *et al.* (2025). Structural variation in 1,019 diverse humans based on long-read sequencing. *Nature* [https://doi.org/10.1038/s41586-025-09290-7](https://doi.org/10.1038/s41586-025-09290-7). Data: [EBI FTP](https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1KG_ONT_VIENNA/) |
+| **PMC12350158** | Curated structural variant truth sets used to validate the callset | [https://www.ncbi.nlm.nih.gov/pmc/articles/PMC12350158/](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC12350158/) |
+
 ### Source files
 
 | File | Description |
 |---|---|
-| `resources/NA21110.shapeit5-phased-callset_final-vcf.phased.vcf.gz` | Phased SV callset for NA21110 (bundled in repo) |
-| Full NA21110 haplotype assemblies (hap1 & hap2) | HPRC r2 v1.0.1 |
-| Full NA21110 long-read CRAM | Aligned to T2T-CHM13 v2.0 |
+| `resources/NA21110.shapeit5-phased-callset_final-vcf.phased.vcf.gz` | Phased SV callset for NA21110 — shapeit5-phased callset (bundled in repo; see citation above) |
+| Full NA21110 haplotype assemblies (hap1 & hap2) | HPRC r2 v1.0.1, sourced from the 1KG ONT Vienna project |
+| Full NA21110 long-read CRAM | ONT reads from the 1KG ONT Vienna project, aligned to T2T-CHM13 v2.0 |
 | T2T-CHM13 v2.0 reference genome | Downloaded via `--genome chm13v2.0` |
 
 ### Generated toy files
