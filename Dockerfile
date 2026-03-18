@@ -55,6 +55,7 @@ RUN curl -fsSL \
 # ── Pipeline scripts ────────────────────────────────────────────────────────
 COPY src/ /opt/long_read_visualization/src/
 COPY scripts/ /opt/long_read_visualization/scripts/
+COPY resources/ /opt/long_read_visualization/resources/
 RUN chmod +x /opt/long_read_visualization/scripts/*.sh
 
 ENV PATH="/opt/long_read_visualization/scripts:${PATH}"

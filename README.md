@@ -57,11 +57,13 @@ filename (everything before the first `.`): `NA21110.t2t.cram` → `NA21110`.
 
 ## Quick start
 
-### With Apptainer / Singularity (HPC)
+### With Apptainer (recommended for HPC)
 
 Run from the **parent directory** that contains the sample folder. The
 `--bind "${PWD}:/work"` flag makes the current directory available inside
-the container at `/work`.
+the container at `/work`. Downloaded references are cached inside the
+bind-mounted working directory at `/work/references/` (i.e. `${PWD}/references/`
+on the host) so they persist across runs.
 
 **ONT reads:**
 
@@ -71,7 +73,6 @@ cd /path/to/projects   # e.g. this directory contains NA21110/
 
 apptainer run \
     --bind "${PWD}:/work" \
-    --bind "${HOME}/.long_read_viz:/root/.long_read_viz" \
     docker://ghcr.io/jlanej/long_read_visualization:main \
     --hap1       /work/NA21110/NA21110_hap1_hprc_r2_v1.0.1.fa.gz \
     --hap2       /work/NA21110/NA21110_hap2_hprc_r2_v1.0.1.fa.gz \
@@ -89,7 +90,6 @@ cd /path/to/projects
 
 apptainer run \
     --bind "${PWD}:/work" \
-    --bind "${HOME}/.long_read_viz:/root/.long_read_viz" \
     docker://ghcr.io/jlanej/long_read_visualization:main \
     --hap1       /work/NA21110/NA21110_hap1_hprc_r2_v1.0.1.fa.gz \
     --hap2       /work/NA21110/NA21110_hap2_hprc_r2_v1.0.1.fa.gz \
@@ -101,43 +101,9 @@ apptainer run \
 ```
 
 The `--genome chm13v2.0` flag downloads the reference automatically on first
-run and caches it at `~/.long_read_viz/references/`. The `--bind
-"${HOME}/.long_read_viz:/root/.long_read_viz"` mount persists the cache
-across container runs so the reference is only downloaded once.
-
-### With Docker
-
-**ONT reads:**
-
-```bash
-docker run --rm \
-    -v "${PWD}:/work" \
-    -v "${HOME}/.long_read_viz:/root/.long_read_viz" \
-    ghcr.io/jlanej/long_read_visualization:main \
-    --hap1       /work/NA21110/NA21110_hap1_hprc_r2_v1.0.1.fa.gz \
-    --hap2       /work/NA21110/NA21110_hap2_hprc_r2_v1.0.1.fa.gz \
-    --cram       /work/NA21110/NA21110.t2t.cram \
-    --genome      chm13v2.0 \
-    --output-dir  /work/output/NA21110 \
-    --threads     16 \
-    --ont
-```
-
-**PacBio HiFi reads:**
-
-```bash
-docker run --rm \
-    -v "${PWD}:/work" \
-    -v "${HOME}/.long_read_viz:/root/.long_read_viz" \
-    ghcr.io/jlanej/long_read_visualization:main \
-    --hap1       /work/NA21110/NA21110_hap1_hprc_r2_v1.0.1.fa.gz \
-    --hap2       /work/NA21110/NA21110_hap2_hprc_r2_v1.0.1.fa.gz \
-    --cram       /work/NA21110/NA21110.hifi.cram \
-    --genome      chm13v2.0 \
-    --output-dir  /work/output/NA21110 \
-    --threads     16 \
-    --hifi
-```
+run and caches it at `${PWD}/references/` (or `/work/references/` inside the
+container). Because this directory is inside the bind mount, the cache
+persists across container runs — no extra mount is needed.
 
 ### Locally (requires minimap2, samtools, htslib, python3)
 
@@ -189,7 +155,7 @@ Reference (one of):
   --genome        STR  Download a known reference if not already cached.
                        Supported: hg38 hg19 chm13v2.0 grch38
   --ref-dir       DIR  Cache directory for downloaded references
-                       [~/.long_read_viz/references]
+                       [./references]
 
 Optional:
   -t, --threads   INT  Number of threads [4]
@@ -244,7 +210,7 @@ alignments.
 
 ---
 
-## Building the Docker image
+## Building the container image
 
 ```bash
 docker build -t long_read_visualization .
@@ -252,6 +218,29 @@ docker build -t long_read_visualization .
 
 The image is also built and published automatically via GitHub Actions on
 pushes to `main` and on version tags.
+
+---
+
+## Toy dataset for integration testing
+
+A minimal toy dataset can be generated from the bundled NA21110 SV callset.
+The generation script selects large deletions from the VCF, uses the
+coordinate-mapping indices to find the corresponding assembly regions, and
+extracts small subsets of the reference, assemblies, and reads.
+
+**Note:** this requires a completed pipeline run (it uses the mapping indices).
+
+```bash
+bash scripts/generate_toy_dataset.sh \
+    --pipeline-output output/NA21110 \
+    --hap1       NA21110/NA21110_hap1_hprc_r2_v1.0.1.fa.gz \
+    --hap2       NA21110/NA21110_hap2_hprc_r2_v1.0.1.fa.gz \
+    --reference  references/chm13v2.0.fa.gz \
+    --cram       NA21110/NA21110.t2t.cram \
+    --output-dir toy_dataset
+```
+
+See [docs/toy_dataset.md](docs/toy_dataset.md) for the full procedure.
 
 ---
 
