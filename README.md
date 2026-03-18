@@ -194,15 +194,40 @@ SNPs.  At SV boundaries, alignment blocks break at the structural rearrangement
 and the gap-classification logic exposes what kind of event is present, making
 those regions *visible* rather than silently absent.
 
-### Known limitations
+### Known limitations and how they are addressed
 
-| Situation | Effect |
-|---|---|
-| Unmapped / highly-divergent regions (centromeres, segmental duplications, novel insertions) | No alignment → coordinate query returns no result |
-| PAF files produced without `-c` | CIGAR not available; coordinate projection falls back to linear interpolation (less accurate across indels) |
-| Segmental duplications / copy-number variants | The same reference region may map to multiple assembly loci, producing multiple `alignment` results |
-| Assembly gaps or low-quality sequence | Alignments may be clipped short, leaving bases near the gap untranslatable |
-| Supplementary / chimeric alignments | Multiple partial alignments for one contig can overlap in reference space; the index retains all of them |
+| Situation | Status | Detail |
+|---|---|---|
+| **Large SVs (deletions, insertions)** | ✅ Addressed | CIGAR-aware projection handles indels within blocks; gaps between blocks are classified as `deletion` / `insertion` with accurate size estimates |
+| **Inversions** | ✅ Addressed | Opposite-strand blocks at a junction are detected and reported as `inversion` events |
+| **Translocations** | ✅ Addressed | Blocks from different assembly contigs at a junction are reported as `translocation` events |
+| **Complex rearrangements** | ✅ Addressed | Overlapping assembly ranges (negative asm gap) are classified as `complex` events |
+| **Segmental duplications / CNVs** | ⚠️ Annotated | The same reference region may map to multiple assembly loci; all hits are returned so the caller sees the full picture.  Use `min_mapq` to prefer primary alignments |
+| **Supplementary / chimeric alignments** | ⚠️ Handled | Multiple partial alignments are retained in the index; overlapping blocks all appear in results.  Pass `min_mapq` (e.g. `--min-mapq 5`) to exclude low-confidence supplementary hits |
+| **PAF without `-c` flag** | ⚠️ Fallback | No CIGAR → coordinate projection falls back to linear interpolation, which is less accurate across indels.  The pipeline uses `-c` by default |
+| **Unmapped / highly-divergent regions** | ❌ Inherent | No alignment → query returns no result.  Centromeres, acrocentric arms, and novel insertions without flanking alignment are invisible |
+| **Assembly gaps or low-quality sequence** | ❌ Inherent | Alignments may be clipped short, leaving bases near the gap untranslatable |
+
+### Quality filtering
+
+Low-confidence alignments (supplementary hits with `mapq=0`, multi-mapped
+blocks in segmental duplications) can be excluded with the `min_mapq`
+parameter:
+
+```bash
+# CLI: exclude supplementary alignments with mapq < 5
+python3 src/coordinate_mapper.py query \
+    -i output_prefix.mapping.json.gz \
+    -r chr1:1000000-2000000 \
+    --min-mapq 5
+
+# Python API
+results = coordinate_mapper.query(index, "chr1", 1000000, 2000000, min_mapq=5)
+```
+
+When blocks are filtered by quality, gap events are computed between the
+*remaining* blocks only — ensuring that gap classifications reflect the
+high-confidence alignment landscape.
 
 ### Querying coordinate mappings
 

@@ -392,7 +392,7 @@ def _has_sv_at_junction(prev_block, block):
     return asm_gap != 0
 
 
-def query(index, chrom, start, end):
+def query(index, chrom, start, end, min_mapq=0):
     """Find assembly regions and SV events for a reference region.
 
     Uses binary search on sorted start positions to efficiently find all
@@ -404,10 +404,13 @@ def query(index, chrom, start, end):
     blocks are detected and classified as structural-variation events.
 
     Args:
-        index: Loaded index from :func:`load_index`.
-        chrom: Reference chromosome name.
-        start: Query start (0-based, inclusive).
-        end:   Query end (0-based, exclusive).
+        index:    Loaded index from :func:`load_index`.
+        chrom:    Reference chromosome name.
+        start:    Query start (0-based, inclusive).
+        end:      Query end (0-based, exclusive).
+        min_mapq: Minimum mapping quality.  Blocks with ``mapq < min_mapq``
+                  are silently excluded.  Useful for filtering supplementary
+                  or low-confidence alignments (default 0 = keep all).
 
     Returns:
         List of result dicts, ordered by ``ref_start``.  Each dict contains:
@@ -434,7 +437,7 @@ def query(index, chrom, start, end):
 
     overlapping = []
     for i in range(right_idx):
-        if ends[i] > start:
+        if ends[i] > start and blocks[i]["mq"] >= min_mapq:
             overlapping.append(blocks[i])
 
     if not overlapping:
@@ -565,7 +568,7 @@ def cmd_query(args):
     """Query the mapping index for a reference region."""
     index = load_index(args.index)
     chrom, start, end = parse_region(args.region)
-    results = query(index, chrom, start, end)
+    results = query(index, chrom, start, end, min_mapq=args.min_mapq)
 
     if not results:
         print(f"No mappings found for {args.region}", file=sys.stderr)
@@ -625,6 +628,12 @@ def main():
         "--region",
         required=True,
         help="Reference region to query (e.g. chr1:1000000-2000000)",
+    )
+    query_p.add_argument(
+        "--min-mapq",
+        type=int,
+        default=0,
+        help="Minimum mapping quality to include (default: 0 = keep all)",
     )
 
     args = parser.parse_args()
