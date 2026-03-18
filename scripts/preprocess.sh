@@ -111,7 +111,7 @@ case "${READ_TYPE}" in
 esac
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
-log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >&2; }
 
 ensure_faidx() {
     local fa="$1"
