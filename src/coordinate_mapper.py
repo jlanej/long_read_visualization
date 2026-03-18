@@ -444,6 +444,7 @@ def query(index, chrom, start, end, min_mapq=0):
     # Use the precomputed maximum block length to skip blocks that are
     # too far left to overlap the query region, turning the linear scan
     # into O(k + log N) where k is the number of overlapping blocks.
+    # Fall back to index 0 when max_block_len is absent (older indexes).
     max_len = chrom_data.get("max_block_len", 0)
     left_idx = bisect.bisect_left(starts, start - max_len) if max_len > 0 else 0
 
