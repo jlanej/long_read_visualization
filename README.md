@@ -24,6 +24,13 @@ It then:
 3. **Extracts reads** from the CRAM and **re-aligns them to each haplotype
    assembly** using `minimap2` (`-x map-ont` or `-x map-hifi`), producing
    sorted, indexed BAM files.
+4. **Aligns the reference genome back to each haplotype assembly** using
+   `minimap2 -x asm5 --eqx` (query and target swapped relative to item 1),
+   producing assembly-coordinate-sorted BAM files that can be loaded as a
+   reference track in any assembly-space genome browser.  These reciprocal
+   alignments serve as a cross-check against the hap→ref alignments: every
+   block visible in the hap→ref BAM should have a complementary block in
+   the ref→hap BAM, making spurious or missed mappings immediately apparent.
 
 ### Example input files
 
@@ -47,12 +54,13 @@ filename (everything before the first `.`): `NA21110.t2t.cram` → `NA21110`.
 
 | File | Description |
 |---|---|
-| `*_hap{1,2}_to_ref.bam(.bai)` | Assembly-to-reference alignment |
+| `*_hap{1,2}_to_ref.bam(.bai)` | Assembly aligned to reference (reference-coordinate BAM) |
 | `*_hap{1,2}_to_ref.paf` | PAF alignment for coordinate mapping |
 | `*_hap{1,2}_to_ref.mapping.bed.gz(.tbi)` | Tabix-indexed coordinate map |
 | `*_hap{1,2}_to_ref.mapping.json.gz` | JSON coordinate map for programmatic use |
 | `*_reads.fastq.gz` | Reads extracted from the input CRAM |
-| `*_reads_to_hap{1,2}.bam(.bai)` | Reads aligned to each haplotype |
+| `*_reads_to_hap{1,2}.bam(.bai)` | Reads aligned to each haplotype assembly |
+| `*_ref_to_hap{1,2}.bam(.bai)` | Reference genome aligned to each haplotype assembly (assembly-coordinate BAM, for cross-checking and assembly-panel display) |
 
 ---
 
@@ -144,6 +152,69 @@ Optional:
 | `hg38` | UCSC hg38 |
 | `hg19` | UCSC hg19 |
 | `grch38` | NCBI GRCh38 no-alt analysis set |
+
+---
+
+## Reference-to-assembly cross-check BAMs
+
+### What they are
+
+In addition to the assembly-to-reference BAMs produced in Step 2,
+the pipeline generates two **reference-to-assembly** BAMs (Step 7):
+
+```
+*_ref_to_hap1.bam(.bai)
+*_ref_to_hap2.bam(.bai)
+```
+
+These files contain the same alignment information as the hap→ref BAMs
+(Step 2) but with query and target swapped: the *reference genome* is the
+query and each *haplotype assembly* is the target.  As a result the BAM is
+sorted in **assembly coordinate space**, making it directly loadable as a
+track in any assembly-panel genome browser (e.g., an IGV.js panel whose
+reference sequence is `hap1.fa`).
+
+### Why they are useful
+
+| Use case | Detail |
+|---|---|
+| **Assembly-panel reference track** | Load `*_ref_to_hap1.bam` in an IGV.js panel whose reference is `hap1.fa`. The reference sequence appears as an aligned read track, giving instant visual context for what the reference looks like at any assembly locus. |
+| **Reciprocal alignment cross-check** | Every alignment block in the hap→ref BAM should have a complementary block in the ref→hap BAM. Discordant blocks (present in one direction but not the other) flag potentially spurious mappings or missed alignments in low-complexity / segmental-duplication regions. |
+| **SV breakpoint orientation** | Viewing both directions simultaneously in linked panels lets you visually confirm whether a structural variant is supported by both the assembly orientation and the reference orientation, reducing false-positive calls. |
+
+### Alignment parameters
+
+| Parameter | Value | Rationale |
+|---|---|---|
+| `minimap2 -x asm5` | asm5 preset | Optimised for ≥ 99% identity — the expected divergence between a high-quality human assembly (e.g., HPRC) and a population reference. Same preset used for the hap→ref BAMs for consistency. |
+| `--eqx` | Extended CIGAR (`=` / `X`) | Explicit match/mismatch encoding; enables per-base mismatch visualisation in IGV.js and simplifies downstream CIGAR parsing. |
+| `samtools sort` | By coordinate | BAM is coordinate-sorted in assembly space so that any assembly-coordinate range can be fetched with a standard random-access query. |
+
+### Idempotency
+
+Step 7 checks for the existence of both the BAM file **and** its index
+before running.  Re-running the pipeline after the BAMs are already present
+skips the alignment and indexing without overwriting or corrupting the
+existing files:
+
+```
+[...] ref_to_hap1.bam + index exist, skipping
+[...] ref_to_hap2.bam + index exist, skipping
+```
+
+### Loading in IGV.js
+
+To display the reference-on-assembly track alongside reads:
+
+```json
+{
+  "reference": { "fastaURL": "hap1.fa", "indexURL": "hap1.fa.fai" },
+  "tracks": [
+    { "name": "Reads → Hap1",     "url": "sample_reads_to_hap1.bam",  "type": "alignment" },
+    { "name": "Reference → Hap1", "url": "sample_ref_to_hap1.bam",    "type": "alignment" }
+  ]
+}
+```
 
 ---
 
