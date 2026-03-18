@@ -221,7 +221,9 @@ align_asm_paf() {
         log "  ${paf} exists, skipping"
     else
         log "  Generating PAF for ${label} → ${paf}"
-        run minimap2 --eqx -c -x asm5 -t "${THREADS}" "${REFERENCE}" "${asm}" > "${paf}"
+        local paf_tmp="${paf}.tmp"
+        run minimap2 --eqx -c -x asm5 -t "${THREADS}" "${REFERENCE}" "${asm}" > "${paf_tmp}"
+        mv "${paf_tmp}" "${paf}"
     fi
     echo "${paf}"
 }
@@ -266,16 +268,18 @@ else
     if [[ -n "${CRAM_REF}" ]]; then
         CRAM_REF_OPT="--reference ${CRAM_REF}"
     fi
+    FASTQ_TMP="${FASTQ}.tmp.gz"
     # shellcheck disable=SC2086
     if command -v pigz &>/dev/null; then
-        log "CMD: samtools fastq -@ ${THREADS} ${CRAM_REF_OPT} ${CRAM} | pigz -p ${THREADS} > ${FASTQ}"
+        log "CMD: samtools fastq -@ ${THREADS} ${CRAM_REF_OPT} ${CRAM} | pigz -p ${THREADS} > ${FASTQ_TMP}"
         samtools fastq -@ "${THREADS}" ${CRAM_REF_OPT} "${CRAM}" \
-            | pigz -p "${THREADS}" > "${FASTQ}"
+            | pigz -p "${THREADS}" > "${FASTQ_TMP}"
     else
-        log "CMD: samtools fastq -@ ${THREADS} ${CRAM_REF_OPT} ${CRAM} | gzip > ${FASTQ}"
+        log "CMD: samtools fastq -@ ${THREADS} ${CRAM_REF_OPT} ${CRAM} | gzip > ${FASTQ_TMP}"
         samtools fastq -@ "${THREADS}" ${CRAM_REF_OPT} "${CRAM}" \
-            | gzip > "${FASTQ}"
+            | gzip > "${FASTQ_TMP}"
     fi
+    mv "${FASTQ_TMP}" "${FASTQ}"
 fi
 
 # ── Step 6: Align reads to hap1 and hap2 ───────────────────────────────────
