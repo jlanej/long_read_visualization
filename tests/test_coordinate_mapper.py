@@ -1732,6 +1732,102 @@ class TestNoCigarFallback(unittest.TestCase):
 
 
 # =========================================================================
+# load_index() tests
+# =========================================================================
+
+
+class TestLoadIndex(unittest.TestCase):
+    """Tests for load_index() including the max_block_len optimisation."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def _build_index(self, paf_text):
+        paf_path = os.path.join(self.tmpdir, "test.paf")
+        with open(paf_path, "w") as fh:
+            fh.write(paf_text)
+        blocks = coordinate_mapper.parse_paf(paf_path)
+        json_path = os.path.join(self.tmpdir, "test.mapping.json.gz")
+        coordinate_mapper.build_json_index(blocks, json_path)
+        return coordinate_mapper.load_index(json_path)
+
+    def test_index_has_max_block_len_key(self):
+        """load_index() must populate max_block_len for every chromosome."""
+        index = self._build_index(SAMPLE_PAF)
+        self.assertIn("max_block_len", index["chr1"])
+        self.assertIn("max_block_len", index["chr2"])
+
+    def test_max_block_len_correct_value(self):
+        """max_block_len equals the longest ref span (re - rs) on that chrom.
+
+        SAMPLE_PAF chr1 blocks:
+            rs=10000 re=13000  → length 3000
+            rs=20000 re=23000  → length 3000
+        chr2 block:
+            rs=50000 re=52000  → length 2000
+        """
+        index = self._build_index(SAMPLE_PAF)
+        self.assertEqual(index["chr1"]["max_block_len"], 3000)
+        self.assertEqual(index["chr2"]["max_block_len"], 2000)
+
+    def test_max_block_len_single_block(self):
+        """Single-block chromosome: max_block_len equals that block's length."""
+        paf = "ctg1\t1000000\t0\t500\t+\tchr1\t248956422\t100\t700\t500\t600\t60\n"
+        index = self._build_index(paf)
+        self.assertEqual(index["chr1"]["max_block_len"], 600)
+
+    def test_max_block_len_unequal_blocks(self):
+        """max_block_len reflects the largest block, not just the last one."""
+        paf = (
+            "ctg1\t1000000\t0\t100\t+\tchr1\t248956422\t1000\t1100\t100\t100\t60\n"
+            "ctg1\t1000000\t200\t700\t+\tchr1\t248956422\t2000\t7000\t500\t5000\t60\n"
+            "ctg1\t1000000\t800\t900\t+\tchr1\t248956422\t8000\t8200\t200\t200\t60\n"
+        )
+        index = self._build_index(paf)
+        self.assertEqual(index["chr1"]["max_block_len"], 5000)
+
+    def test_query_left_bound_skips_non_overlapping(self):
+        """Query far to the right should skip blocks on the left via max_block_len.
+
+        Build a chromosome with many short blocks far to the left of the query
+        and one block at the query site.  The result must be correct regardless
+        of how many left blocks exist.
+        """
+        # 10 short blocks clustered near position 0 (length 100 each)
+        lines = []
+        for i in range(10):
+            rs = i * 200
+            re = rs + 100
+            lines.append(
+                f"ctg1\t1000000\t{i * 100}\t{i * 100 + 100}"
+                f"\t+\tchr1\t248956422\t{rs}\t{re}\t100\t100\t60"
+            )
+        # One target block far to the right
+        lines.append(
+            "ctg1\t1000000\t5000\t6000\t+\tchr1\t248956422\t100000\t101000\t1000\t1000\t60"
+        )
+        index = self._build_index("\n".join(lines) + "\n")
+        results = coordinate_mapper.query(index, "chr1", 100000, 101000)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["ref_start"], 100000)
+        self.assertEqual(results[0]["ref_end"], 101000)
+
+    def test_query_backward_compat_without_max_block_len(self):
+        """query() must work when max_block_len is absent (older index format)."""
+        index = self._build_index(SAMPLE_PAF)
+        # Simulate an older index that lacks max_block_len
+        for chrom_data in index.values():
+            chrom_data.pop("max_block_len", None)
+        # Should still return correct results
+        results = coordinate_mapper.query(index, "chr1", 10000, 13000)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["event_type"], "alignment")
+
+
+# =========================================================================
 # classify_sv_gap unit tests
 # =========================================================================
 

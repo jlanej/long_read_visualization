@@ -350,9 +350,19 @@ def build_json_index(blocks, index_path):
 def load_index(index_path):
     """Load a JSON index and prepare sorted arrays for binary search.
 
+    In addition to the raw block list, each chromosome entry gets three
+    derived arrays / values that accelerate :func:`query`:
+
+    * ``starts`` – list of ``rs`` (ref_start) values in sorted order.
+    * ``ends``   – list of ``re`` (ref_end) values in the same order.
+    * ``max_block_len`` – length of the longest alignment block on this
+      chromosome.  Used to compute a safe left-bound index via binary
+      search, skipping all blocks that end too far to the left to
+      overlap the query region.
+
     Returns:
-        Dict keyed by chromosome, each value containing 'blocks', 'starts',
-        and 'ends' lists for efficient overlap queries.
+        Dict keyed by chromosome name.  Each value is a dict with keys
+        ``'blocks'``, ``'starts'``, ``'ends'``, and ``'max_block_len'``.
     """
     with gzip.open(index_path, "rt") as fh:
         data = json.load(fh)
