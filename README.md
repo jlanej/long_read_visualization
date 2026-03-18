@@ -58,7 +58,6 @@ filename (everything before the first `.`): `NA21110.t2t.cram` → `NA21110`.
 | `*_hap{1,2}_to_ref.paf` | PAF alignment for coordinate mapping |
 | `*_hap{1,2}_to_ref.mapping.bed.gz(.tbi)` | Tabix-indexed coordinate map |
 | `*_hap{1,2}_to_ref.mapping.json.gz` | JSON coordinate map for programmatic use |
-| `*_reads.fastq.gz` | Reads extracted from the input CRAM |
 | `*_reads_to_hap{1,2}.bam(.bai)` | Reads aligned to each haplotype assembly |
 | `*_ref_to_hap{1,2}.bam(.bai)` | Reference genome aligned to each haplotype assembly (assembly-coordinate BAM, for cross-checking and assembly-panel display) |
 
