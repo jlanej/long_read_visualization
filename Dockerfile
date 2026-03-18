@@ -61,6 +61,7 @@ COPY resources/ /opt/long_read_visualization/resources/
 RUN chmod +x /opt/long_read_visualization/scripts/*.sh
 
 # Download igv.js for the visualization server
+# Note: keep in sync with IGV_JS_VERSION in server/app.py
 ARG IGV_JS_VERSION=3.1.3
 RUN curl -fsSL \
         "https://cdn.jsdelivr.net/npm/igv@${IGV_JS_VERSION}/dist/igv.min.js" \

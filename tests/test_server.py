@@ -242,7 +242,7 @@ class TestCoordinateTranslator(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Load the toy mapping indices if available."""
-        toy_output = "/tmp/toy_output"
+        toy_output = os.environ.get("TOY_OUTPUT_DIR", "/tmp/toy_output")
         cls.indices_available = False
 
         if not os.path.isdir(toy_output):

@@ -81,7 +81,7 @@ def find_assembly_fasta(output_dir, prefix, hap_label):
     ]
     for pat in patterns:
         matches = glob.glob(pat)
-        # Filter out pipeline output BAM/BED files
+        # Filter out coordinate mapping index files
         matches = [m for m in matches if not m.endswith(".mapping.json.gz")]
         if matches:
             return os.path.abspath(matches[0])

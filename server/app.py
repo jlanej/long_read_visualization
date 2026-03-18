@@ -637,6 +637,7 @@ class IGVHandler(SimpleHTTPRequestHandler):
 
 # ── IGV.js dependency ───────────────────────────────────────────────────────
 
+# Note: keep in sync with the ARG IGV_JS_VERSION in Dockerfile
 IGV_JS_VERSION = "3.1.3"
 IGV_JS_URL = (
     f"https://cdn.jsdelivr.net/npm/igv@{IGV_JS_VERSION}/dist/igv.min.js"
