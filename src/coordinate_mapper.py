@@ -361,7 +361,13 @@ def load_index(index_path):
     for chrom, raw_blocks in data.items():
         starts = [b["rs"] for b in raw_blocks]
         ends = [b["re"] for b in raw_blocks]
-        index[chrom] = {"blocks": raw_blocks, "starts": starts, "ends": ends}
+        max_block_len = max((e - s for s, e in zip(starts, ends)), default=0)
+        index[chrom] = {
+            "blocks": raw_blocks,
+            "starts": starts,
+            "ends": ends,
+            "max_block_len": max_block_len,
+        }
     return index
 
 
@@ -435,16 +441,19 @@ def query(index, chrom, start, end, min_mapq=0):
     # Find candidate blocks: block_start < end AND block_end > start
     right_idx = bisect.bisect_left(starts, end)
 
+    # Use the precomputed maximum block length to skip blocks that are
+    # too far left to overlap the query region, turning the linear scan
+    # into O(k + log N) where k is the number of overlapping blocks.
+    max_len = chrom_data.get("max_block_len", 0)
+    left_idx = bisect.bisect_left(starts, start - max_len) if max_len > 0 else 0
+
     overlapping = []
-    for i in range(right_idx):
+    for i in range(left_idx, right_idx):
         if ends[i] > start and blocks[i]["mq"] >= min_mapq:
             overlapping.append(blocks[i])
 
     if not overlapping:
         return []
-
-    # Sort by ref_start to enable sequential gap detection
-    overlapping.sort(key=lambda b: b["rs"])
 
     results = []
     prev_block = None

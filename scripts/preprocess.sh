@@ -257,32 +257,22 @@ log "Step 4: Building coordinate mapping indices"
 build_mapping "${HAP1_PAF}" "hap1"
 build_mapping "${HAP2_PAF}" "hap2"
 
-# ── Step 5: Extract reads from CRAM ────────────────────────────────────────
-FASTQ="${OUTPUT_DIR}/${SAMPLE_NAME}_reads.fastq.gz"
-
-if [[ -f "${FASTQ}" ]]; then
-    log "Step 5: ${FASTQ} exists, skipping read extraction"
-else
-    log "Step 5: Extracting reads from CRAM"
-    CRAM_REF_OPT=""
-    if [[ -n "${CRAM_REF}" ]]; then
-        CRAM_REF_OPT="--reference ${CRAM_REF}"
-    fi
-    FASTQ_TMP="${FASTQ}.tmp.gz"
-    # shellcheck disable=SC2086
-    if command -v pigz &>/dev/null; then
-        log "CMD: samtools fastq -@ ${THREADS} ${CRAM_REF_OPT} ${CRAM} | pigz -p ${THREADS} > ${FASTQ_TMP}"
-        samtools fastq -@ "${THREADS}" ${CRAM_REF_OPT} "${CRAM}" \
-            | pigz -p "${THREADS}" > "${FASTQ_TMP}"
-    else
-        log "CMD: samtools fastq -@ ${THREADS} ${CRAM_REF_OPT} ${CRAM} | gzip > ${FASTQ_TMP}"
-        samtools fastq -@ "${THREADS}" ${CRAM_REF_OPT} "${CRAM}" \
-            | gzip > "${FASTQ_TMP}"
-    fi
-    mv "${FASTQ_TMP}" "${FASTQ}"
+# ── Resolve CRAM reference for samtools ─────────────────────────────────────
+# Prefer an explicit --cram-ref; fall back to the primary --reference / --genome
+# so that samtools can always decode the CRAM file.
+CRAM_REF_OPT=""
+if [[ -n "${CRAM_REF}" ]]; then
+    CRAM_REF_OPT="--reference ${CRAM_REF}"
+elif [[ -n "${REFERENCE}" ]]; then
+    CRAM_REF_OPT="--reference ${REFERENCE}"
 fi
 
-# ── Step 6: Align reads to hap1 and hap2 ───────────────────────────────────
+# ── Step 5–6: Align reads to hap1 and hap2 (streaming from CRAM) ──────────
+#
+# Instead of writing an intermediate FASTQ file to disk (which can exceed
+# 100–200 GB for whole-genome long-read datasets), we stream reads directly
+# from the CRAM into minimap2 using process substitution.  This trades a
+# second CRAM decode for vastly reduced disk I/O and storage.
 align_reads_to_asm() {
     local asm="$1" label="$2"
     local bam="${OUTPUT_DIR}/${SAMPLE_NAME}_reads_to_${label}.bam"
@@ -290,18 +280,21 @@ align_reads_to_asm() {
         log "  ${bam} + index exist, skipping"
     else
         log "  Aligning reads to ${label} → ${bam}"
-        log "CMD: minimap2 -a -x ${MM2_READ_PRESET} -t ${THREADS} ${asm} ${FASTQ} | samtools sort -@ ${THREADS} -o ${bam}"
-        minimap2 -a -x "${MM2_READ_PRESET}" -t "${THREADS}" "${asm}" "${FASTQ}" \
+        # shellcheck disable=SC2086
+        log "CMD: minimap2 -a -x ${MM2_READ_PRESET} -t ${THREADS} ${asm} <(samtools fastq -@ ${THREADS} ${CRAM_REF_OPT} ${CRAM}) | samtools sort -@ ${THREADS} -o ${bam}"
+        # shellcheck disable=SC2086
+        minimap2 -a -x "${MM2_READ_PRESET}" -t "${THREADS}" "${asm}" \
+            <(samtools fastq -@ "${THREADS}" ${CRAM_REF_OPT} "${CRAM}") \
             | samtools sort -@ "${THREADS}" -o "${bam}"
         run samtools index -@ "${THREADS}" "${bam}"
     fi
 }
 
-log "Step 6: Aligning reads to hap1 and hap2"
+log "Step 5: Aligning reads to hap1 and hap2"
 align_reads_to_asm "${HAP1}" "hap1"
 align_reads_to_asm "${HAP2}" "hap2"
 
-# ── Step 7: Align reference to assemblies (ref-on-asm cross-check BAMs) ────
+# ── Step 6: Align reference to assemblies (ref-on-asm cross-check BAMs) ────
 #
 # These BAMs are coordinate-sorted in *assembly* space so the reference
 # sequence can be loaded as a second track in any assembly-space genome
@@ -329,7 +322,7 @@ align_ref_to_asm() {
     fi
 }
 
-log "Step 7: Aligning reference to hap1 and hap2 (assembly-space cross-check BAMs)"
+log "Step 6: Aligning reference to hap1 and hap2 (assembly-space cross-check BAMs)"
 align_ref_to_asm "${HAP1}" "hap1"
 align_ref_to_asm "${HAP2}" "hap2"
 
