@@ -42,7 +42,7 @@ resources.  **Please cite them if you use this dataset in your work.**
 | `toy_reference.fa.gz` | Reference FASTA — only the selected regions |
 | `toy_hap1.fa.gz` | Haplotype 1 assembly — only the mapped regions |
 | `toy_hap2.fa.gz` | Haplotype 2 assembly — only the mapped regions |
-| `toy_reads.bam` | Reads extracted from the CRAM for the selected regions |
+| `toy_reads.cram` | Reads extracted from the CRAM for the selected regions, re-encoded against `toy_reference.fa.gz` |
 | `toy_manifest.json` | JSON manifest listing every variant and region |
 
 ---
@@ -133,12 +133,16 @@ samtools faidx toy_hap1.fa.gz
 ### Step 6 — Extract reads
 
 Reads overlapping the padded reference regions are extracted from the
-CRAM, sorted, and indexed into a BAM:
+CRAM, sorted, and indexed into a BAM.  The BAM is then re-encoded as a
+CRAM against the toy reference, producing a self-contained CRAM file that
+exercises the same pipeline code path as real-world CRAM inputs:
 
 ```bash
 samtools view -b -h --reference ref.fa cram chr1:1000-2000 ... \
     | samtools sort -o toy_reads.bam
 samtools index toy_reads.bam
+samtools view -C -T toy_reference.fa.gz -o toy_reads.cram toy_reads.bam
+samtools index toy_reads.cram
 ```
 
 ### Step 7 — Write manifest
@@ -202,7 +206,8 @@ apptainer run \
     --hap1       /work/toy_dataset/toy_hap1.fa.gz \
     --hap2       /work/toy_dataset/toy_hap2.fa.gz \
     --reference  /work/toy_dataset/toy_reference.fa.gz \
-    --cram       /work/toy_dataset/toy_reads.bam \
+    --cram       /work/toy_dataset/toy_reads.cram \
+    --cram-ref   /work/toy_dataset/toy_reference.fa.gz \
     --output-dir /work/toy_dataset/pipeline_output \
     --threads     4 \
     --ont

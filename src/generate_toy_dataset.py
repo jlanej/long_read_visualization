@@ -28,6 +28,7 @@ import argparse
 import gzip
 import json
 import os
+import shlex
 import subprocess
 import sys
 
@@ -221,11 +222,19 @@ def _collapse_asm_regions(hits):
 # ---------------------------------------------------------------------------
 
 def _run(cmd, description=""):
-    """Run a shell command, raising on failure."""
-    print(f"  {description or ' '.join(cmd)}", file=sys.stderr)
+    """Run a shell command, raising on failure.
+
+    Always prints the exact command being executed so the invocation is
+    fully visible in the log.  If *description* is also provided it is
+    printed on a separate line before the command.
+    """
+    cmd_str = " ".join(shlex.quote(c) for c in cmd)
+    if description:
+        print(f"  {description}", file=sys.stderr)
+    print(f"  CMD: {cmd_str}", file=sys.stderr)
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        print(f"ERROR: {' '.join(cmd)}\n{result.stderr}", file=sys.stderr)
+        print(f"ERROR: {cmd_str}\n{result.stderr}", file=sys.stderr)
         sys.exit(1)
     return result
 
@@ -271,7 +280,9 @@ def extract_reads(cram_path, ref_regions, output_bam, reference=None,
 
     cmd = ["samtools", "view", "-b", "-h"] + ref_opt + [cram_path] + ref_regions
     unsorted = output_bam + ".unsorted.bam"
+    cmd_str = " ".join(shlex.quote(c) for c in cmd) + " > " + shlex.quote(unsorted)
     print(f"  Extracting reads for {len(ref_regions)} region(s)", file=sys.stderr)
+    print(f"  CMD: {cmd_str}", file=sys.stderr)
     with open(unsorted, "wb") as fh:
         result = subprocess.run(cmd, stdout=fh, stderr=subprocess.PIPE)
         if result.returncode != 0:
@@ -463,14 +474,32 @@ def main():
 
     # ── Step 5: Extract reads ───────────────────────────────────────────
     print("Step 5: Extracting reads for selected regions", file=sys.stderr)
-    toy_reads = os.path.join(args.output_dir, "toy_reads.bam")
+    toy_reads_bam = os.path.join(args.output_dir, "toy_reads.bam")
     extract_reads(
         args.cram,
         ref_regions,
-        toy_reads,
+        toy_reads_bam,
         reference=args.reference,
         cram_ref=args.cram_ref,
     )
+    # Convert to CRAM so the toy dataset exercises the same CRAM pipeline path
+    # as the real use case.  The toy reference (already built in Step 3) is used
+    # for CRAM encoding so the file is self-contained and ref-decodable.
+    toy_ref_gz = os.path.join(args.output_dir, "toy_reference.fa.gz")
+    toy_reads_cram = os.path.join(args.output_dir, "toy_reads.cram")
+    _run(
+        ["samtools", "view", "-C", "-T", toy_ref_gz, "-o", toy_reads_cram,
+         toy_reads_bam],
+        f"Converting reads to CRAM → {toy_reads_cram}",
+    )
+    _run(["samtools", "index", toy_reads_cram], f"Indexing {toy_reads_cram}")
+    try:
+        os.remove(toy_reads_bam)
+    except OSError as exc:
+        print(
+            f"  Warning: could not remove intermediate BAM {toy_reads_bam}: {exc}",
+            file=sys.stderr,
+        )
 
     # ── Step 6: Write manifest ──────────────────────────────────────────
     print("Step 6: Writing manifest", file=sys.stderr)
