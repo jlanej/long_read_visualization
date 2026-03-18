@@ -394,6 +394,130 @@ See [docs/toy_dataset.md](docs/toy_dataset.md) for the full procedure.
 
 ---
 
+## Visualization server
+
+A multi-panel IGV.js visualization server for reviewing structural variants
+across a reference genome and both haplotype assemblies.  The server runs
+entirely in a single Python process with no external dependencies beyond the
+standard library (igv.js is downloaded automatically on first start).
+
+### Features
+
+| Feature | Detail |
+|---|---|
+| **Three coordinated panels** | Reference, Haplotype 1, and Haplotype 2 — each with its own IGV.js browser instance |
+| **Synchronized navigation** | Navigate in the reference panel and both assembly panels follow via server-side coordinate translation |
+| **Region-of-interest browsing** | Load regions from a manifest JSON or SV VCF; step through them with ◀/▶ buttons or arrow keys |
+| **Multi-sample support** | TSV configuration file lists multiple samples; switch between them in the UI |
+| **Byte-range HTTP** | Full support for HTTP Range requests, enabling efficient BAM/FASTA random access |
+| **Containerized** | Apptainer definition (`server.def`) for HPC deployment |
+
+### Quick start with the toy dataset
+
+```bash
+# 1. Run the pipeline on the toy dataset (if not already done)
+bash scripts/preprocess.sh \
+    --hap1       resources/toy_dataset/toy_hap1.fa.gz \
+    --hap2       resources/toy_dataset/toy_hap2.fa.gz \
+    --cram       resources/toy_dataset/toy_reads.bam \
+    --reference  resources/toy_dataset/toy_reference.fa.gz \
+    --output-dir toy_example_output \
+    --threads 4 --ont
+
+# 2. Generate the server configuration
+python3 scripts/generate_server_config.py \
+    --output-dir toy_example_output \
+    --reference  resources/toy_dataset/toy_reference.fa.gz \
+    --hap1       resources/toy_dataset/toy_hap1.fa.gz \
+    --hap2       resources/toy_dataset/toy_hap2.fa.gz \
+    --reads-bam  resources/toy_dataset/toy_reads.bam \
+    --regions    resources/toy_dataset/toy_manifest.json \
+    --output     toy_example_config.tsv
+
+# 3. Start the server
+python3 server/app.py --config toy_example_config.tsv --port 8080
+```
+
+Or use the all-in-one launcher:
+
+```bash
+bash scripts/launch_server.sh --toy
+```
+
+Then open http://localhost:8080 in a browser.
+
+### Setting up for real data
+
+After running the preprocessing pipeline on one or more samples, generate
+a configuration file:
+
+```bash
+# Single sample
+python3 scripts/generate_server_config.py \
+    --output-dir /path/to/output/NA21110 \
+    --reference  /path/to/chm13v2.0.fa.gz \
+    --hap1       /path/to/NA21110_hap1.fa.gz \
+    --hap2       /path/to/NA21110_hap2.fa.gz \
+    --regions    /path/to/svs.vcf.gz \
+    -o samples.tsv
+
+# Multiple samples (auto-scan parent directory)
+python3 scripts/generate_server_config.py \
+    --scan-dir /path/to/outputs \
+    --reference /path/to/chm13v2.0.fa.gz \
+    -o samples.tsv
+```
+
+Then start the server:
+
+```bash
+python3 server/app.py --config samples.tsv --port 8080
+```
+
+### TSV configuration format
+
+The server reads a tab-separated configuration file with the following columns:
+
+| Column | Required | Description |
+|---|---|---|
+| `sample_id` | yes | Unique sample identifier |
+| `output_dir` | yes | Pipeline output directory (BAMs and mapping indices are auto-discovered) |
+| `reference` | yes | Reference FASTA (`.fa.gz` with `.fai` and `.gzi`) |
+| `hap1_assembly` | yes | Haplotype 1 assembly FASTA |
+| `hap2_assembly` | yes | Haplotype 2 assembly FASTA |
+| `reads_bam` | no | Reads aligned to reference (optional, shown in reference panel) |
+| `regions` | no | Regions file — manifest JSON or SV VCF (optional) |
+
+Lines starting with `#` are treated as comments; the first such line is the
+header.
+
+### Running with Apptainer
+
+```bash
+# Build the Apptainer image
+apptainer build server.sif server.def
+
+# Run the server
+apptainer run \
+    --bind "${PWD}:/work" \
+    server.sif \
+    --config /work/samples.tsv \
+    --port 8080
+```
+
+Or use the Docker image:
+
+```bash
+apptainer exec \
+    --bind "${PWD}:/work" \
+    docker://ghcr.io/jlanej/long_read_visualization:main \
+    python3 /opt/long_read_visualization/server/app.py \
+    --config /work/samples.tsv \
+    --port 8080
+```
+
+---
+
 ## Running tests
 
 ```bash
