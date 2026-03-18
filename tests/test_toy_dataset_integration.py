@@ -32,8 +32,8 @@ class TestToyDatasetFiles(unittest.TestCase):
         "toy_hap2.fa.gz",
         "toy_hap2.fa.gz.fai",
         "toy_hap2.fa.gz.gzi",
-        "toy_reads.cram",
-        "toy_reads.cram.crai",
+        "toy_reads.bam",
+        "toy_reads.bam.bai",
         "toy_manifest.json",
     ]
 

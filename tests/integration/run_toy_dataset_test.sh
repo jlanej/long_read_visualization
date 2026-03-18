@@ -53,8 +53,7 @@ docker run --rm \
     "${IMAGE}" \
     --hap1       /testdata/toy/toy_hap1.fa.gz \
     --hap2       /testdata/toy/toy_hap2.fa.gz \
-    --cram       /testdata/toy/toy_reads.cram \
-    --cram-ref   /testdata/toy/toy_reference.fa.gz \
+    --cram       /testdata/toy/toy_reads.bam \
     --reference  /testdata/toy/toy_reference.fa.gz \
     --output-dir /testdata/output \
     --threads    2 \
@@ -119,38 +118,58 @@ echo ""
 # ── 4. Validate coordinate mapping queries ──────────────────────────────────
 echo "--- 4. Validating coordinate mapping queries ---"
 
-# Use the first variant from the manifest to test a coordinate query.
-# The Python one-liner reads the manifest, picks the first ref_region,
-# queries the hap1 and hap2 mapping indices, and verifies non-empty results.
+# The coordinate mapping indices are built from the toy reference, whose
+# sequence names are subregion identifiers (e.g. "chr1:9279383-9389426").
+# We query the indices using the chromosomes actually present in the index
+# to confirm they return valid results.
 docker_run python3 -c "
 import json, sys
 sys.path.insert(0, '/opt/long_read_visualization/src')
 import coordinate_mapper
 
 manifest = json.load(open('/testdata/toy/toy_manifest.json'))
-variants = manifest['variants']
-print(f'Manifest contains {len(variants)} variant(s)')
+print(f'Manifest contains {len(manifest[\"variants\"])} variant(s)')
 
 hap1_idx = coordinate_mapper.load_index(
     '/testdata/output/${SAMPLE}_hap1_to_ref.mapping.json.gz')
 hap2_idx = coordinate_mapper.load_index(
     '/testdata/output/${SAMPLE}_hap2_to_ref.mapping.json.gz')
 
+# Query using the actual reference sequence names from the index
+# The index is a dict keyed by chromosome name.
+hap1_chroms = list(hap1_idx.keys())[:5]
+hap2_chroms = list(hap2_idx.keys())[:5]
+
 tested = 0
-for v in variants[:5]:
-    region = v['ref_region']
-    chrom, coords = region.split(':')
-    start, end = [int(x) for x in coords.split('-')]
-    h1 = coordinate_mapper.query(hap1_idx, chrom, start, end)
-    h2 = coordinate_mapper.query(hap2_idx, chrom, start, end)
-    total = len(h1) + len(h2)
-    if total == 0:
-        print(f'  WARNING: no mapping hits for {region}')
-    else:
-        print(f'  ✓ {region}: {len(h1)} hap1 + {len(h2)} hap2 hits')
+hits_total = 0
+for chrom in hap1_chroms:
+    entry = hap1_idx[chrom]
+    blocks = entry['blocks']
+    if not blocks:
+        continue
+    start = blocks[0]['rs']
+    end = blocks[-1]['re']
+    results = coordinate_mapper.query(hap1_idx, chrom, start, end)
+    hits_total += len(results)
+    print(f'  ✓ hap1 {chrom}: {len(results)} hit(s)')
     tested += 1
 
-print(f'Queried {tested} regions successfully')
+for chrom in hap2_chroms:
+    entry = hap2_idx[chrom]
+    blocks = entry['blocks']
+    if not blocks:
+        continue
+    start = blocks[0]['rs']
+    end = blocks[-1]['re']
+    results = coordinate_mapper.query(hap2_idx, chrom, start, end)
+    hits_total += len(results)
+    print(f'  ✓ hap2 {chrom}: {len(results)} hit(s)')
+    tested += 1
+
+if hits_total == 0:
+    print('ERROR: No mapping hits found in any query', file=sys.stderr)
+    sys.exit(1)
+print(f'Queried {tested} regions, {hits_total} total hits')
 "
 echo ""
 
