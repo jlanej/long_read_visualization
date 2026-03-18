@@ -4,6 +4,7 @@
 import gzip
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -97,8 +98,6 @@ class TestBuildIndex(unittest.TestCase):
         self.prefix = os.path.join(self.tmpdir, "test")
 
     def tearDown(self):
-        import shutil
-
         shutil.rmtree(self.tmpdir)
 
     def test_build_bed(self):
@@ -146,8 +145,6 @@ class TestQuery(unittest.TestCase):
         self.index = coordinate_mapper.load_index(json_path)
 
     def tearDown(self):
-        import shutil
-
         shutil.rmtree(self.tmpdir)
 
     def test_exact_overlap_plus_strand(self):

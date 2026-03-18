@@ -200,9 +200,13 @@ else
         CRAM_REF_OPT="--reference ${CRAM_REF}"
     fi
     # shellcheck disable=SC2086
-    samtools fastq -@ "${THREADS}" ${CRAM_REF_OPT} "${CRAM}" \
-        | pigz -p "${THREADS}" > "${FASTQ}" 2>/dev/null \
-        || gzip > "${FASTQ}"
+    if command -v pigz &>/dev/null; then
+        samtools fastq -@ "${THREADS}" ${CRAM_REF_OPT} "${CRAM}" \
+            | pigz -p "${THREADS}" > "${FASTQ}"
+    else
+        samtools fastq -@ "${THREADS}" ${CRAM_REF_OPT} "${CRAM}" \
+            | gzip > "${FASTQ}"
+    fi
 fi
 
 # ── Step 6: Align reads to hap1 and hap2 ───────────────────────────────────
