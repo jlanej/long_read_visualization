@@ -1533,8 +1533,10 @@ class TestParsePafWithTags(unittest.TestCase):
 
     def test_multiple_tags(self):
         """Multiple optional tags are extracted."""
-        paf = ("q\t1000\t0\t100\t+\tr\t2000\t0\t100\t100\t100\t60\t"
-               "NM:i:5\tcg:Z:95M5I\ttp:A:S\tms:i:190\n")
+        paf = (
+            "q\t1000\t0\t100\t+\tr\t2000\t0\t100\t100\t100\t60\t"
+            "NM:i:5\tcg:Z:95M5I\ttp:A:S\tms:i:190\n"
+        )
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".paf", delete=False
         ) as fh:

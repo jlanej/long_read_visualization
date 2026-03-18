@@ -404,13 +404,13 @@ def query(index, chrom, start, end, min_mapq=0):
     blocks are detected and classified as structural-variation events.
 
     Args:
-        index:    Loaded index from :func:`load_index`.
-        chrom:    Reference chromosome name.
-        start:    Query start (0-based, inclusive).
-        end:      Query end (0-based, exclusive).
+        index: Loaded index from :func:`load_index`.
+        chrom: Reference chromosome name.
+        start: Query start (0-based, inclusive).
+        end: Query end (0-based, exclusive).
         min_mapq: Minimum mapping quality.  Blocks with ``mapq < min_mapq``
-                  are silently excluded.  Useful for filtering supplementary
-                  or low-confidence alignments (default 0 = keep all).
+            are silently excluded.  Useful for filtering supplementary
+            or low-confidence alignments (default 0 = keep all).
 
     Returns:
         List of result dicts, ordered by ``ref_start``.  Each dict contains:
