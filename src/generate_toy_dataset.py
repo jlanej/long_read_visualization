@@ -186,10 +186,16 @@ def compute_regions(variants, hap1_index, hap2_index, padding=50000):
 def _collapse_asm_regions(hits):
     """Merge assembly hits per contig into non-overlapping intervals.
 
+    Only ``"alignment"`` events are considered; structural-variant gap events
+    (deletions, insertions, inversions, translocations) are skipped so that
+    the returned regions correspond strictly to aligned assembly sequence.
+
     Returns a list of "contig:start-end" strings.
     """
     by_contig = {}
     for h in hits:
+        if h.get("event_type", "alignment") != "alignment":
+            continue
         contig = h["asm_chrom"]
         s, e = h["asm_start"], h["asm_end"]
         if s > e:
