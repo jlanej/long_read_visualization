@@ -113,11 +113,17 @@ esac
 # ── Helpers ─────────────────────────────────────────────────────────────────
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >&2; }
 
+# Print and execute a command, so the exact invocation is always visible.
+run() {
+    log "CMD: $*"
+    "$@"
+}
+
 ensure_faidx() {
     local fa="$1"
     if [[ ! -f "${fa}.fai" ]]; then
         log "Indexing ${fa} ..."
-        samtools faidx "${fa}"
+        run samtools faidx "${fa}"
     fi
 }
 
@@ -143,7 +149,7 @@ download_reference() {
         log "Cached reference found: ${ref_path}"
     else
         log "Downloading ${genome} reference from ${url} ..."
-        curl -fL --progress-bar -o "${ref_path}" "${url}"
+        run curl -fL --progress-bar -o "${ref_path}" "${url}"
         log "Download complete: ${ref_path}"
     fi
 
@@ -191,13 +197,14 @@ ensure_faidx "${HAP2}"
 align_asm_to_ref() {
     local asm="$1" label="$2"
     local bam="${OUTPUT_DIR}/${SAMPLE_NAME}_${label}_to_ref.bam"
-    if [[ -f "${bam}" ]]; then
-        log "  ${bam} exists, skipping"
+    if [[ -f "${bam}" && -f "${bam}.bai" ]]; then
+        log "  ${bam} + index exist, skipping"
     else
         log "  Aligning ${label} to reference → ${bam}"
+        log "CMD: minimap2 -a --eqx -x asm5 -t ${THREADS} ${REFERENCE} ${asm} | samtools sort -@ ${THREADS} -o ${bam}"
         minimap2 -a --eqx -x asm5 -t "${THREADS}" "${REFERENCE}" "${asm}" \
             | samtools sort -@ "${THREADS}" -o "${bam}"
-        samtools index -@ "${THREADS}" "${bam}"
+        run samtools index -@ "${THREADS}" "${bam}"
     fi
     echo "${bam}"
 }
@@ -214,7 +221,7 @@ align_asm_paf() {
         log "  ${paf} exists, skipping"
     else
         log "  Generating PAF for ${label} → ${paf}"
-        minimap2 --eqx -c -x asm5 -t "${THREADS}" "${REFERENCE}" "${asm}" > "${paf}"
+        run minimap2 --eqx -c -x asm5 -t "${THREADS}" "${REFERENCE}" "${asm}" > "${paf}"
     fi
     echo "${paf}"
 }
@@ -228,16 +235,18 @@ build_mapping() {
     local paf="$1" label="$2"
     local prefix="${OUTPUT_DIR}/${SAMPLE_NAME}_${label}_to_ref"
     local json="${prefix}.mapping.json.gz"
-    if [[ -f "${json}" ]]; then
-        log "  ${json} exists, skipping"
+    local bed_gz="${prefix}.mapping.bed.gz"
+    local bed_tbi="${prefix}.mapping.bed.gz.tbi"
+    if [[ -f "${json}" && -f "${bed_gz}" && -f "${bed_tbi}" ]]; then
+        log "  ${label} mapping index exists (json + bed.gz + tbi), skipping"
     else
         log "  Building mapping index for ${label}"
-        python3 "${SRC_DIR}/coordinate_mapper.py" build -p "${paf}" -o "${prefix}"
+        run python3 "${SRC_DIR}/coordinate_mapper.py" build -p "${paf}" -o "${prefix}"
         # Create tabix-indexed BED
         local bed="${prefix}.mapping.bed"
         if [[ -f "${bed}" ]]; then
-            bgzip -f "${bed}"
-            tabix -p bed "${bed}.gz"
+            run bgzip -f "${bed}"
+            run tabix -p bed "${bed}.gz"
         fi
     fi
 }
@@ -259,9 +268,11 @@ else
     fi
     # shellcheck disable=SC2086
     if command -v pigz &>/dev/null; then
+        log "CMD: samtools fastq -@ ${THREADS} ${CRAM_REF_OPT} ${CRAM} | pigz -p ${THREADS} > ${FASTQ}"
         samtools fastq -@ "${THREADS}" ${CRAM_REF_OPT} "${CRAM}" \
             | pigz -p "${THREADS}" > "${FASTQ}"
     else
+        log "CMD: samtools fastq -@ ${THREADS} ${CRAM_REF_OPT} ${CRAM} | gzip > ${FASTQ}"
         samtools fastq -@ "${THREADS}" ${CRAM_REF_OPT} "${CRAM}" \
             | gzip > "${FASTQ}"
     fi
@@ -271,13 +282,14 @@ fi
 align_reads_to_asm() {
     local asm="$1" label="$2"
     local bam="${OUTPUT_DIR}/${SAMPLE_NAME}_reads_to_${label}.bam"
-    if [[ -f "${bam}" ]]; then
-        log "  ${bam} exists, skipping"
+    if [[ -f "${bam}" && -f "${bam}.bai" ]]; then
+        log "  ${bam} + index exist, skipping"
     else
         log "  Aligning reads to ${label} → ${bam}"
+        log "CMD: minimap2 -a -x ${MM2_READ_PRESET} -t ${THREADS} ${asm} ${FASTQ} | samtools sort -@ ${THREADS} -o ${bam}"
         minimap2 -a -x "${MM2_READ_PRESET}" -t "${THREADS}" "${asm}" "${FASTQ}" \
             | samtools sort -@ "${THREADS}" -o "${bam}"
-        samtools index -@ "${THREADS}" "${bam}"
+        run samtools index -@ "${THREADS}" "${bam}"
     fi
 }
 
