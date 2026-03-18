@@ -350,9 +350,19 @@ def build_json_index(blocks, index_path):
 def load_index(index_path):
     """Load a JSON index and prepare sorted arrays for binary search.
 
+    In addition to the raw block list, each chromosome entry gets three
+    derived arrays / values that accelerate :func:`query`:
+
+    * ``starts`` – list of ``rs`` (ref_start) values in sorted order.
+    * ``ends``   – list of ``re`` (ref_end) values in the same order.
+    * ``max_block_len`` – length of the longest alignment block on this
+      chromosome.  Used to compute a safe left-bound index via binary
+      search, skipping all blocks that end too far to the left to
+      overlap the query region.
+
     Returns:
-        Dict keyed by chromosome, each value containing 'blocks', 'starts',
-        and 'ends' lists for efficient overlap queries.
+        Dict keyed by chromosome name.  Each value is a dict with keys
+        ``'blocks'``, ``'starts'``, ``'ends'``, and ``'max_block_len'``.
     """
     with gzip.open(index_path, "rt") as fh:
         data = json.load(fh)
@@ -361,7 +371,13 @@ def load_index(index_path):
     for chrom, raw_blocks in data.items():
         starts = [b["rs"] for b in raw_blocks]
         ends = [b["re"] for b in raw_blocks]
-        index[chrom] = {"blocks": raw_blocks, "starts": starts, "ends": ends}
+        max_block_len = max((e - s for s, e in zip(starts, ends)), default=0)
+        index[chrom] = {
+            "blocks": raw_blocks,
+            "starts": starts,
+            "ends": ends,
+            "max_block_len": max_block_len,
+        }
     return index
 
 
@@ -435,16 +451,20 @@ def query(index, chrom, start, end, min_mapq=0):
     # Find candidate blocks: block_start < end AND block_end > start
     right_idx = bisect.bisect_left(starts, end)
 
+    # Use the precomputed maximum block length to skip blocks that are
+    # too far left to overlap the query region, turning the linear scan
+    # into O(k + log N) where k is the number of overlapping blocks.
+    # Fall back to index 0 when max_block_len is absent (older indexes).
+    max_len = chrom_data.get("max_block_len", 0)
+    left_idx = bisect.bisect_left(starts, start - max_len) if max_len > 0 else 0
+
     overlapping = []
-    for i in range(right_idx):
+    for i in range(left_idx, right_idx):
         if ends[i] > start and blocks[i]["mq"] >= min_mapq:
             overlapping.append(blocks[i])
 
     if not overlapping:
         return []
-
-    # Sort by ref_start to enable sequential gap detection
-    overlapping.sort(key=lambda b: b["rs"])
 
     results = []
     prev_block = None

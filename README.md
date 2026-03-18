@@ -160,7 +160,7 @@ Optional:
 ### What they are
 
 In addition to the assembly-to-reference BAMs produced in Step 2,
-the pipeline generates two **reference-to-assembly** BAMs (Step 7):
+the pipeline generates two **reference-to-assembly** BAMs (Step 6):
 
 ```
 *_ref_to_hap1.bam(.bai)
@@ -192,7 +192,7 @@ reference sequence is `hap1.fa`).
 
 ### Idempotency
 
-Step 7 checks for the existence of both the BAM file **and** its index
+Step 6 checks for the existence of both the BAM file **and** its index
 before running.  Re-running the pipeline after the BAMs are already present
 skips the alignment and indexing without overwriting or corrupting the
 existing files:
