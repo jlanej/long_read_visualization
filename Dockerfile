@@ -40,6 +40,7 @@ RUN curl -fsSL \
     && ./configure --prefix=/usr/local \
     && make -j"$(nproc)" \
     && make install \
+    && ldconfig \
     && rm -rf "/tmp/htslib-${HTSLIB_VERSION}"
 
 # ── samtools ────────────────────────────────────────────────────────────────

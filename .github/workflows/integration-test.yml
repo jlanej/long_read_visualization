@@ -1,0 +1,24 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  integration-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t long_read_visualization:test .
+
+      - name: Run integration tests
+        run: bash tests/integration/run_integration_test.sh
+        env:
+          IMAGE: long_read_visualization:test
