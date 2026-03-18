@@ -222,11 +222,16 @@ To display the reference-on-assembly track alongside reads:
 
 ### How it works
 
-Each haplotype assembly is aligned to the target reference genome with
-`minimap2 -x asm5 -c`, which produces both a BAM file (for browsing) and a
-PAF file (for coordinate translation).  Passing `-c` causes minimap2 to emit
-a `cg:Z:` CIGAR tag for each alignment record, capturing every match,
-mismatch, insertion, and deletion at base-level resolution.
+Each haplotype assembly is aligned to the target reference genome in two
+separate minimap2 invocations:
+
+1. **BAM alignment** (`minimap2 -a --eqx -x asm5`): produces a sorted,
+   indexed BAM for genome-browser display.
+2. **PAF alignment** (`minimap2 --eqx -c -x asm5`): produces a PAF file
+   with `cg:Z:` CIGAR tags used for coordinate translation.  Passing `-c`
+   causes minimap2 to emit the full CIGAR string in the PAF `cg:Z:` tag,
+   capturing every match, mismatch, insertion, and deletion at base-level
+   resolution.
 
 Those alignments are parsed into a sorted interval index (compact JSON +
 tabix-indexed BED).  For any reference coordinate range a binary search
