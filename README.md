@@ -12,7 +12,7 @@ The pipeline takes three inputs for a sample:
 |---|---|
 | **Hap1 / Hap2 assemblies** | FASTA (`.fa.gz`) with index (`.fa.gz.fai`) |
 | **Long-read CRAM** | ONT or PacBio HiFi reads aligned to any reference |
-| **Target reference genome** | FASTA the assemblies will be aligned to |
+| **Target reference genome** | FASTA, or a named genome auto-downloaded with `--genome` |
 
 It then:
 
@@ -25,7 +25,10 @@ It then:
    assembly** using `minimap2` (`-x map-ont` or `-x map-hifi`), producing
    sorted, indexed BAM files.
 
-### Expected sample directory layout
+### Example input files
+
+Files can be in any location — pass their paths directly to `--hap1`,
+`--hap2`, and `--cram`. A common layout when using HPRC assemblies is:
 
 ```
 NA21110/
@@ -36,6 +39,9 @@ NA21110/
   NA21110_hap2_hprc_r2_v1.0.1.fa.gz
   NA21110_hap2_hprc_r2_v1.0.1.fa.gz.fai
 ```
+
+The **sample name** used in output filenames is derived from the CRAM
+filename (everything before the first `.`): `NA21110.t2t.cram` → `NA21110`.
 
 ### Pipeline outputs
 
@@ -51,37 +57,114 @@ NA21110/
 
 ## Quick start
 
-### With Docker
-
-```bash
-docker run --rm -v /data:/data ghcr.io/jlanej/long_read_visualization:main \
-    -s /data/NA21110 \
-    -r /data/ref/chm13v2.0.fa \
-    -o /data/output/NA21110 \
-    -t 16
-```
-
 ### With Apptainer / Singularity (HPC)
 
+Run from the **parent directory** that contains the sample folder. The
+`--bind "${PWD}:/work"` flag makes the current directory available inside
+the container at `/work`.
+
+**ONT reads:**
+
 ```bash
+# cd to the parent directory of your sample folder first
+cd /path/to/projects   # e.g. this directory contains NA21110/
+
 apptainer run \
+    --bind "${PWD}:/work" \
+    --bind "${HOME}/.long_read_viz:/root/.long_read_viz" \
     docker://ghcr.io/jlanej/long_read_visualization:main \
-    -s /data/NA21110 \
-    -r /data/ref/chm13v2.0.fa \
-    -o /data/output/NA21110 \
-    -t 32 \
-    --read-type ont
+    --hap1       /work/NA21110/NA21110_hap1_hprc_r2_v1.0.1.fa.gz \
+    --hap2       /work/NA21110/NA21110_hap2_hprc_r2_v1.0.1.fa.gz \
+    --cram       /work/NA21110/NA21110.t2t.cram \
+    --genome      chm13v2.0 \
+    --output-dir  /work/output/NA21110 \
+    --threads     32 \
+    --ont
+```
+
+**PacBio HiFi reads:**
+
+```bash
+cd /path/to/projects
+
+apptainer run \
+    --bind "${PWD}:/work" \
+    --bind "${HOME}/.long_read_viz:/root/.long_read_viz" \
+    docker://ghcr.io/jlanej/long_read_visualization:main \
+    --hap1       /work/NA21110/NA21110_hap1_hprc_r2_v1.0.1.fa.gz \
+    --hap2       /work/NA21110/NA21110_hap2_hprc_r2_v1.0.1.fa.gz \
+    --cram       /work/NA21110/NA21110.hifi.cram \
+    --genome      chm13v2.0 \
+    --output-dir  /work/output/NA21110 \
+    --threads     32 \
+    --hifi
+```
+
+The `--genome chm13v2.0` flag downloads the reference automatically on first
+run and caches it at `~/.long_read_viz/references/`. The `--bind
+"${HOME}/.long_read_viz:/root/.long_read_viz"` mount persists the cache
+across container runs so the reference is only downloaded once.
+
+### With Docker
+
+**ONT reads:**
+
+```bash
+docker run --rm \
+    -v "${PWD}:/work" \
+    -v "${HOME}/.long_read_viz:/root/.long_read_viz" \
+    ghcr.io/jlanej/long_read_visualization:main \
+    --hap1       /work/NA21110/NA21110_hap1_hprc_r2_v1.0.1.fa.gz \
+    --hap2       /work/NA21110/NA21110_hap2_hprc_r2_v1.0.1.fa.gz \
+    --cram       /work/NA21110/NA21110.t2t.cram \
+    --genome      chm13v2.0 \
+    --output-dir  /work/output/NA21110 \
+    --threads     16 \
+    --ont
+```
+
+**PacBio HiFi reads:**
+
+```bash
+docker run --rm \
+    -v "${PWD}:/work" \
+    -v "${HOME}/.long_read_viz:/root/.long_read_viz" \
+    ghcr.io/jlanej/long_read_visualization:main \
+    --hap1       /work/NA21110/NA21110_hap1_hprc_r2_v1.0.1.fa.gz \
+    --hap2       /work/NA21110/NA21110_hap2_hprc_r2_v1.0.1.fa.gz \
+    --cram       /work/NA21110/NA21110.hifi.cram \
+    --genome      chm13v2.0 \
+    --output-dir  /work/output/NA21110 \
+    --threads     16 \
+    --hifi
 ```
 
 ### Locally (requires minimap2, samtools, htslib, python3)
 
+**ONT reads:**
+
 ```bash
 bash scripts/preprocess.sh \
-    -s /data/NA21110 \
-    -r /data/ref/chm13v2.0.fa \
-    -o /data/output/NA21110 \
-    -t 16 \
-    --read-type ont
+    --hap1       NA21110/NA21110_hap1_hprc_r2_v1.0.1.fa.gz \
+    --hap2       NA21110/NA21110_hap2_hprc_r2_v1.0.1.fa.gz \
+    --cram       NA21110/NA21110.t2t.cram \
+    --genome      chm13v2.0 \
+    --output-dir  output/NA21110 \
+    --threads     16 \
+    --ont
+```
+
+**PacBio HiFi reads:**
+
+```bash
+bash scripts/preprocess.sh \
+    --hap1       NA21110/NA21110_hap1_hprc_r2_v1.0.1.fa.gz \
+    --hap2       NA21110/NA21110_hap2_hprc_r2_v1.0.1.fa.gz \
+    --cram       NA21110/NA21110.hifi.cram \
+    --genome      chm13v2.0 \
+    --output-dir  output/NA21110 \
+    --threads     16 \
+    --hifi
 ```
 
 ---
@@ -91,17 +174,37 @@ bash scripts/preprocess.sh \
 ```
 Usage: preprocess.sh [options]
 
-Required:
-  -s, --sample-dir DIR    Sample directory with CRAM + assembly FASTAs
-  -r, --reference  FILE   Target reference genome FASTA
-  -o, --output-dir DIR    Output directory
+Required inputs:
+  --hap1        FILE   Haplotype 1 assembly FASTA (.fa or .fa.gz)
+  --hap2        FILE   Haplotype 2 assembly FASTA (.fa or .fa.gz)
+  --cram        FILE   Long-read CRAM file
+  -o, --output-dir DIR Output directory
+
+Read type (controls minimap2 alignment preset):
+  --ont                Oxford Nanopore reads  (minimap2 -x map-ont)  [default]
+  --hifi               PacBio HiFi reads      (minimap2 -x map-hifi)
+
+Reference (one of):
+  -r, --reference FILE Target reference genome FASTA (local file)
+  --genome        STR  Download a known reference if not already cached.
+                       Supported: hg38 hg19 chm13v2.0 grch38
+  --ref-dir       DIR  Cache directory for downloaded references
+                       [~/.long_read_viz/references]
 
 Optional:
-  -t, --threads    INT    Number of threads  [4]
-  --read-type      STR    ont | hifi         [ont]
-  --cram-ref       FILE   Reference FASTA used to encode the CRAM
-                          (needed only when different from --reference)
+  -t, --threads   INT  Number of threads [4]
+  --cram-ref      FILE Reference FASTA used to encode the CRAM
+                       (needed only when different from --reference / --genome)
 ```
+
+### Supported `--genome` values
+
+| Name | Source |
+|---|---|
+| `chm13v2.0` | T2T-CHM13 v2.0 (human-pangenomics S3) |
+| `hg38` | UCSC hg38 |
+| `hg19` | UCSC hg19 |
+| `grch38` | NCBI GRCh38 no-alt analysis set |
 
 ---
 

@@ -4,40 +4,55 @@
 # Aligns haplotype assemblies to a reference genome and reads to assemblies,
 # then builds coordinate-mapping indices for linked IGV.js visualization.
 #
-# Required tools: minimap2, samtools, bgzip, tabix, python3
+# Required tools: minimap2, samtools, bgzip, tabix, python3, curl
 set -euo pipefail
 
 # ── Defaults ────────────────────────────────────────────────────────────────
 THREADS=4
 READ_TYPE="ont"
 CRAM_REF=""
+REF_CACHE_DIR="${HOME}/.long_read_viz/references"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC_DIR="${SCRIPT_DIR}/../src"
 
+# Known reference genomes (name → URL of bgzipped/gzipped FASTA)
+declare -A GENOME_URLS
+GENOME_URLS["hg38"]="https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz"
+GENOME_URLS["hg19"]="https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/hg19.fa.gz"
+GENOME_URLS["chm13v2.0"]="https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0.fa.gz"
+GENOME_URLS["grch38"]="https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/001/405/GCA_000001405.15_GRCh38/seqs_for_alignment_pipelines.ucsc_ids/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna.gz"
+
 # ── Usage ───────────────────────────────────────────────────────────────────
 usage() {
+    local known_genomes
+    known_genomes="${!GENOME_URLS[*]}"
     cat <<EOF
 Usage: $(basename "$0") [options]
 
 Pre-process long-read data for multi-panel IGV.js visualization.
 
-Required:
-  -s, --sample-dir DIR    Sample directory containing CRAM and assembly FASTAs
-  -r, --reference  FILE   Target reference genome FASTA
-  -o, --output-dir DIR    Output directory
+Required inputs:
+  --hap1        FILE   Haplotype 1 assembly FASTA (.fa or .fa.gz)
+  --hap2        FILE   Haplotype 2 assembly FASTA (.fa or .fa.gz)
+  --cram        FILE   Long-read CRAM file
+  -o, --output-dir DIR Output directory
+
+Read type (required — controls minimap2 alignment preset):
+  --ont                Oxford Nanopore reads  (minimap2 -x map-ont)  [default]
+  --hifi               PacBio HiFi reads      (minimap2 -x map-hifi)
+
+Reference (one of):
+  -r, --reference FILE Target reference genome FASTA
+  --genome        STR  Download a known reference if not already cached.
+                       Supported: ${known_genomes}
+  --ref-dir       DIR  Cache directory for downloaded references
+                       [${REF_CACHE_DIR}]
 
 Optional:
-  -t, --threads    INT    Number of threads [${THREADS}]
-  --read-type      STR    Read technology: ont | hifi [${READ_TYPE}]
-  --cram-ref       FILE   Reference FASTA used to encode the CRAM
-                          (required when different from --reference)
-
-Expected sample directory layout:
-  SAMPLE/
-    SAMPLE.*.cram          (long-read CRAM)
-    SAMPLE.*.cram.crai
-    SAMPLE_hap1*.fa.gz     (haplotype 1 assembly)
-    SAMPLE_hap2*.fa.gz     (haplotype 2 assembly)
+  -t, --threads   INT  Number of threads [${THREADS}]
+  --cram-ref      FILE Reference FASTA used to encode the CRAM
+                       (required when different from --reference)
+  -h, --help           Show this help message
 EOF
     exit 1
 }
@@ -45,26 +60,48 @@ EOF
 # ── Argument parsing ────────────────────────────────────────────────────────
 [[ $# -eq 0 ]] && usage
 
-SAMPLE_DIR=""
+HAP1=""
+HAP2=""
+CRAM=""
 REFERENCE=""
+GENOME=""
 OUTPUT_DIR=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -s|--sample-dir) SAMPLE_DIR="$2"; shift 2 ;;
-        -r|--reference)  REFERENCE="$2";  shift 2 ;;
-        -o|--output-dir) OUTPUT_DIR="$2"; shift 2 ;;
-        -t|--threads)    THREADS="$2";    shift 2 ;;
-        --read-type)     READ_TYPE="$2";  shift 2 ;;
-        --cram-ref)      CRAM_REF="$2";   shift 2 ;;
+        --hap1)          HAP1="$2";          shift 2 ;;
+        --hap2)          HAP2="$2";          shift 2 ;;
+        --cram)          CRAM="$2";          shift 2 ;;
+        -r|--reference)  REFERENCE="$2";     shift 2 ;;
+        --genome)        GENOME="$2";        shift 2 ;;
+        --ref-dir)       REF_CACHE_DIR="$2"; shift 2 ;;
+        -o|--output-dir) OUTPUT_DIR="$2";    shift 2 ;;
+        -t|--threads)    THREADS="$2";       shift 2 ;;
+        --ont)           READ_TYPE="ont";    shift   ;;
+        --hifi)          READ_TYPE="hifi";   shift   ;;
+        --read-type)     READ_TYPE="$2";     shift 2 ;;
+        --cram-ref)      CRAM_REF="$2";      shift 2 ;;
         -h|--help)       usage ;;
         *)               echo "Unknown option: $1" >&2; usage ;;
     esac
 done
 
-[[ -z "${SAMPLE_DIR}" ]] && { echo "ERROR: --sample-dir is required" >&2; usage; }
-[[ -z "${REFERENCE}" ]]  && { echo "ERROR: --reference is required"  >&2; usage; }
+[[ -z "${HAP1}" ]]       && { echo "ERROR: --hap1 is required" >&2; usage; }
+[[ -z "${HAP2}" ]]       && { echo "ERROR: --hap2 is required" >&2; usage; }
+[[ -z "${CRAM}" ]]       && { echo "ERROR: --cram is required" >&2; usage; }
 [[ -z "${OUTPUT_DIR}" ]] && { echo "ERROR: --output-dir is required" >&2; usage; }
+
+# Validate that input files exist
+[[ -f "${HAP1}" ]] || { echo "ERROR: hap1 file not found: ${HAP1}" >&2; exit 1; }
+[[ -f "${HAP2}" ]] || { echo "ERROR: hap2 file not found: ${HAP2}" >&2; exit 1; }
+[[ -f "${CRAM}" ]] || { echo "ERROR: CRAM file not found: ${CRAM}" >&2; exit 1; }
+[[ -n "${REFERENCE}" && ! -f "${REFERENCE}" ]] && \
+    { echo "ERROR: reference file not found: ${REFERENCE}" >&2; exit 1; }
+
+if [[ -z "${REFERENCE}" && -z "${GENOME}" ]]; then
+    echo "ERROR: one of --reference or --genome is required" >&2
+    usage
+fi
 
 # ── Validate read type ──────────────────────────────────────────────────────
 case "${READ_TYPE}" in
@@ -73,48 +110,9 @@ case "${READ_TYPE}" in
     *)    echo "ERROR: --read-type must be 'ont' or 'hifi'" >&2; exit 1 ;;
 esac
 
-# ── Discover input files ────────────────────────────────────────────────────
-SAMPLE_DIR="$(cd "${SAMPLE_DIR}" && pwd)"
-SAMPLE_NAME="$(basename "${SAMPLE_DIR}")"
-
-echo "=== Long-read pre-processing pipeline ==="
-echo "Sample:     ${SAMPLE_NAME}"
-echo "Sample dir: ${SAMPLE_DIR}"
-echo "Reference:  ${REFERENCE}"
-echo "Output:     ${OUTPUT_DIR}"
-echo "Threads:    ${THREADS}"
-echo "Read type:  ${READ_TYPE} (minimap2 -x ${MM2_READ_PRESET})"
-echo ""
-
-find_single_match() {
-    local dir="$1" pattern="$2" label="$3"
-    local matches
-    matches=$(find "${dir}" -maxdepth 1 -name "${pattern}" | head -2)
-    local count
-    count=$(echo "${matches}" | grep -c . || true)
-    if [[ ${count} -eq 0 ]]; then
-        echo "ERROR: no ${label} found matching ${pattern} in ${dir}" >&2
-        exit 1
-    fi
-    echo "${matches}" | head -1
-}
-
-CRAM=$(find_single_match "${SAMPLE_DIR}" "*.cram" "CRAM file")
-HAP1=$(find_single_match "${SAMPLE_DIR}" "*hap1*.fa*" "hap1 assembly")
-HAP2=$(find_single_match "${SAMPLE_DIR}" "*hap2*.fa*" "hap2 assembly")
-
-echo "CRAM: ${CRAM}"
-echo "Hap1: ${HAP1}"
-echo "Hap2: ${HAP2}"
-echo ""
-
-# ── Prepare output directory ────────────────────────────────────────────────
-mkdir -p "${OUTPUT_DIR}"
-OUTPUT_DIR="$(cd "${OUTPUT_DIR}" && pwd)"
-
+# ── Helpers ─────────────────────────────────────────────────────────────────
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
-# ── Helper: index FASTA if needed ───────────────────────────────────────────
 ensure_faidx() {
     local fa="$1"
     if [[ ! -f "${fa}.fai" ]]; then
@@ -122,6 +120,66 @@ ensure_faidx() {
         samtools faidx "${fa}"
     fi
 }
+
+# ── Genome download ──────────────────────────────────────────────────────────
+download_reference() {
+    local genome="$1"
+    local cache_dir="$2"
+
+    if [[ -z "${GENOME_URLS[${genome}]+x}" ]]; then
+        echo "ERROR: Unknown genome '${genome}'." >&2
+        echo "       Supported genomes: ${!GENOME_URLS[*]}" >&2
+        exit 1
+    fi
+
+    local url="${GENOME_URLS[${genome}]}"
+    local filename
+    filename="$(basename "${url}")"
+    local ref_path="${cache_dir}/${filename}"
+
+    mkdir -p "${cache_dir}"
+
+    if [[ -f "${ref_path}" ]]; then
+        log "Cached reference found: ${ref_path}"
+    else
+        log "Downloading ${genome} reference from ${url} ..."
+        curl -fL --progress-bar -o "${ref_path}" "${url}"
+        log "Download complete: ${ref_path}"
+    fi
+
+    echo "${ref_path}"
+}
+
+# ── Resolve reference (download if needed) ──────────────────────────────────
+if [[ -n "${GENOME}" && -z "${REFERENCE}" ]]; then
+    REFERENCE=$(download_reference "${GENOME}" "${REF_CACHE_DIR}")
+fi
+
+# ── Resolve input paths to absolute paths ───────────────────────────────────
+# (done after file-existence checks so errors are clear)
+HAP1="$(cd "$(dirname "${HAP1}")" && pwd)/$(basename "${HAP1}")"
+HAP2="$(cd "$(dirname "${HAP2}")" && pwd)/$(basename "${HAP2}")"
+CRAM="$(cd "$(dirname "${CRAM}")" && pwd)/$(basename "${CRAM}")"
+REFERENCE="$(cd "$(dirname "${REFERENCE}")" && pwd)/$(basename "${REFERENCE}")"
+
+# Derive sample name from the CRAM filename (everything before the first dot).
+# Example: NA21110.t2t.cram → NA21110 ; sample.hifi.cram → sample
+SAMPLE_NAME="$(basename "${CRAM}" | cut -d. -f1)"
+
+echo "=== Long-read pre-processing pipeline ==="
+echo "Sample:     ${SAMPLE_NAME}"
+echo "Hap1:       ${HAP1}"
+echo "Hap2:       ${HAP2}"
+echo "CRAM:       ${CRAM}"
+echo "Reference:  ${REFERENCE}"
+echo "Output:     ${OUTPUT_DIR}"
+echo "Threads:    ${THREADS}"
+echo "Read type:  ${READ_TYPE} (minimap2 -x ${MM2_READ_PRESET})"
+echo ""
+
+# ── Prepare output directory ────────────────────────────────────────────────
+mkdir -p "${OUTPUT_DIR}"
+OUTPUT_DIR="$(cd "${OUTPUT_DIR}" && pwd)"
 
 # ── Step 1: Index references and assemblies ─────────────────────────────────
 log "Step 1: Ensuring FASTA indices exist"
@@ -237,3 +295,4 @@ echo "Query coordinate mappings with:"
 echo "  python3 ${SRC_DIR}/coordinate_mapper.py query \\"
 echo "    -i ${OUTPUT_DIR}/${SAMPLE_NAME}_hap1_to_ref.mapping.json.gz \\"
 echo "    -r chr1:1000000-2000000"
+
