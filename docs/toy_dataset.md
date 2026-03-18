@@ -172,16 +172,21 @@ apptainer run \
     --padding 50000
 ```
 
-### Using the shell wrapper
+### Using the shell wrapper (Apptainer)
 
 ```bash
-bash scripts/generate_toy_dataset.sh \
-    --pipeline-output output/NA21110 \
-    --hap1       NA21110/NA21110_hap1_hprc_r2_v1.0.1.fa.gz \
-    --hap2       NA21110/NA21110_hap2_hprc_r2_v1.0.1.fa.gz \
-    --reference  references/chm13v2.0.fa.gz \
-    --cram       NA21110/NA21110.t2t.cram \
-    --output-dir toy_dataset
+cd /path/to/projects
+
+apptainer run \
+    --bind "${PWD}:/work" \
+    --entrypoint generate_toy_dataset.sh \
+    docker://ghcr.io/jlanej/long_read_visualization:main \
+    --pipeline-output /work/output/NA21110 \
+    --hap1       /work/NA21110/NA21110_hap1_hprc_r2_v1.0.1.fa.gz \
+    --hap2       /work/NA21110/NA21110_hap2_hprc_r2_v1.0.1.fa.gz \
+    --reference  /work/references/chm13v2.0.fa.gz \
+    --cram       /work/NA21110/NA21110.t2t.cram \
+    --output-dir /work/toy_dataset
 ```
 
 ---

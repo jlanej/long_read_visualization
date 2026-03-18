@@ -106,34 +106,6 @@ run and caches it at `${PWD}/references/` (or `/work/references/` inside the
 container). Because this directory is inside the bind mount, the cache
 persists across container runs — no extra mount is needed.
 
-### Locally (requires minimap2, samtools, htslib, python3)
-
-**ONT reads:**
-
-```bash
-bash scripts/preprocess.sh \
-    --hap1       NA21110/NA21110_hap1_hprc_r2_v1.0.1.fa.gz \
-    --hap2       NA21110/NA21110_hap2_hprc_r2_v1.0.1.fa.gz \
-    --cram       NA21110/NA21110.t2t.cram \
-    --genome      chm13v2.0 \
-    --output-dir  output/NA21110 \
-    --threads     16 \
-    --ont
-```
-
-**PacBio HiFi reads:**
-
-```bash
-bash scripts/preprocess.sh \
-    --hap1       NA21110/NA21110_hap1_hprc_r2_v1.0.1.fa.gz \
-    --hap2       NA21110/NA21110_hap2_hprc_r2_v1.0.1.fa.gz \
-    --cram       NA21110/NA21110.hifi.cram \
-    --genome      chm13v2.0 \
-    --output-dir  output/NA21110 \
-    --threads     16 \
-    --hifi
-```
-
 ---
 
 ## Command-line options
@@ -177,8 +149,45 @@ Optional:
 
 ## Coordinate mapping
 
-After pre-processing, you can query the mapping to translate reference
-coordinates to assembly coordinates:
+### How it works
+
+Each haplotype assembly is aligned to the target reference genome with
+`minimap2 -x asm5`, which produces both a BAM file (for browsing) and a PAF
+file (for coordinate translation). The PAF records exact base-level
+correspondences between reference and assembly positions via extended CIGAR
+strings.
+
+Those alignments are parsed into a sorted interval index (compact JSON +
+tabix-indexed BED). For any reference coordinate range, a binary search
+locates every overlapping alignment record and recomputes the corresponding
+assembly position by walking the CIGAR — accounting for insertions, deletions,
+and reverse-complement (inversion) orientations. This gives O(log n) lookups
+over the full genome.
+
+### Why it works
+
+`asm5` is minimap2's preset for sequences that are **≥99% identical** — the
+expected divergence between a high-quality human assembly (e.g., HPRC) and a
+population reference. Within well-assembled, collinear regions the mapping is
+unambiguous and coordinates translate accurately even across small indels and
+SNPs.
+
+### Known limitations
+
+| Situation | Effect |
+|---|---|
+| Unmapped / highly-divergent regions (centromeres, segmental duplications, novel insertions) | No alignment → coordinate query returns no result |
+| Large structural variants (inversions, translocations) | Alignment breaks at SV boundaries; coordinates spanning a breakpoint cannot be translated as a single interval |
+| Segmental duplications / copy-number variants | The same reference region may map to multiple assembly loci, producing ambiguous results |
+| Assembly gaps or low-quality sequence | Alignments may be clipped short, leaving bases near the gap untranslatable |
+| Supplementary / chimeric alignments | Multiple partial alignments for one contig can overlap in reference space; the index retains all of them, so queries in those regions may return multiple hits |
+
+These limitations are inherent to any alignment-based liftover approach. For
+the primary use-case — visualising long reads across well-assembled diploid
+genomes at specific variant sites — the vast majority of query coordinates fall
+in high-confidence, uniquely-mappable regions where the method works reliably.
+
+### Querying coordinate mappings
 
 ```bash
 # Using the Python tool (loads JSON index into memory)
@@ -211,14 +220,12 @@ alignments.
 
 ---
 
-## Building the container image
+## Container image
 
-```bash
-docker build -t long_read_visualization .
-```
-
-The image is also built and published automatically via GitHub Actions on
-pushes to `main` and on version tags.
+The image is built and published automatically via GitHub Actions on pushes to
+`main` and on version tags. Pull it with Apptainer using the
+`docker://ghcr.io/jlanej/long_read_visualization:main` URI shown in the
+[Quick start](#quick-start) examples above.
 
 ---
 
@@ -246,13 +253,18 @@ cite them if you use this dataset in your work:
   primary training truth set; included in `resources/`.
 
 ```bash
-bash scripts/generate_toy_dataset.sh \
-    --pipeline-output output/NA21110 \
-    --hap1       NA21110/NA21110_hap1_hprc_r2_v1.0.1.fa.gz \
-    --hap2       NA21110/NA21110_hap2_hprc_r2_v1.0.1.fa.gz \
-    --reference  references/chm13v2.0.fa.gz \
-    --cram       NA21110/NA21110.t2t.cram \
-    --output-dir toy_dataset
+cd /path/to/projects   # same parent directory used for the pipeline run
+
+apptainer run \
+    --bind "${PWD}:/work" \
+    --entrypoint generate_toy_dataset.sh \
+    docker://ghcr.io/jlanej/long_read_visualization:main \
+    --pipeline-output /work/output/NA21110 \
+    --hap1       /work/NA21110/NA21110_hap1_hprc_r2_v1.0.1.fa.gz \
+    --hap2       /work/NA21110/NA21110_hap2_hprc_r2_v1.0.1.fa.gz \
+    --reference  /work/references/chm13v2.0.fa.gz \
+    --cram       /work/NA21110/NA21110.t2t.cram \
+    --output-dir /work/toy_dataset
 ```
 
 See [docs/toy_dataset.md](docs/toy_dataset.md) for the full procedure.
