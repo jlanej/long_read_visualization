@@ -265,12 +265,12 @@ def extract_reads(cram_path, ref_regions, output_bam, reference=None,
 
     cmd = ["samtools", "view", "-b", "-h"] + ref_opt + [cram_path] + ref_regions
     unsorted = output_bam + ".unsorted.bam"
-    result = _run(cmd, f"Extracting reads for {len(ref_regions)} region(s)")
+    print(f"  Extracting reads for {len(ref_regions)} region(s)", file=sys.stderr)
     with open(unsorted, "wb") as fh:
-        # Re-run to capture binary output
-        subprocess.run(
-            cmd, stdout=fh, stderr=subprocess.PIPE, check=True
-        )
+        result = subprocess.run(cmd, stdout=fh, stderr=subprocess.PIPE)
+        if result.returncode != 0:
+            print(f"ERROR: {' '.join(cmd)}\n{result.stderr.decode()}", file=sys.stderr)
+            sys.exit(1)
 
     _run(
         ["samtools", "sort", "-o", output_bam, unsorted],
@@ -432,17 +432,15 @@ def main():
     regions = compute_regions(selected, hap1_index, hap2_index,
                               padding=args.padding)
 
-    # ── Step 3: Create output directory ─────────────────────────────────
+    # ── Step 3: Create output directory and extract reference regions ───
     os.makedirs(args.output_dir, exist_ok=True)
-
-    # ── Step 4: Extract reference regions ───────────────────────────────
     print("Step 3: Extracting reference regions", file=sys.stderr)
     ref_regions = [r["ref_region"] for r in regions]
     toy_ref = os.path.join(args.output_dir, "toy_reference.fa")
     extract_fasta_regions(args.reference, ref_regions, toy_ref)
     index_and_compress_fasta(toy_ref)
 
-    # ── Step 5: Extract assembly regions ────────────────────────────────
+    # ── Step 4: Extract assembly regions ────────────────────────────────
     print("Step 4: Extracting haplotype assembly regions", file=sys.stderr)
     hap1_asm_regions = []
     hap2_asm_regions = []
@@ -457,7 +455,7 @@ def main():
     index_and_compress_fasta(toy_hap1)
     index_and_compress_fasta(toy_hap2)
 
-    # ── Step 6: Extract reads ───────────────────────────────────────────
+    # ── Step 5: Extract reads ───────────────────────────────────────────
     print("Step 5: Extracting reads for selected regions", file=sys.stderr)
     toy_reads = os.path.join(args.output_dir, "toy_reads.bam")
     extract_reads(
@@ -468,7 +466,7 @@ def main():
         cram_ref=args.cram_ref,
     )
 
-    # ── Step 7: Write manifest ──────────────────────────────────────────
+    # ── Step 6: Write manifest ──────────────────────────────────────────
     print("Step 6: Writing manifest", file=sys.stderr)
     write_manifest(regions, args.output_dir)
 

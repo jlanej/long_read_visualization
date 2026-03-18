@@ -64,7 +64,7 @@ apptainer run \
 
 The script parses the NA21110 SV callset VCF and identifies deletions where:
 
-1. `len(REF) - len(ALT) >= --min-size` (default 1 000 bp).
+1. `len(REF) - len(ALT) >= --min-size` (default 1000 bp).
 2. The NA21110 genotype contains at least one alternate allele (`1|0`,
    `0|1`, or `1|1`).
 
@@ -84,7 +84,7 @@ start = max(0, pos - padding)
 end   = pos + ref_len + padding
 ```
 
-The default `--padding` is 50 000 bp, giving roughly 100 kb of context
+The default `--padding` is 50000 bp, giving roughly 100 kb of context
 around each deletion.
 
 ### Step 3 — Map reference regions to assembly coordinates
@@ -199,8 +199,8 @@ apptainer run \
 | Flag | Default | Description |
 |---|---|---|
 | `--num-variants` | 10 | Number of deletions to include |
-| `--min-size` | 1 000 | Minimum deletion size (bp) |
-| `--padding` | 50 000 | Context bases on each side of a deletion |
+| `--min-size` | 1000 | Minimum deletion size (bp) |
+| `--padding` | 50000 | Context bases on each side of a deletion |
 
 Larger `--padding` values produce a bigger dataset but provide more
 flanking context for alignment and visualization.
