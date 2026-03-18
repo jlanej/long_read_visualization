@@ -1,0 +1,298 @@
+#!/usr/bin/env bash
+# preprocess.sh - Long-read pre-processing pipeline
+#
+# Aligns haplotype assemblies to a reference genome and reads to assemblies,
+# then builds coordinate-mapping indices for linked IGV.js visualization.
+#
+# Required tools: minimap2, samtools, bgzip, tabix, python3, curl
+set -euo pipefail
+
+# ── Defaults ────────────────────────────────────────────────────────────────
+THREADS=4
+READ_TYPE="ont"
+CRAM_REF=""
+REF_CACHE_DIR="${HOME}/.long_read_viz/references"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SRC_DIR="${SCRIPT_DIR}/../src"
+
+# Known reference genomes (name → URL of bgzipped/gzipped FASTA)
+declare -A GENOME_URLS
+GENOME_URLS["hg38"]="https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz"
+GENOME_URLS["hg19"]="https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/hg19.fa.gz"
+GENOME_URLS["chm13v2.0"]="https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0.fa.gz"
+GENOME_URLS["grch38"]="https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/001/405/GCA_000001405.15_GRCh38/seqs_for_alignment_pipelines.ucsc_ids/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna.gz"
+
+# ── Usage ───────────────────────────────────────────────────────────────────
+usage() {
+    local known_genomes
+    known_genomes="${!GENOME_URLS[*]}"
+    cat <<EOF
+Usage: $(basename "$0") [options]
+
+Pre-process long-read data for multi-panel IGV.js visualization.
+
+Required inputs:
+  --hap1        FILE   Haplotype 1 assembly FASTA (.fa or .fa.gz)
+  --hap2        FILE   Haplotype 2 assembly FASTA (.fa or .fa.gz)
+  --cram        FILE   Long-read CRAM file
+  -o, --output-dir DIR Output directory
+
+Read type (required — controls minimap2 alignment preset):
+  --ont                Oxford Nanopore reads  (minimap2 -x map-ont)  [default]
+  --hifi               PacBio HiFi reads      (minimap2 -x map-hifi)
+
+Reference (one of):
+  -r, --reference FILE Target reference genome FASTA
+  --genome        STR  Download a known reference if not already cached.
+                       Supported: ${known_genomes}
+  --ref-dir       DIR  Cache directory for downloaded references
+                       [${REF_CACHE_DIR}]
+
+Optional:
+  -t, --threads   INT  Number of threads [${THREADS}]
+  --cram-ref      FILE Reference FASTA used to encode the CRAM
+                       (required when different from --reference)
+  -h, --help           Show this help message
+EOF
+    exit 1
+}
+
+# ── Argument parsing ────────────────────────────────────────────────────────
+[[ $# -eq 0 ]] && usage
+
+HAP1=""
+HAP2=""
+CRAM=""
+REFERENCE=""
+GENOME=""
+OUTPUT_DIR=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --hap1)          HAP1="$2";          shift 2 ;;
+        --hap2)          HAP2="$2";          shift 2 ;;
+        --cram)          CRAM="$2";          shift 2 ;;
+        -r|--reference)  REFERENCE="$2";     shift 2 ;;
+        --genome)        GENOME="$2";        shift 2 ;;
+        --ref-dir)       REF_CACHE_DIR="$2"; shift 2 ;;
+        -o|--output-dir) OUTPUT_DIR="$2";    shift 2 ;;
+        -t|--threads)    THREADS="$2";       shift 2 ;;
+        --ont)           READ_TYPE="ont";    shift   ;;
+        --hifi)          READ_TYPE="hifi";   shift   ;;
+        --read-type)     READ_TYPE="$2";     shift 2 ;;
+        --cram-ref)      CRAM_REF="$2";      shift 2 ;;
+        -h|--help)       usage ;;
+        *)               echo "Unknown option: $1" >&2; usage ;;
+    esac
+done
+
+[[ -z "${HAP1}" ]]       && { echo "ERROR: --hap1 is required" >&2; usage; }
+[[ -z "${HAP2}" ]]       && { echo "ERROR: --hap2 is required" >&2; usage; }
+[[ -z "${CRAM}" ]]       && { echo "ERROR: --cram is required" >&2; usage; }
+[[ -z "${OUTPUT_DIR}" ]] && { echo "ERROR: --output-dir is required" >&2; usage; }
+
+# Validate that input files exist
+[[ -f "${HAP1}" ]] || { echo "ERROR: hap1 file not found: ${HAP1}" >&2; exit 1; }
+[[ -f "${HAP2}" ]] || { echo "ERROR: hap2 file not found: ${HAP2}" >&2; exit 1; }
+[[ -f "${CRAM}" ]] || { echo "ERROR: CRAM file not found: ${CRAM}" >&2; exit 1; }
+[[ -n "${REFERENCE}" && ! -f "${REFERENCE}" ]] && \
+    { echo "ERROR: reference file not found: ${REFERENCE}" >&2; exit 1; }
+
+if [[ -z "${REFERENCE}" && -z "${GENOME}" ]]; then
+    echo "ERROR: one of --reference or --genome is required" >&2
+    usage
+fi
+
+# ── Validate read type ──────────────────────────────────────────────────────
+case "${READ_TYPE}" in
+    ont)  MM2_READ_PRESET="map-ont"  ;;
+    hifi) MM2_READ_PRESET="map-hifi" ;;
+    *)    echo "ERROR: --read-type must be 'ont' or 'hifi'" >&2; exit 1 ;;
+esac
+
+# ── Helpers ─────────────────────────────────────────────────────────────────
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
+
+ensure_faidx() {
+    local fa="$1"
+    if [[ ! -f "${fa}.fai" ]]; then
+        log "Indexing ${fa} ..."
+        samtools faidx "${fa}"
+    fi
+}
+
+# ── Genome download ──────────────────────────────────────────────────────────
+download_reference() {
+    local genome="$1"
+    local cache_dir="$2"
+
+    if [[ -z "${GENOME_URLS[${genome}]+x}" ]]; then
+        echo "ERROR: Unknown genome '${genome}'." >&2
+        echo "       Supported genomes: ${!GENOME_URLS[*]}" >&2
+        exit 1
+    fi
+
+    local url="${GENOME_URLS[${genome}]}"
+    local filename
+    filename="$(basename "${url}")"
+    local ref_path="${cache_dir}/${filename}"
+
+    mkdir -p "${cache_dir}"
+
+    if [[ -f "${ref_path}" ]]; then
+        log "Cached reference found: ${ref_path}"
+    else
+        log "Downloading ${genome} reference from ${url} ..."
+        curl -fL --progress-bar -o "${ref_path}" "${url}"
+        log "Download complete: ${ref_path}"
+    fi
+
+    echo "${ref_path}"
+}
+
+# ── Resolve reference (download if needed) ──────────────────────────────────
+if [[ -n "${GENOME}" && -z "${REFERENCE}" ]]; then
+    REFERENCE=$(download_reference "${GENOME}" "${REF_CACHE_DIR}")
+fi
+
+# ── Resolve input paths to absolute paths ───────────────────────────────────
+# (done after file-existence checks so errors are clear)
+HAP1="$(cd "$(dirname "${HAP1}")" && pwd)/$(basename "${HAP1}")"
+HAP2="$(cd "$(dirname "${HAP2}")" && pwd)/$(basename "${HAP2}")"
+CRAM="$(cd "$(dirname "${CRAM}")" && pwd)/$(basename "${CRAM}")"
+REFERENCE="$(cd "$(dirname "${REFERENCE}")" && pwd)/$(basename "${REFERENCE}")"
+
+# Derive sample name from the CRAM filename (everything before the first dot).
+# Example: NA21110.t2t.cram → NA21110 ; sample.hifi.cram → sample
+SAMPLE_NAME="$(basename "${CRAM}" | cut -d. -f1)"
+
+echo "=== Long-read pre-processing pipeline ==="
+echo "Sample:     ${SAMPLE_NAME}"
+echo "Hap1:       ${HAP1}"
+echo "Hap2:       ${HAP2}"
+echo "CRAM:       ${CRAM}"
+echo "Reference:  ${REFERENCE}"
+echo "Output:     ${OUTPUT_DIR}"
+echo "Threads:    ${THREADS}"
+echo "Read type:  ${READ_TYPE} (minimap2 -x ${MM2_READ_PRESET})"
+echo ""
+
+# ── Prepare output directory ────────────────────────────────────────────────
+mkdir -p "${OUTPUT_DIR}"
+OUTPUT_DIR="$(cd "${OUTPUT_DIR}" && pwd)"
+
+# ── Step 1: Index references and assemblies ─────────────────────────────────
+log "Step 1: Ensuring FASTA indices exist"
+ensure_faidx "${REFERENCE}"
+ensure_faidx "${HAP1}"
+ensure_faidx "${HAP2}"
+
+# ── Step 2: Align assemblies to reference (BAM) ────────────────────────────
+align_asm_to_ref() {
+    local asm="$1" label="$2"
+    local bam="${OUTPUT_DIR}/${SAMPLE_NAME}_${label}_to_ref.bam"
+    if [[ -f "${bam}" ]]; then
+        log "  ${bam} exists, skipping"
+    else
+        log "  Aligning ${label} to reference → ${bam}"
+        minimap2 -a --eqx -x asm5 -t "${THREADS}" "${REFERENCE}" "${asm}" \
+            | samtools sort -@ "${THREADS}" -o "${bam}"
+        samtools index -@ "${THREADS}" "${bam}"
+    fi
+    echo "${bam}"
+}
+
+log "Step 2: Aligning assemblies to reference"
+HAP1_BAM=$(align_asm_to_ref "${HAP1}" "hap1")
+HAP2_BAM=$(align_asm_to_ref "${HAP2}" "hap2")
+
+# ── Step 3: Produce PAF for coordinate mapping ─────────────────────────────
+align_asm_paf() {
+    local asm="$1" label="$2"
+    local paf="${OUTPUT_DIR}/${SAMPLE_NAME}_${label}_to_ref.paf"
+    if [[ -f "${paf}" ]]; then
+        log "  ${paf} exists, skipping"
+    else
+        log "  Generating PAF for ${label} → ${paf}"
+        minimap2 --eqx -c -x asm5 -t "${THREADS}" "${REFERENCE}" "${asm}" > "${paf}"
+    fi
+    echo "${paf}"
+}
+
+log "Step 3: Generating PAF alignments for coordinate mapping"
+HAP1_PAF=$(align_asm_paf "${HAP1}" "hap1")
+HAP2_PAF=$(align_asm_paf "${HAP2}" "hap2")
+
+# ── Step 4: Build coordinate mapping indices ────────────────────────────────
+build_mapping() {
+    local paf="$1" label="$2"
+    local prefix="${OUTPUT_DIR}/${SAMPLE_NAME}_${label}_to_ref"
+    local json="${prefix}.mapping.json.gz"
+    if [[ -f "${json}" ]]; then
+        log "  ${json} exists, skipping"
+    else
+        log "  Building mapping index for ${label}"
+        python3 "${SRC_DIR}/coordinate_mapper.py" build -p "${paf}" -o "${prefix}"
+        # Create tabix-indexed BED
+        local bed="${prefix}.mapping.bed"
+        if [[ -f "${bed}" ]]; then
+            bgzip -f "${bed}"
+            tabix -p bed "${bed}.gz"
+        fi
+    fi
+}
+
+log "Step 4: Building coordinate mapping indices"
+build_mapping "${HAP1_PAF}" "hap1"
+build_mapping "${HAP2_PAF}" "hap2"
+
+# ── Step 5: Extract reads from CRAM ────────────────────────────────────────
+FASTQ="${OUTPUT_DIR}/${SAMPLE_NAME}_reads.fastq.gz"
+
+if [[ -f "${FASTQ}" ]]; then
+    log "Step 5: ${FASTQ} exists, skipping read extraction"
+else
+    log "Step 5: Extracting reads from CRAM"
+    CRAM_REF_OPT=""
+    if [[ -n "${CRAM_REF}" ]]; then
+        CRAM_REF_OPT="--reference ${CRAM_REF}"
+    fi
+    # shellcheck disable=SC2086
+    if command -v pigz &>/dev/null; then
+        samtools fastq -@ "${THREADS}" ${CRAM_REF_OPT} "${CRAM}" \
+            | pigz -p "${THREADS}" > "${FASTQ}"
+    else
+        samtools fastq -@ "${THREADS}" ${CRAM_REF_OPT} "${CRAM}" \
+            | gzip > "${FASTQ}"
+    fi
+fi
+
+# ── Step 6: Align reads to hap1 and hap2 ───────────────────────────────────
+align_reads_to_asm() {
+    local asm="$1" label="$2"
+    local bam="${OUTPUT_DIR}/${SAMPLE_NAME}_reads_to_${label}.bam"
+    if [[ -f "${bam}" ]]; then
+        log "  ${bam} exists, skipping"
+    else
+        log "  Aligning reads to ${label} → ${bam}"
+        minimap2 -a -x "${MM2_READ_PRESET}" -t "${THREADS}" "${asm}" "${FASTQ}" \
+            | samtools sort -@ "${THREADS}" -o "${bam}"
+        samtools index -@ "${THREADS}" "${bam}"
+    fi
+}
+
+log "Step 6: Aligning reads to hap1 and hap2"
+align_reads_to_asm "${HAP1}" "hap1"
+align_reads_to_asm "${HAP2}" "hap2"
+
+# ── Done ────────────────────────────────────────────────────────────────────
+log "Pipeline complete. Outputs in ${OUTPUT_DIR}/"
+echo ""
+echo "Output files:"
+ls -lh "${OUTPUT_DIR}/"
+echo ""
+echo "Query coordinate mappings with:"
+echo "  python3 ${SRC_DIR}/coordinate_mapper.py query \\"
+echo "    -i ${OUTPUT_DIR}/${SAMPLE_NAME}_hap1_to_ref.mapping.json.gz \\"
+echo "    -r chr1:1000000-2000000"
+
