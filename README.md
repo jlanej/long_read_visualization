@@ -379,10 +379,10 @@ cite them if you use this dataset in your work:
 ```bash
 cd /path/to/projects   # same parent directory used for the pipeline run
 
-apptainer run \
+apptainer exec \
     --bind "${PWD}:/work" \
-    --entrypoint generate_toy_dataset.sh \
     docker://ghcr.io/jlanej/long_read_visualization:main \
+    generate_toy_dataset.sh \
     --pipeline-output /work/output/NA21110 \
     --hap1       /work/NA21110/NA21110_hap1_hprc_r2_v1.0.1.fa.gz \
     --hap2       /work/NA21110/NA21110_hap2_hprc_r2_v1.0.1.fa.gz \
