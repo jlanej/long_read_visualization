@@ -56,8 +56,15 @@ RUN curl -fsSL \
 # ── Pipeline scripts ────────────────────────────────────────────────────────
 COPY src/ /opt/long_read_visualization/src/
 COPY scripts/ /opt/long_read_visualization/scripts/
+COPY server/ /opt/long_read_visualization/server/
 COPY resources/ /opt/long_read_visualization/resources/
 RUN chmod +x /opt/long_read_visualization/scripts/*.sh
+
+# Download igv.js for the visualization server
+ARG IGV_JS_VERSION=3.1.3
+RUN curl -fsSL \
+        "https://cdn.jsdelivr.net/npm/igv@${IGV_JS_VERSION}/dist/igv.min.js" \
+        -o /opt/long_read_visualization/server/static/igv.min.js
 
 ENV PATH="/opt/long_read_visualization/scripts:${PATH}"
 

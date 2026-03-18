@@ -24,3 +24,10 @@ Thumbs.db
 # Test artifacts
 tests/test_output/
 *.tmp
+
+# Server runtime
+toy_example_output/
+toy_example_config.tsv
+
+# IGV.js is downloaded at server startup (see server/app.py)
+server/static/igv.min.js

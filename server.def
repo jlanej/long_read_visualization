@@ -1,0 +1,50 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+%labels
+    Author long_read_visualization
+    Description Multi-panel IGV.js visualization server for long-read SV review
+
+%help
+    Multi-panel IGV.js visualization server for reviewing structural variants
+    across a reference genome and both haplotype assemblies.
+
+    Quick start (toy dataset):
+        apptainer run --bind "${PWD}:/work" server.sif --toy --port 8080
+
+    With a configuration file:
+        apptainer run --bind "${PWD}:/work" server.sif \
+            --config /work/samples.tsv --port 8080
+
+    Generate a config from pipeline outputs:
+        apptainer exec --bind "${PWD}:/work" server.sif \
+            python3 /opt/long_read_visualization/scripts/generate_server_config.py \
+            --output-dir /work/output/NA21110 \
+            --reference /work/ref.fa.gz \
+            --hap1 /work/hap1.fa.gz \
+            --hap2 /work/hap2.fa.gz \
+            --regions /work/manifest.json \
+            -o /work/samples.tsv
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+
+    apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        python3 \
+        python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+    mkdir -p /opt/long_read_visualization
+
+%files
+    server/ /opt/long_read_visualization/server/
+    src/ /opt/long_read_visualization/src/
+    scripts/ /opt/long_read_visualization/scripts/
+    resources/ /opt/long_read_visualization/resources/
+
+%environment
+    export PATH="/opt/long_read_visualization/scripts:${PATH}"
+
+%runscript
+    exec python3 /opt/long_read_visualization/server/app.py "$@"
