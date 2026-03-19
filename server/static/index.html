@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Long Read Visualization — Multi-Panel IGV.js</title>
+<script src="/static/igv.min.js"></script>
+<style>
+    :root {
+        --bg: #1a1a2e;
+        --surface: #16213e;
+        --surface2: #0f3460;
+        --accent: #e94560;
+        --text: #eee;
+        --text-muted: #999;
+        --border: #334;
+        --panel-ref: #1b3a4b;
+        --panel-hap1: #1b3a2b;
+        --panel-hap2: #3a2b1b;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        min-height: 100vh;
+    }
+
+    /* ── Header bar ──────────────────────────────────────────────────────── */
+    .header {
+        background: var(--surface);
+        border-bottom: 1px solid var(--border);
+        padding: 8px 16px;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        flex-wrap: wrap;
+    }
+    .header h1 {
+        font-size: 16px;
+        font-weight: 600;
+        white-space: nowrap;
+    }
+    .header label {
+        font-size: 13px;
+        color: var(--text-muted);
+    }
+    .header select, .header input, .header button {
+        font-size: 13px;
+        padding: 4px 8px;
+        border-radius: 4px;
+        border: 1px solid var(--border);
+        background: var(--surface2);
+        color: var(--text);
+    }
+    .header select { min-width: 160px; max-width: 400px; }
+    .header button {
+        cursor: pointer;
+        background: var(--accent);
+        border-color: var(--accent);
+        font-weight: 600;
+    }
+    .header button:hover { opacity: 0.85; }
+    .header button:disabled { opacity: 0.4; cursor: default; }
+
+    .spacer { flex: 1; }
+
+    .nav-group {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .region-counter {
+        font-size: 12px;
+        color: var(--text-muted);
+        min-width: 60px;
+        text-align: center;
+    }
+
+    .sync-toggle {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 13px;
+        cursor: pointer;
+    }
+    .sync-toggle input[type="checkbox"] {
+        accent-color: var(--accent);
+    }
+
+    /* ── Panel layout ────────────────────────────────────────────────────── */
+    .panels {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        padding: 4px;
+        height: calc(100vh - 48px);
+    }
+    .panel {
+        flex: 1;
+        border-radius: 4px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+    .panel-header {
+        padding: 4px 10px;
+        font-size: 13px;
+        font-weight: 600;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    .panel-header .locus {
+        font-size: 11px;
+        font-weight: 400;
+        color: var(--text-muted);
+        font-family: monospace;
+    }
+    .panel-body {
+        flex: 1;
+        position: relative;
+    }
+    .panel-body > div {
+        height: 100%;
+    }
+
+    .panel.ref { background: var(--panel-ref); }
+    .panel.ref .panel-header { background: rgba(27,58,75,0.8); }
+    .panel.hap1 { background: var(--panel-hap1); }
+    .panel.hap1 .panel-header { background: rgba(27,58,43,0.8); }
+    .panel.hap2 { background: var(--panel-hap2); }
+    .panel.hap2 .panel-header { background: rgba(58,43,27,0.8); }
+
+    /* ── IGV overrides ───────────────────────────────────────────────────── */
+    .igv-container { background: transparent !important; }
+
+    /* ── Loading overlay ─────────────────────────────────────────────────── */
+    .loading {
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.7);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+        font-size: 18px;
+    }
+    .loading.hidden { display: none; }
+
+    /* ── Status bar ──────────────────────────────────────────────────────── */
+    .status-bar {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: var(--surface);
+        border-top: 1px solid var(--border);
+        padding: 2px 12px;
+        font-size: 11px;
+        color: var(--text-muted);
+        z-index: 100;
+    }
+</style>
+</head>
+<body>
+
+<!-- Header bar -->
+<div class="header">
+    <h1>🧬 Long Read Viz</h1>
+
+    <label>Sample:</label>
+    <select id="sampleSelect"><option value="">Loading...</option></select>
+
+    <label>Region:</label>
+    <div class="nav-group">
+        <button id="prevRegion" title="Previous region (←)">◀</button>
+        <select id="regionSelect"><option value="">No regions</option></select>
+        <button id="nextRegion" title="Next region (→)">▶</button>
+        <span class="region-counter" id="regionCounter">0/0</span>
+    </div>
+
+    <div class="spacer"></div>
+
+    <label class="sync-toggle">
+        <input type="checkbox" id="syncToggle" checked>
+        Sync panels
+    </label>
+</div>
+
+<!-- Panels -->
+<div class="panels">
+    <div class="panel ref">
+        <div class="panel-header">
+            <span>Reference</span>
+            <span class="locus" id="refLocus"></span>
+        </div>
+        <div class="panel-body"><div id="igv-ref"></div></div>
+    </div>
+    <div class="panel hap1">
+        <div class="panel-header">
+            <span>Haplotype 1</span>
+            <span class="locus" id="hap1Locus"></span>
+        </div>
+        <div class="panel-body"><div id="igv-hap1"></div></div>
+    </div>
+    <div class="panel hap2">
+        <div class="panel-header">
+            <span>Haplotype 2</span>
+            <span class="locus" id="hap2Locus"></span>
+        </div>
+        <div class="panel-body"><div id="igv-hap2"></div></div>
+    </div>
+</div>
+
+<div class="loading" id="loadingOverlay">Loading sample data...</div>
+<div class="status-bar" id="statusBar">Ready</div>
+
+<script>
+(function() {
+    "use strict";
+
+    // ── State ───────────────────────────────────────────────────────────────
+    let refBrowser = null;
+    let hap1Browser = null;
+    let hap2Browser = null;
+    let currentSample = null;
+    let regions = [];
+    let currentRegionIdx = -1;
+    let syncEnabled = true;
+    let translating = false;
+
+    // ── DOM refs ────────────────────────────────────────────────────────────
+    const sampleSelect = document.getElementById("sampleSelect");
+    const regionSelect = document.getElementById("regionSelect");
+    const prevBtn = document.getElementById("prevRegion");
+    const nextBtn = document.getElementById("nextRegion");
+    const regionCounter = document.getElementById("regionCounter");
+    const syncToggle = document.getElementById("syncToggle");
+    const loadingOverlay = document.getElementById("loadingOverlay");
+    const statusBar = document.getElementById("statusBar");
+
+    // ── Helpers ─────────────────────────────────────────────────────────────
+    function setStatus(msg) { statusBar.textContent = msg; }
+    function showLoading(show) {
+        loadingOverlay.classList.toggle("hidden", !show);
+    }
+
+    async function fetchJSON(url) {
+        const resp = await fetch(url);
+        return resp.json();
+    }
+
+    // ── Initialization ──────────────────────────────────────────────────────
+    async function init() {
+        const samples = await fetchJSON("/api/samples");
+        sampleSelect.innerHTML = "";
+        for (const s of samples) {
+            const opt = document.createElement("option");
+            opt.value = s.sample_id;
+            opt.textContent = s.sample_id;
+            sampleSelect.appendChild(opt);
+        }
+        if (samples.length > 0) {
+            await loadSample(samples[0].sample_id);
+        }
+        showLoading(false);
+    }
+
+    // ── Sample loading ──────────────────────────────────────────────────────
+    async function loadSample(sampleId) {
+        showLoading(true);
+        setStatus(`Loading sample ${sampleId}...`);
+
+        // Destroy existing browsers
+        await destroyBrowsers();
+
+        const config = await fetchJSON(`/api/sample/${sampleId}`);
+        if (config.error) {
+            setStatus(`Error: ${config.error}`);
+            showLoading(false);
+            return;
+        }
+        currentSample = config;
+
+        // Load regions
+        regions = await fetchJSON(`/api/regions/${sampleId}`);
+        populateRegions();
+
+        // Create browsers
+        await createBrowsers(config);
+
+        currentRegionIdx = -1;
+        if (regions.length > 0) {
+            navigateToRegion(0);
+        }
+
+        setStatus(`Loaded ${sampleId} — ${regions.length} region(s)`);
+        showLoading(false);
+    }
+
+    async function destroyBrowsers() {
+        for (const b of [refBrowser, hap1Browser, hap2Browser]) {
+            if (b) {
+                try { b.removeAllEventHandlers(); } catch(e) {}
+                try { igv.removeBrowser(b); } catch(e) {}
+            }
+        }
+        refBrowser = hap1Browser = hap2Browser = null;
+        document.getElementById("igv-ref").innerHTML = "";
+        document.getElementById("igv-hap1").innerHTML = "";
+        document.getElementById("igv-hap2").innerHTML = "";
+    }
+
+    async function createBrowsers(config) {
+        const baseUrl = window.location.origin;
+
+        // ── Reference panel ──────────────────────────────────────────────
+        const refOpts = {
+            showNavigation: true,
+            showCenterGuide: true,
+            loadDefaultGenomes: false,
+            genomeList: null,
+            reference: {
+                fastaURL: baseUrl + config.reference.fastaURL,
+                indexURL: baseUrl + config.reference.fastaURL + ".fai",
+                compressedIndexURL: baseUrl + config.reference.fastaURL + ".gzi",
+            },
+            tracks: [],
+        };
+
+        if (config.tracks.reads_bam) {
+            refOpts.tracks.push({
+                name: "Reads → Ref",
+                type: "alignment",
+                format: "bam",
+                url: baseUrl + config.tracks.reads_bam,
+                indexURL: baseUrl + config.tracks.reads_bam + ".bai",
+                height: 150,
+                colorBy: "strand",
+            });
+        }
+        if (config.tracks.hap1_to_ref_bam) {
+            refOpts.tracks.push({
+                name: "Hap1 → Ref",
+                type: "alignment",
+                format: "bam",
+                url: baseUrl + config.tracks.hap1_to_ref_bam,
+                indexURL: baseUrl + config.tracks.hap1_to_ref_bam + ".bai",
+                height: 80,
+                color: "#4CAF50",
+                displayMode: "SQUISHED",
+            });
+        }
+        if (config.tracks.hap2_to_ref_bam) {
+            refOpts.tracks.push({
+                name: "Hap2 → Ref",
+                type: "alignment",
+                format: "bam",
+                url: baseUrl + config.tracks.hap2_to_ref_bam,
+                indexURL: baseUrl + config.tracks.hap2_to_ref_bam + ".bai",
+                height: 80,
+                color: "#FF9800",
+                displayMode: "SQUISHED",
+            });
+        }
+
+        // ── Hap1 panel ───────────────────────────────────────────────────
+        const hap1Opts = {
+            showNavigation: true,
+            showCenterGuide: true,
+            loadDefaultGenomes: false,
+            genomeList: null,
+            reference: {
+                fastaURL: baseUrl + config.hap1_assembly.fastaURL,
+                indexURL: baseUrl + config.hap1_assembly.fastaURL + ".fai",
+                compressedIndexURL: baseUrl + config.hap1_assembly.fastaURL + ".gzi",
+            },
+            tracks: [],
+        };
+
+        if (config.tracks.reads_to_hap1_bam) {
+            hap1Opts.tracks.push({
+                name: "Reads → Hap1",
+                type: "alignment",
+                format: "bam",
+                url: baseUrl + config.tracks.reads_to_hap1_bam,
+                indexURL: baseUrl + config.tracks.reads_to_hap1_bam + ".bai",
+                height: 150,
+                colorBy: "strand",
+            });
+        }
+        if (config.tracks.ref_to_hap1_bam) {
+            hap1Opts.tracks.push({
+                name: "Ref → Hap1",
+                type: "alignment",
+                format: "bam",
+                url: baseUrl + config.tracks.ref_to_hap1_bam,
+                indexURL: baseUrl + config.tracks.ref_to_hap1_bam + ".bai",
+                height: 80,
+                color: "#2196F3",
+                displayMode: "SQUISHED",
+            });
+        }
+
+        // ── Hap2 panel ───────────────────────────────────────────────────
+        const hap2Opts = {
+            showNavigation: true,
+            showCenterGuide: true,
+            loadDefaultGenomes: false,
+            genomeList: null,
+            reference: {
+                fastaURL: baseUrl + config.hap2_assembly.fastaURL,
+                indexURL: baseUrl + config.hap2_assembly.fastaURL + ".fai",
+                compressedIndexURL: baseUrl + config.hap2_assembly.fastaURL + ".gzi",
+            },
+            tracks: [],
+        };
+
+        if (config.tracks.reads_to_hap2_bam) {
+            hap2Opts.tracks.push({
+                name: "Reads → Hap2",
+                type: "alignment",
+                format: "bam",
+                url: baseUrl + config.tracks.reads_to_hap2_bam,
+                indexURL: baseUrl + config.tracks.reads_to_hap2_bam + ".bai",
+                height: 150,
+                colorBy: "strand",
+            });
+        }
+        if (config.tracks.ref_to_hap2_bam) {
+            hap2Opts.tracks.push({
+                name: "Ref → Hap2",
+                type: "alignment",
+                format: "bam",
+                url: baseUrl + config.tracks.ref_to_hap2_bam,
+                indexURL: baseUrl + config.tracks.ref_to_hap2_bam + ".bai",
+                height: 80,
+                color: "#2196F3",
+                displayMode: "SQUISHED",
+            });
+        }
+
+        // Create all three browsers
+        [refBrowser, hap1Browser, hap2Browser] = await Promise.all([
+            igv.createBrowser(document.getElementById("igv-ref"), refOpts),
+            igv.createBrowser(document.getElementById("igv-hap1"), hap1Opts),
+            igv.createBrowser(document.getElementById("igv-hap2"), hap2Opts),
+        ]);
+
+        // Attach coordination listener to reference panel
+        refBrowser.on("locuschange", onRefLocusChange);
+    }
+
+    // ── Coordinate translation & panel sync ─────────────────────────────────
+    let translateTimeout = null;
+
+    function onRefLocusChange(referenceFrameList) {
+        if (!syncEnabled || translating) return;
+
+        // Update locus display
+        const locus = formatLocus(referenceFrameList);
+        document.getElementById("refLocus").textContent = locus;
+
+        // Debounce translation
+        if (translateTimeout) clearTimeout(translateTimeout);
+        translateTimeout = setTimeout(() => translateAndSync(referenceFrameList), 300);
+    }
+
+    async function translateAndSync(referenceFrameList) {
+        if (!currentSample || !syncEnabled) return;
+
+        const frame = referenceFrameList[0];
+        if (!frame) return;
+
+        const chrom = frame.chr;
+        const start = Math.round(frame.start);
+        const end = Math.round(frame.end);
+
+        try {
+            const result = await fetchJSON(
+                `/api/translate?sample=${currentSample.sample_id}` +
+                `&chrom=${encodeURIComponent(chrom)}&start=${start}&end=${end}`
+            );
+
+            translating = true;
+
+            // Navigate hap1 panel
+            if (result.hap1 && result.hap1.length > 0) {
+                const r = result.hap1[0];
+                const locus = `${r.chrom}:${r.start}-${r.end}`;
+                await hap1Browser.search(locus);
+                document.getElementById("hap1Locus").textContent = locus;
+            }
+
+            // Navigate hap2 panel
+            if (result.hap2 && result.hap2.length > 0) {
+                const r = result.hap2[0];
+                const locus = `${r.chrom}:${r.start}-${r.end}`;
+                await hap2Browser.search(locus);
+                document.getElementById("hap2Locus").textContent = locus;
+            }
+
+            translating = false;
+        } catch (err) {
+            translating = false;
+            console.warn("Translation error:", err);
+        }
+    }
+
+    function formatLocus(frames) {
+        if (!frames || frames.length === 0) return "";
+        const f = frames[0];
+        return `${f.chr}:${Math.round(f.start).toLocaleString()}-${Math.round(f.end).toLocaleString()}`;
+    }
+
+    // ── Region navigation ───────────────────────────────────────────────────
+    function populateRegions() {
+        regionSelect.innerHTML = "";
+        if (regions.length === 0) {
+            const opt = document.createElement("option");
+            opt.value = "";
+            opt.textContent = "No regions loaded";
+            regionSelect.appendChild(opt);
+            regionCounter.textContent = "0/0";
+            return;
+        }
+        regions.forEach((r, i) => {
+            const opt = document.createElement("option");
+            opt.value = i;
+            opt.textContent = r.label;
+            regionSelect.appendChild(opt);
+        });
+        regionCounter.textContent = `0/${regions.length}`;
+    }
+
+    async function navigateToRegion(idx) {
+        if (idx < 0 || idx >= regions.length) return;
+        currentRegionIdx = idx;
+        regionSelect.value = idx;
+        regionCounter.textContent = `${idx + 1}/${regions.length}`;
+
+        const region = regions[idx];
+        setStatus(`Navigating to ${region.label}`);
+
+        // Navigate reference panel to the region
+        const refLocus = region.ref_region || `${region.chrom}:${region.start}-${region.end}`;
+        if (refBrowser) {
+            await refBrowser.search(refLocus);
+            document.getElementById("refLocus").textContent = refLocus;
+        }
+
+        // Navigate assembly panels using pre-computed regions if available,
+        // otherwise let the sync listener handle it
+        translating = true;
+
+        if (region.hap1_regions && region.hap1_regions.length > 0 && hap1Browser) {
+            const h1 = region.hap1_regions[0];
+            await hap1Browser.search(h1);
+            document.getElementById("hap1Locus").textContent = h1;
+        }
+        if (region.hap2_regions && region.hap2_regions.length > 0 && hap2Browser) {
+            const h2 = region.hap2_regions[0];
+            await hap2Browser.search(h2);
+            document.getElementById("hap2Locus").textContent = h2;
+        }
+
+        translating = false;
+    }
+
+    // ── Event listeners ─────────────────────────────────────────────────────
+    sampleSelect.addEventListener("change", () => loadSample(sampleSelect.value));
+
+    regionSelect.addEventListener("change", () => {
+        const idx = parseInt(regionSelect.value, 10);
+        if (!isNaN(idx)) navigateToRegion(idx);
+    });
+
+    prevBtn.addEventListener("click", () => {
+        if (currentRegionIdx > 0) navigateToRegion(currentRegionIdx - 1);
+    });
+
+    nextBtn.addEventListener("click", () => {
+        if (currentRegionIdx < regions.length - 1) navigateToRegion(currentRegionIdx + 1);
+    });
+
+    syncToggle.addEventListener("change", () => {
+        syncEnabled = syncToggle.checked;
+    });
+
+    // Keyboard shortcuts
+    document.addEventListener("keydown", (e) => {
+        if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+        if (e.key === "ArrowLeft" || e.key === "[") {
+            e.preventDefault();
+            prevBtn.click();
+        } else if (e.key === "ArrowRight" || e.key === "]") {
+            e.preventDefault();
+            nextBtn.click();
+        }
+    });
+
+    // ── Start ───────────────────────────────────────────────────────────────
+    init().catch(err => {
+        setStatus("Error: " + err.message);
+        showLoading(false);
+        console.error(err);
+    });
+})();
+</script>
+</body>
+</html>
