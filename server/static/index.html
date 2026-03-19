@@ -599,55 +599,57 @@
         const region = regions[idx];
         setStatus(`Navigating to ${region.label}`);
 
-        // Navigate reference panel to the region
-        const refLocus = region.ref_region || `${region.chrom}:${region.start}-${region.end}`;
-        if (refBrowser) {
-            translating = true;
-            await refBrowser.search(refLocus);
-            document.getElementById("refLocus").textContent = refLocus;
-        }
-
-        // Navigate assembly panels using pre-computed regions if available
-        const hasHap1 = region.hap1_regions && region.hap1_regions.length > 0;
-        const hasHap2 = region.hap2_regions && region.hap2_regions.length > 0;
-
-        if (hasHap1 && hap1Browser) {
-            const h1 = region.hap1_regions[0];
-            await hap1Browser.search(h1);
-            document.getElementById("hap1Locus").textContent = h1;
-        }
-        if (hasHap2 && hap2Browser) {
-            const h2 = region.hap2_regions[0];
-            await hap2Browser.search(h2);
-            document.getElementById("hap2Locus").textContent = h2;
-        }
-
-        // If either haplotype lacks pre-computed regions, use dynamic translation
-        if ((!hasHap1 || !hasHap2) && currentSample && syncEnabled) {
-            try {
-                const result = await fetchJSON(
-                    `/api/translate?sample=${currentSample.sample_id}` +
-                    `&chrom=${encodeURIComponent(region.chrom)}` +
-                    `&start=${region.start}&end=${region.end}`
-                );
-                if (!hasHap1 && result.hap1 && result.hap1.length > 0 && hap1Browser) {
-                    const r = result.hap1[0];
-                    const locus = `${r.chrom}:${r.start}-${r.end}`;
-                    await hap1Browser.search(locus);
-                    document.getElementById("hap1Locus").textContent = locus;
-                }
-                if (!hasHap2 && result.hap2 && result.hap2.length > 0 && hap2Browser) {
-                    const r = result.hap2[0];
-                    const locus = `${r.chrom}:${r.start}-${r.end}`;
-                    await hap2Browser.search(locus);
-                    document.getElementById("hap2Locus").textContent = locus;
-                }
-            } catch (err) {
-                console.warn("Region translation error:", err);
+        translating = true;
+        try {
+            // Navigate reference panel to the region
+            const refLocus = region.ref_region || `${region.chrom}:${region.start}-${region.end}`;
+            if (refBrowser) {
+                await refBrowser.search(refLocus);
+                document.getElementById("refLocus").textContent = refLocus;
             }
-        }
 
-        translating = false;
+            // Navigate assembly panels using pre-computed regions if available
+            const hasHap1 = region.hap1_regions && region.hap1_regions.length > 0;
+            const hasHap2 = region.hap2_regions && region.hap2_regions.length > 0;
+
+            if (hasHap1 && hap1Browser) {
+                const h1 = region.hap1_regions[0];
+                await hap1Browser.search(h1);
+                document.getElementById("hap1Locus").textContent = h1;
+            }
+            if (hasHap2 && hap2Browser) {
+                const h2 = region.hap2_regions[0];
+                await hap2Browser.search(h2);
+                document.getElementById("hap2Locus").textContent = h2;
+            }
+
+            // If either haplotype lacks pre-computed regions, use dynamic translation
+            if ((!hasHap1 || !hasHap2) && currentSample && syncEnabled) {
+                try {
+                    const result = await fetchJSON(
+                        `/api/translate?sample=${currentSample.sample_id}` +
+                        `&chrom=${encodeURIComponent(region.chrom)}` +
+                        `&start=${region.start}&end=${region.end}`
+                    );
+                    if (!hasHap1 && result.hap1 && result.hap1.length > 0 && hap1Browser) {
+                        const r = result.hap1[0];
+                        const locus = `${r.chrom}:${r.start}-${r.end}`;
+                        await hap1Browser.search(locus);
+                        document.getElementById("hap1Locus").textContent = locus;
+                    }
+                    if (!hasHap2 && result.hap2 && result.hap2.length > 0 && hap2Browser) {
+                        const r = result.hap2[0];
+                        const locus = `${r.chrom}:${r.start}-${r.end}`;
+                        await hap2Browser.search(locus);
+                        document.getElementById("hap2Locus").textContent = locus;
+                    }
+                } catch (err) {
+                    console.warn("Region translation error:", err);
+                }
+            }
+        } finally {
+            translating = false;
+        }
     }
 
     // ── Event listeners ─────────────────────────────────────────────────────
