@@ -600,7 +600,7 @@ The server reads a tab-separated configuration file with the following columns:
 | `reference` | yes | Reference FASTA (`.fa.gz` with `.fai` and `.gzi`) |
 | `hap1_assembly` | yes | Haplotype 1 assembly FASTA |
 | `hap2_assembly` | yes | Haplotype 2 assembly FASTA |
-| `reads_bam` | no | Reads aligned to reference (optional, shown in reference panel) |
+| `reads_bam` | no | Reads BAM or CRAM aligned to reference (optional, shown in reference panel) |
 | `regions` | no | Regions file — manifest JSON or SV VCF (optional) |
 
 Lines starting with `#` are treated as comments; the first such line is the

@@ -156,7 +156,7 @@ pipeline produces the expected outputs.
 ### With Apptainer (recommended)
 
 ```bash
-apptainer run \
+apptainer exec \
     --bind "${PWD}:/work" \
     docker://ghcr.io/jlanej/long_read_visualization:main \
     python3 /opt/long_read_visualization/src/generate_toy_dataset.py \
