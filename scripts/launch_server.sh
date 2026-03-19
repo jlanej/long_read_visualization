@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 # launch_server.sh — Launch the multi-panel IGV.js visualization server.
 #
-# This script provides a convenient way to start the server either
-# natively (with Python 3) or inside an Apptainer container.
+# Designed to run inside an Apptainer container, though native Python
+# execution is also supported.
 #
-# Usage:
-#   # Native Python
-#   bash scripts/launch_server.sh --config samples.tsv [--port 8080]
+# Usage (inside Apptainer — recommended):
+#   apptainer exec --bind "${PWD}:/work" IMAGE \
+#       bash /opt/long_read_visualization/scripts/launch_server.sh \
+#       --config /work/samples.tsv --port 8080
 #
-#   # Inside Apptainer container
-#   bash scripts/launch_server.sh --config samples.tsv --apptainer IMAGE_URI
+#   # Quick-start with the bundled toy dataset:
+#   apptainer exec --bind "${PWD}:/work" IMAGE \
+#       bash /opt/long_read_visualization/scripts/launch_server.sh --toy
 #
-#   # Quick start with toy dataset (generates config + starts server)
+# Usage (native, for development):
+#   bash scripts/launch_server.sh --config samples.tsv --port 8080
 #   bash scripts/launch_server.sh --toy
 set -euo pipefail
 
@@ -20,7 +23,6 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PORT=8080
 HOST="0.0.0.0"
 CONFIG=""
-APPTAINER_URI=""
 TOY_MODE=false
 
 usage() {
@@ -33,9 +35,17 @@ Options:
   --config FILE       Path to samples TSV configuration file (required unless --toy)
   --port INT          Server port [${PORT}]
   --host STR          Server host [${HOST}]
-  --apptainer URI     Run inside Apptainer container (e.g. docker://ghcr.io/...)
-  --toy               Quick-start with the toy dataset example
+  --toy               Quick-start with the bundled toy dataset example
   -h, --help          Show this help message
+
+Apptainer example:
+  apptainer exec --bind "\${PWD}:/work" docker://ghcr.io/jlanej/long_read_visualization:main \\
+      bash /opt/long_read_visualization/scripts/launch_server.sh \\
+      --config /work/samples.tsv --port 8080
+
+Toy dataset example:
+  apptainer exec --bind "\${PWD}:/work" docker://ghcr.io/jlanej/long_read_visualization:main \\
+      bash /opt/long_read_visualization/scripts/launch_server.sh --toy
 EOF
     exit 1
 }
@@ -47,7 +57,6 @@ while [[ $# -gt 0 ]]; do
         --config)     CONFIG="$2";        shift 2 ;;
         --port)       PORT="$2";          shift 2 ;;
         --host)       HOST="$2";          shift 2 ;;
-        --apptainer)  APPTAINER_URI="$2"; shift 2 ;;
         --toy)        TOY_MODE=true;      shift   ;;
         -h|--help)    usage ;;
         *)            echo "Unknown option: $1" >&2; usage ;;
@@ -91,46 +100,11 @@ fi
 [[ -f "${CONFIG}" ]] || { echo "ERROR: Config file not found: ${CONFIG}" >&2; exit 1; }
 
 # ── Launch server ───────────────────────────────────────────────────────────
-if [[ -n "${APPTAINER_URI}" ]]; then
-    echo "Starting server via Apptainer..."
-    echo "  Image: ${APPTAINER_URI}"
-    echo "  Config: ${CONFIG}"
-    echo "  Port: ${PORT}"
-    echo ""
-
-    # Bind the working directory and the config file's directory
-    CONFIG_DIR="$(cd "$(dirname "${CONFIG}")" && pwd)"
-    BIND_DIRS="${PWD}:/work"
-    if [[ "${CONFIG_DIR}" != "${PWD}" ]]; then
-        BIND_DIRS="${BIND_DIRS},${CONFIG_DIR}:${CONFIG_DIR}"
-    fi
-
-    # Collect unique directories from the config for binding
-    while IFS=$'\t' read -r _ output_dir ref hap1 hap2 reads regions; do
-        for p in "${output_dir}" "${ref}" "${hap1}" "${hap2}" "${reads}" "${regions}"; do
-            if [[ -n "${p}" && -e "${p}" ]]; then
-                d="$(cd "$(dirname "${p}")" && pwd)"
-                if [[ "${BIND_DIRS}" != *"${d}"* ]]; then
-                    BIND_DIRS="${BIND_DIRS},${d}:${d}"
-                fi
-            fi
-        done
-    done < <(grep -v '^#' "${CONFIG}")
-
-    apptainer exec \
-        --bind "${BIND_DIRS}" \
-        "${APPTAINER_URI}" \
-        python3 /opt/long_read_visualization/server/app.py \
-        --config "${CONFIG}" \
-        --port "${PORT}" \
-        --host "${HOST}"
-else
-    echo "Starting server natively..."
-    echo "  Config: ${CONFIG}"
-    echo "  URL:    http://localhost:${PORT}"
-    echo ""
-    exec python3 "${REPO_ROOT}/server/app.py" \
-        --config "${CONFIG}" \
-        --port "${PORT}" \
-        --host "${HOST}"
-fi
+echo "Starting server..."
+echo "  Config: ${CONFIG}"
+echo "  URL:    http://localhost:${PORT}"
+echo ""
+exec python3 "${REPO_ROOT}/server/app.py" \
+    --config "${CONFIG}" \
+    --port "${PORT}" \
+    --host "${HOST}"

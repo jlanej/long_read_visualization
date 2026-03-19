@@ -399,7 +399,7 @@ See [docs/toy_dataset.md](docs/toy_dataset.md) for the full procedure.
 A multi-panel IGV.js visualization server for reviewing structural variants
 across a reference genome and both haplotype assemblies.  The server runs
 entirely in a single Python process with no external dependencies beyond the
-standard library (igv.js is downloaded automatically on first start).
+standard library (igv.js is bundled in the container image).
 
 ### Features
 
@@ -410,69 +410,181 @@ standard library (igv.js is downloaded automatically on first start).
 | **Region-of-interest browsing** | Load regions from a manifest JSON or SV VCF; step through them with ◀/▶ buttons or arrow keys |
 | **Multi-sample support** | TSV configuration file lists multiple samples; switch between them in the UI |
 | **Byte-range HTTP** | Full support for HTTP Range requests, enabling efficient BAM/FASTA random access |
-| **Containerized** | Apptainer definition (`server.def`) for HPC deployment |
+| **Containerized** | Runs via Apptainer with the same container image used for the pipeline — nothing extra to install |
 
-### Quick start with the toy dataset
+### Running the server with Apptainer
 
-```bash
-# 1. Run the pipeline on the toy dataset (if not already done)
-bash scripts/preprocess.sh \
-    --hap1       resources/toy_dataset/toy_hap1.fa.gz \
-    --hap2       resources/toy_dataset/toy_hap2.fa.gz \
-    --cram       resources/toy_dataset/toy_reads.bam \
-    --reference  resources/toy_dataset/toy_reference.fa.gz \
-    --output-dir toy_example_output \
-    --threads 4 --ont
+The visualization server uses the same container image as the pipeline.  All
+examples below use `apptainer exec` with the pipeline image.
 
-# 2. Generate the server configuration
-python3 scripts/generate_server_config.py \
-    --output-dir toy_example_output \
-    --reference  resources/toy_dataset/toy_reference.fa.gz \
-    --hap1       resources/toy_dataset/toy_hap1.fa.gz \
-    --hap2       resources/toy_dataset/toy_hap2.fa.gz \
-    --reads-bam  resources/toy_dataset/toy_reads.bam \
-    --regions    resources/toy_dataset/toy_manifest.json \
-    --output     toy_example_config.tsv
+#### Typical HPC directory layout
 
-# 3. Start the server
-python3 server/app.py --config toy_example_config.tsv --port 8080
+The examples assume a common HPC layout where all data lives under a shared
+project directory.  Bind-mount this single root into the container and
+reference everything through the mount point:
+
+```
+/data/projects/
+├── NA21110/
+│   ├── NA21110.t2t.cram
+│   ├── NA21110_hap1_hprc_r2_v1.0.1.fa.gz{,.fai,.gzi}
+│   └── NA21110_hap2_hprc_r2_v1.0.1.fa.gz{,.fai,.gzi}
+├── HG002/
+│   ├── HG002.hifi.cram
+│   ├── HG002_hap1.fa.gz{,.fai,.gzi}
+│   └── HG002_hap2.fa.gz{,.fai,.gzi}
+├── references/
+│   └── chm13v2.0.fa.gz{,.fai,.gzi}
+├── output/
+│   ├── NA21110/     ← pipeline output
+│   └── HG002/      ← pipeline output
+├── regions/
+│   ├── NA21110_svs.vcf.gz
+│   └── HG002_svs.vcf.gz
+└── samples.tsv      ← server config (generated below)
 ```
 
-Or use the all-in-one launcher:
+#### Step 1 — Run the preprocessing pipeline (once per sample)
 
 ```bash
-bash scripts/launch_server.sh --toy
+cd /data/projects
+
+# Process NA21110 (ONT reads)
+apptainer run \
+    --bind "${PWD}:/work" \
+    docker://ghcr.io/jlanej/long_read_visualization:main \
+    --hap1       /work/NA21110/NA21110_hap1_hprc_r2_v1.0.1.fa.gz \
+    --hap2       /work/NA21110/NA21110_hap2_hprc_r2_v1.0.1.fa.gz \
+    --cram       /work/NA21110/NA21110.t2t.cram \
+    --genome      chm13v2.0 \
+    --output-dir  /work/output/NA21110 \
+    --threads     32 \
+    --ont
+
+# Process HG002 (PacBio HiFi)
+apptainer run \
+    --bind "${PWD}:/work" \
+    docker://ghcr.io/jlanej/long_read_visualization:main \
+    --hap1       /work/HG002/HG002_hap1.fa.gz \
+    --hap2       /work/HG002/HG002_hap2.fa.gz \
+    --cram       /work/HG002/HG002.hifi.cram \
+    --genome      chm13v2.0 \
+    --output-dir  /work/output/HG002 \
+    --threads     32 \
+    --hifi
 ```
 
-Then open http://localhost:8080 in a browser.
+#### Step 2 — Generate the server configuration
 
-### Setting up for real data
+The `generate_server_config.py` script scans pipeline output directories and
+writes a TSV that the server reads at startup.
 
-After running the preprocessing pipeline on one or more samples, generate
-a configuration file:
+**Single sample:**
 
 ```bash
-# Single sample
-python3 scripts/generate_server_config.py \
-    --output-dir /path/to/output/NA21110 \
-    --reference  /path/to/chm13v2.0.fa.gz \
-    --hap1       /path/to/NA21110_hap1.fa.gz \
-    --hap2       /path/to/NA21110_hap2.fa.gz \
-    --regions    /path/to/svs.vcf.gz \
-    -o samples.tsv
+cd /data/projects
 
-# Multiple samples (auto-scan parent directory)
-python3 scripts/generate_server_config.py \
-    --scan-dir /path/to/outputs \
-    --reference /path/to/chm13v2.0.fa.gz \
-    -o samples.tsv
+apptainer exec \
+    --bind "${PWD}:/work" \
+    docker://ghcr.io/jlanej/long_read_visualization:main \
+    python3 /opt/long_read_visualization/scripts/generate_server_config.py \
+        --output-dir /work/output/NA21110 \
+        --reference  /work/references/chm13v2.0.fa.gz \
+        --hap1       /work/NA21110/NA21110_hap1_hprc_r2_v1.0.1.fa.gz \
+        --hap2       /work/NA21110/NA21110_hap2_hprc_r2_v1.0.1.fa.gz \
+        --regions    /work/regions/NA21110_svs.vcf.gz \
+        --reads-bam  /work/NA21110/NA21110.t2t.cram \
+        -o /work/samples.tsv
 ```
 
-Then start the server:
+**Multiple samples (explicit):**
 
 ```bash
-python3 server/app.py --config samples.tsv --port 8080
+apptainer exec \
+    --bind "${PWD}:/work" \
+    docker://ghcr.io/jlanej/long_read_visualization:main \
+    python3 /opt/long_read_visualization/scripts/generate_server_config.py \
+        --output-dir /work/output/NA21110 /work/output/HG002 \
+        --reference  /work/references/chm13v2.0.fa.gz \
+        --hap1       /work/NA21110/NA21110_hap1_hprc_r2_v1.0.1.fa.gz \
+                     /work/HG002/HG002_hap1.fa.gz \
+        --hap2       /work/NA21110/NA21110_hap2_hprc_r2_v1.0.1.fa.gz \
+                     /work/HG002/HG002_hap2.fa.gz \
+        --regions    /work/regions/NA21110_svs.vcf.gz \
+                     /work/regions/HG002_svs.vcf.gz \
+        -o /work/samples.tsv
 ```
+
+**Multiple samples (auto-scan):**
+
+If every sample's pipeline output lives in a subdirectory of a common parent,
+`--scan-dir` discovers them automatically:
+
+```bash
+apptainer exec \
+    --bind "${PWD}:/work" \
+    docker://ghcr.io/jlanej/long_read_visualization:main \
+    python3 /opt/long_read_visualization/scripts/generate_server_config.py \
+        --scan-dir  /work/output \
+        --reference /work/references/chm13v2.0.fa.gz \
+        -o /work/samples.tsv
+```
+
+> **Note:** When using `--scan-dir` the script auto-discovers assembly
+> FASTAs and region files by looking in and around each output directory.
+> Supply `--hap1`, `--hap2`, and `--regions` explicitly if the auto-discovery
+> misses files that live elsewhere.
+
+#### Step 3 — Start the visualization server
+
+```bash
+cd /data/projects
+
+apptainer exec \
+    --bind "${PWD}:/work" \
+    docker://ghcr.io/jlanej/long_read_visualization:main \
+    python3 /opt/long_read_visualization/server/app.py \
+        --config /work/samples.tsv \
+        --port 8080
+```
+
+Then open `http://<hostname>:8080` in a browser (or use SSH port-forwarding
+on HPC: `ssh -L 8080:localhost:8080 user@cluster`).
+
+The server reads the TSV at startup, loads all coordinate-mapping indices
+into memory, and registers every BAM/FASTA referenced in the config for
+byte-range serving.  Switch between samples using the dropdown in the UI.
+
+#### Quick-start with the toy dataset
+
+The bundled toy dataset includes 40 deletion SVs from the NA21110 sample.
+Use `launch_server.sh --toy` for a single-command demo:
+
+```bash
+cd /path/to/long_read_visualization   # repository root
+
+apptainer exec \
+    --bind "${PWD}:/work" \
+    docker://ghcr.io/jlanej/long_read_visualization:main \
+    bash /opt/long_read_visualization/scripts/launch_server.sh --toy
+```
+
+This runs the pipeline on the toy data (if not already done), generates the
+TSV config, and starts the server — all inside the container.
+
+#### Bind-mount tips for HPC
+
+| Scenario | `--bind` flag |
+|---|---|
+| All data under one directory | `--bind /data/projects:/work` |
+| Data on multiple filesystems | `--bind /scratch/user:/scratch/user,/data/shared:/data/shared` |
+| Read-only reference directory | `--bind /data/references:/data/references:ro` |
+
+> The server uses **absolute paths** from the TSV config to locate files.
+> When running inside Apptainer, all paths in `samples.tsv` must be valid
+> *inside* the container — i.e. they must refer to bind-mounted locations.
+> The simplest approach is to bind your project root to `/work` and use
+> `/work/...` paths everywhere (both in the pipeline and the config generator).
 
 ### TSV configuration format
 
@@ -491,30 +603,17 @@ The server reads a tab-separated configuration file with the following columns:
 Lines starting with `#` are treated as comments; the first such line is the
 header.
 
-### Running with Apptainer
+Example with two samples:
 
-```bash
-# Build the Apptainer image
-apptainer build server.sif server.def
-
-# Run the server
-apptainer run \
-    --bind "${PWD}:/work" \
-    server.sif \
-    --config /work/samples.tsv \
-    --port 8080
+```tsv
+#sample_id	output_dir	reference	hap1_assembly	hap2_assembly	reads_bam	regions
+NA21110	/work/output/NA21110	/work/references/chm13v2.0.fa.gz	/work/NA21110/NA21110_hap1.fa.gz	/work/NA21110/NA21110_hap2.fa.gz	/work/NA21110/NA21110.t2t.cram	/work/regions/NA21110_svs.vcf.gz
+HG002	/work/output/HG002	/work/references/chm13v2.0.fa.gz	/work/HG002/HG002_hap1.fa.gz	/work/HG002/HG002_hap2.fa.gz		/work/regions/HG002_svs.vcf.gz
 ```
 
-Or use the Docker image:
-
-```bash
-apptainer exec \
-    --bind "${PWD}:/work" \
-    docker://ghcr.io/jlanej/long_read_visualization:main \
-    python3 /opt/long_read_visualization/server/app.py \
-    --config /work/samples.tsv \
-    --port 8080
-```
+> **Tip:** You can hand-edit the TSV or generate it with
+> `generate_server_config.py`.  The script resolves paths to absolute paths,
+> so make sure they are valid inside the container when using Apptainer.
 
 ---
 

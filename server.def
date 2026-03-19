@@ -9,22 +9,39 @@ From: ubuntu:22.04
     Multi-panel IGV.js visualization server for reviewing structural variants
     across a reference genome and both haplotype assemblies.
 
-    Quick start (toy dataset):
-        apptainer run --bind "${PWD}:/work" server.sif --toy --port 8080
+    Quick start with the toy dataset (bind your working directory):
 
-    With a configuration file:
-        apptainer run --bind "${PWD}:/work" server.sif \
+        apptainer exec --bind "${PWD}:/work" server.sif \
+            bash /opt/long_read_visualization/scripts/launch_server.sh \
+            --toy --port 8080
+
+    Start with a configuration file:
+
+        apptainer exec --bind "${PWD}:/work" server.sif \
+            python3 /opt/long_read_visualization/server/app.py \
             --config /work/samples.tsv --port 8080
 
     Generate a config from pipeline outputs:
+
         apptainer exec --bind "${PWD}:/work" server.sif \
             python3 /opt/long_read_visualization/scripts/generate_server_config.py \
             --output-dir /work/output/NA21110 \
-            --reference /work/ref.fa.gz \
-            --hap1 /work/hap1.fa.gz \
-            --hap2 /work/hap2.fa.gz \
-            --regions /work/manifest.json \
+            --reference /work/references/chm13v2.0.fa.gz \
+            --hap1 /work/NA21110/NA21110_hap1.fa.gz \
+            --hap2 /work/NA21110/NA21110_hap2.fa.gz \
+            --regions /work/regions/NA21110_svs.vcf.gz \
             -o /work/samples.tsv
+
+    Multi-sample auto-scan:
+
+        apptainer exec --bind "${PWD}:/work" server.sif \
+            python3 /opt/long_read_visualization/scripts/generate_server_config.py \
+            --scan-dir /work/output \
+            --reference /work/references/chm13v2.0.fa.gz \
+            -o /work/samples.tsv
+
+    All paths in the TSV must be valid inside the container.  Bind-mount your
+    project root to /work and use /work/... paths everywhere.
 
 %post
     export DEBIAN_FRONTEND=noninteractive

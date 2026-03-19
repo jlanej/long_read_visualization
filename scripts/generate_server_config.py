@@ -5,40 +5,38 @@ Scans one or more pipeline output directories and optional VCF/manifest
 files to produce a tab-separated configuration file for the IGV.js
 visualization server.
 
-Usage examples
---------------
-    # Single sample from pipeline output
-    python3 scripts/generate_server_config.py \\
-        --output-dir /path/to/output/NA21110 \\
-        --reference /path/to/chm13v2.0.fa.gz \\
-        --hap1 /path/to/hap1.fa.gz \\
-        --hap2 /path/to/hap2.fa.gz \\
-        --regions /path/to/manifest.json \\
-        -o config.tsv
+Usage examples (inside Apptainer — recommended)
+-------------------------------------------------
+    # Single sample
+    apptainer exec --bind "${PWD}:/work" IMAGE \\
+        python3 /opt/long_read_visualization/scripts/generate_server_config.py \\
+        --output-dir /work/output/NA21110 \\
+        --reference /work/references/chm13v2.0.fa.gz \\
+        --hap1 /work/NA21110/NA21110_hap1.fa.gz \\
+        --hap2 /work/NA21110/NA21110_hap2.fa.gz \\
+        --regions /work/regions/NA21110_svs.vcf.gz \\
+        -o /work/samples.tsv
 
-    # Multiple samples
-    python3 scripts/generate_server_config.py \\
-        --output-dir /path/to/output/NA21110 /path/to/output/HG002 \\
-        --reference /path/to/ref.fa.gz \\
-        --hap1 /path/to/NA21110_hap1.fa.gz /path/to/HG002_hap1.fa.gz \\
-        --hap2 /path/to/NA21110_hap2.fa.gz /path/to/HG002_hap2.fa.gz \\
-        -o config.tsv
+    # Multiple samples (explicit)
+    apptainer exec --bind "${PWD}:/work" IMAGE \\
+        python3 /opt/long_read_visualization/scripts/generate_server_config.py \\
+        --output-dir /work/output/NA21110 /work/output/HG002 \\
+        --reference /work/references/chm13v2.0.fa.gz \\
+        --hap1 /work/NA21110/NA21110_hap1.fa.gz /work/HG002/HG002_hap1.fa.gz \\
+        --hap2 /work/NA21110/NA21110_hap2.fa.gz /work/HG002/HG002_hap2.fa.gz \\
+        -o /work/samples.tsv
 
     # Auto-discover from a parent directory containing sample subdirs
-    python3 scripts/generate_server_config.py \\
-        --scan-dir /path/to/output \\
-        --reference /path/to/ref.fa.gz \\
-        -o config.tsv
+    apptainer exec --bind "${PWD}:/work" IMAGE \\
+        python3 /opt/long_read_visualization/scripts/generate_server_config.py \\
+        --scan-dir /work/output \\
+        --reference /work/references/chm13v2.0.fa.gz \\
+        -o /work/samples.tsv
 
-    # From the toy dataset (after running the pipeline)
-    python3 scripts/generate_server_config.py \\
-        --output-dir /tmp/toy_output \\
-        --reference resources/toy_dataset/toy_reference.fa.gz \\
-        --hap1 resources/toy_dataset/toy_hap1.fa.gz \\
-        --hap2 resources/toy_dataset/toy_hap2.fa.gz \\
-        --regions resources/toy_dataset/toy_manifest.json \\
-        --reads-bam resources/toy_dataset/toy_reads.bam \\
-        -o config.tsv
+Note: All paths must be valid inside the container.  Bind-mount your project
+root to /work and use /work/... paths throughout.
+
+IMAGE = docker://ghcr.io/jlanej/long_read_visualization:main
 """
 
 import argparse
