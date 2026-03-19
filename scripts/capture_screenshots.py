@@ -26,8 +26,8 @@ def main():
                         help="Server URL (default: http://localhost:8080)")
     parser.add_argument("--output-dir", default="docs/screenshots",
                         help="Output directory for screenshots")
-    parser.add_argument("--wait", type=int, default=8,
-                        help="Seconds to wait for page load (default: 8)")
+    parser.add_argument("--wait", type=int, default=12,
+                        help="Seconds to wait for page load (default: 12)")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -66,7 +66,7 @@ def main():
 
         # 2. Capture with first region loaded
         print("Capturing first region view...")
-        time.sleep(2)
+        time.sleep(5)
         driver.save_screenshot(
             os.path.join(args.output_dir, "02_region_view.png"))
 
@@ -75,7 +75,7 @@ def main():
         try:
             next_btn = driver.find_element(By.ID, "nextRegion")
             next_btn.click()
-            time.sleep(3)
+            time.sleep(5)
             driver.save_screenshot(
                 os.path.join(args.output_dir, "03_next_region.png"))
         except Exception as e:

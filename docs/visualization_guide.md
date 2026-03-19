@@ -1,6 +1,6 @@
 # Long Read Visualization — User Guide
 
-> Auto-generated on 2026-03-19 17:33 UTC
+> Auto-generated on 2026-03-19 17:59 UTC
 
 ## Overview
 
@@ -39,17 +39,26 @@ The toolbar provides quick-access toggle buttons:
 
 ## Screenshots
 
-### Main view
+### Main View
 
-![Main view](screenshots/01_main_view.png)
+![Main View](screenshots/01_main_view.png)
 
-### Region view
 
-![Region view](screenshots/02_region_view.png)
+The multi-panel IGV.js interface on initial load, showing the sample selector, region navigation controls, and three synchronized genome-browser panels (Reference, Haplotype 1, Haplotype 2).
 
-### Next region
+### SV Region View
 
-![Next region](screenshots/03_next_region.png)
+![SV Region View](screenshots/02_region_view.png)
+
+
+Navigated to the first structural-variant region of interest. Reads are displayed in squished mode, assembly-to-reference alignments appear as colored tracks, and the locus is shown in each panel header.
+
+### Second Region
+
+![Second Region](screenshots/03_next_region.png)
+
+
+After pressing ▶ to advance to the next SV region. All three panels update simultaneously via server-side coordinate translation.
 
 ---
 

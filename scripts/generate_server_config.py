@@ -213,7 +213,7 @@ def main():
         help="Hap2 assembly FASTA(s), one per sample")
     parser.add_argument(
         "--reads-bam", nargs="*", default=[],
-        help="Reads BAM(s) aligned to reference, one per sample (optional)")
+        help="Reads BAM or CRAM aligned to reference, one per sample (optional)")
     parser.add_argument(
         "--regions", nargs="*", default=[],
         help="Region file(s) — manifest JSON or VCF (optional)")
