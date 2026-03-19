@@ -408,8 +408,11 @@ standard library (igv.js is bundled in the container image).
 | **Three coordinated panels** | Reference, Haplotype 1, and Haplotype 2 — each with its own IGV.js browser instance |
 | **Synchronized navigation** | Navigate in the reference panel and both assembly panels follow via server-side coordinate translation |
 | **Region-of-interest browsing** | Load regions from a manifest JSON or SV VCF; step through them with ◀/▶ buttons or arrow keys |
+| **BAM & CRAM support** | Reads can be loaded from BAM or CRAM files; CRAM reference sequences are resolved automatically |
+| **Long-read display mode** | Spurious small indels (≤ 3 bp) are hidden by default, matching Java IGV's third-gen display mode |
+| **Squished display** | Reads default to squished (compact) view; toggle to expanded with a single toolbar button |
 | **Multi-sample support** | TSV configuration file lists multiple samples; switch between them in the UI |
-| **Byte-range HTTP** | Full support for HTTP Range requests, enabling efficient BAM/FASTA random access |
+| **Byte-range HTTP** | Full support for HTTP Range requests, enabling efficient BAM/CRAM/FASTA random access |
 | **Containerized** | Runs via Apptainer with the same container image used for the pipeline — nothing extra to install |
 
 ### Running the server with Apptainer

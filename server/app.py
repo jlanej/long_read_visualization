@@ -111,7 +111,17 @@ def discover_pipeline_files(sample):
         "hap1_mapping_index": f"{prefix}_hap1_to_ref.mapping.json.gz",
         "hap2_mapping_index": f"{prefix}_hap2_to_ref.mapping.json.gz",
     }
+    # Also check for CRAM versions of the read alignment files
+    cram_map = {
+        "reads_to_hap1_cram": f"{prefix}_reads_to_hap1.cram",
+        "reads_to_hap2_cram": f"{prefix}_reads_to_hap2.cram",
+        "reads_cram": f"{prefix}_reads.cram",
+    }
     for key, fname in file_map.items():
+        path = os.path.join(output_dir, fname)
+        if os.path.isfile(path):
+            sample[key] = path
+    for key, fname in cram_map.items():
         path = os.path.join(output_dir, fname)
         if os.path.isfile(path):
             sample[key] = path
@@ -386,7 +396,7 @@ class IGVHandler(SimpleHTTPRequestHandler):
             url_path = f"/data/{sample_id}/{os.path.basename(path)}"
             self.file_registry[url_path] = path
             # Also register index files
-            for ext in (".bai", ".fai", ".gzi", ".tbi"):
+            for ext in (".bai", ".fai", ".gzi", ".tbi", ".crai"):
                 idx = path + ext
                 if os.path.isfile(idx):
                     idx_url = url_path + ext
@@ -412,6 +422,9 @@ class IGVHandler(SimpleHTTPRequestHandler):
                 "ref_to_hap1_bam": data_url("ref_to_hap1_bam"),
                 "ref_to_hap2_bam": data_url("ref_to_hap2_bam"),
                 "reads_bam": data_url("reads_bam"),
+                "reads_cram": data_url("reads_cram"),
+                "reads_to_hap1_cram": data_url("reads_to_hap1_cram"),
+                "reads_to_hap2_cram": data_url("reads_to_hap2_cram"),
             },
         }
         return config
@@ -605,6 +618,8 @@ class IGVHandler(SimpleHTTPRequestHandler):
             ".json": "application/json",
             ".bam": "application/octet-stream",
             ".bai": "application/octet-stream",
+            ".cram": "application/octet-stream",
+            ".crai": "application/octet-stream",
             ".fa": "text/plain",
             ".fasta": "text/plain",
             ".gz": "application/octet-stream",
@@ -695,13 +710,15 @@ def main():
         for key in ("reference", "hap1_assembly", "hap2_assembly",
                      "reads_bam", "hap1_to_ref_bam", "hap2_to_ref_bam",
                      "reads_to_hap1_bam", "reads_to_hap2_bam",
-                     "ref_to_hap1_bam", "ref_to_hap2_bam"):
+                     "ref_to_hap1_bam", "ref_to_hap2_bam",
+                     "reads_cram", "reads_to_hap1_cram",
+                     "reads_to_hap2_cram"):
             path = sample.get(key)
             if path and os.path.isfile(path):
                 url = f"/data/{sid}/{os.path.basename(path)}"
                 file_registry[url] = path
                 # Register associated index files
-                for ext in (".bai", ".fai", ".gzi", ".tbi"):
+                for ext in (".bai", ".fai", ".gzi", ".tbi", ".crai"):
                     idx = path + ext
                     if os.path.isfile(idx):
                         file_registry[url + ext] = idx
