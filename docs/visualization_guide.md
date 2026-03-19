@@ -1,6 +1,6 @@
 # Long Read Visualization — User Guide
 
-> Auto-generated on 2026-03-19 15:40 UTC
+> Auto-generated on 2026-03-19 17:33 UTC
 
 ## Overview
 
@@ -39,7 +39,17 @@ The toolbar provides quick-access toggle buttons:
 
 ## Screenshots
 
-*Screenshots are generated automatically by the `generate-docs` CI workflow.*
+### Main view
+
+![Main view](screenshots/01_main_view.png)
+
+### Region view
+
+![Region view](screenshots/02_region_view.png)
+
+### Next region
+
+![Next region](screenshots/03_next_region.png)
 
 ---
 
