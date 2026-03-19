@@ -49,11 +49,13 @@ def load_config(tsv_path):
         reference       Path to reference FASTA (.fa.gz)
         hap1_assembly   Path to haplotype 1 assembly FASTA (.fa.gz)
         hap2_assembly   Path to haplotype 2 assembly FASTA (.fa.gz)
-        reads_bam       (optional) Path to reads-vs-reference BAM
+        reads_bam       (optional) Path to reads-vs-reference BAM or CRAM
         regions         (optional) Path to regions file (manifest JSON or VCF)
 
     Lines beginning with ``#`` are ignored.  Additional columns are stored
-    as extra metadata.
+    as extra metadata.  If ``reads_bam`` points to a ``.cram`` file it is
+    automatically reclassified as ``reads_cram`` (an explicit ``reads_cram``
+    column takes priority).
     """
     samples = []
     with open(tsv_path) as fh:
@@ -72,6 +74,11 @@ def load_config(tsv_path):
             row = {}
             for i, col in enumerate(header):
                 row[col.strip()] = fields[i].strip() if i < len(fields) else ""
+            # Reclassify reads_bam → reads_cram when the path is a CRAM file
+            bam_val = row.get("reads_bam", "")
+            if bam_val.endswith(".cram"):
+                row.setdefault("reads_cram", bam_val)
+                row["reads_bam"] = ""
             samples.append(row)
     return samples
 

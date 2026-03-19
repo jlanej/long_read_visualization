@@ -71,6 +71,45 @@ class TestLoadConfig(unittest.TestCase):
         self.assertEqual(len(samples), 1)
         self.assertEqual(samples[0]["sample_id"], "S1")
 
+    def test_cram_in_reads_bam_reclassified(self):
+        """A .cram path in reads_bam is reclassified as reads_cram."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".tsv",
+                                         delete=False) as f:
+            f.write("#sample_id\treads_bam\n")
+            f.write("S1\t/data/sample.cram\n")
+            f.flush()
+            samples = server_app.load_config(f.name)
+        os.unlink(f.name)
+        self.assertEqual(len(samples), 1)
+        self.assertEqual(samples[0]["reads_bam"], "")
+        self.assertEqual(samples[0]["reads_cram"], "/data/sample.cram")
+
+    def test_bam_in_reads_bam_unchanged(self):
+        """A .bam path in reads_bam is left unchanged."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".tsv",
+                                         delete=False) as f:
+            f.write("#sample_id\treads_bam\n")
+            f.write("S1\t/data/sample.bam\n")
+            f.flush()
+            samples = server_app.load_config(f.name)
+        os.unlink(f.name)
+        self.assertEqual(len(samples), 1)
+        self.assertEqual(samples[0]["reads_bam"], "/data/sample.bam")
+        self.assertNotIn("reads_cram", samples[0])
+
+    def test_cram_reclassify_preserves_existing_reads_cram(self):
+        """If reads_cram already exists, reads_bam .cram does not overwrite."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".tsv",
+                                         delete=False) as f:
+            f.write("#sample_id\treads_bam\treads_cram\n")
+            f.write("S1\t/data/extra.cram\t/data/primary.cram\n")
+            f.flush()
+            samples = server_app.load_config(f.name)
+        os.unlink(f.name)
+        self.assertEqual(len(samples), 1)
+        self.assertEqual(samples[0]["reads_bam"], "")
+        self.assertEqual(samples[0]["reads_cram"], "/data/primary.cram")
+
 
 class TestDiscoverPipelineFiles(unittest.TestCase):
     """Tests for auto-discovering pipeline output files."""
