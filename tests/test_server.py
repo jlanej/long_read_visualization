@@ -122,6 +122,20 @@ class TestDiscoverPipelineFiles(unittest.TestCase):
         result = server_app.discover_pipeline_files(sample)
         self.assertNotIn("hap1_to_ref_bam", result)
 
+    def test_discovers_cram_files(self):
+        """CRAM files are discovered alongside BAM files."""
+        prefix = "test_sample"
+        # Create CRAM files
+        for suffix in ("_reads_to_hap1.cram", "_reads_to_hap1.cram.crai",
+                        "_reads_to_hap2.cram", "_reads_to_hap2.cram.crai",
+                        "_reads.cram", "_reads.cram.crai"):
+            open(os.path.join(self.tmpdir, prefix + suffix), "w").close()
+        sample = {"sample_id": "test", "output_dir": self.tmpdir}
+        sample = server_app.discover_pipeline_files(sample)
+        self.assertIn("reads_to_hap1_cram", sample)
+        self.assertIn("reads_to_hap2_cram", sample)
+        self.assertIn("reads_cram", sample)
+
 
 class TestLoadRegions(unittest.TestCase):
     """Tests for loading regions of interest."""
@@ -234,6 +248,30 @@ class TestFormatSize(unittest.TestCase):
 
     def test_mb(self):
         self.assertEqual(server_app._format_size(1500000), "1.5 Mb")
+
+
+class TestGuessType(unittest.TestCase):
+    """Tests for MIME type detection including CRAM."""
+
+    def test_cram_type(self):
+        self.assertEqual(
+            server_app.IGVHandler._guess_type("sample.cram"),
+            "application/octet-stream")
+
+    def test_crai_type(self):
+        self.assertEqual(
+            server_app.IGVHandler._guess_type("sample.cram.crai"),
+            "application/octet-stream")
+
+    def test_bam_type(self):
+        self.assertEqual(
+            server_app.IGVHandler._guess_type("sample.bam"),
+            "application/octet-stream")
+
+    def test_fai_type(self):
+        self.assertEqual(
+            server_app.IGVHandler._guess_type("ref.fa.gz.fai"),
+            "text/plain")
 
 
 class TestCoordinateTranslator(unittest.TestCase):

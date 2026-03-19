@@ -90,6 +90,38 @@
         accent-color: var(--accent);
     }
 
+    /* ── Toolbar buttons ────────────────────────────────────────────────── */
+    .toolbar-group {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-left: 8px;
+    }
+    .toolbar-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 12px;
+        padding: 4px 10px;
+        border-radius: 4px;
+        border: 1px solid var(--border);
+        background: var(--surface2);
+        color: var(--text-muted);
+        cursor: pointer;
+        transition: background 0.15s, color 0.15s, border-color 0.15s;
+        white-space: nowrap;
+    }
+    .toolbar-btn:hover {
+        background: var(--surface);
+        color: var(--text);
+    }
+    .toolbar-btn.active {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+    }
+    .btn-icon { font-size: 13px; }
+
     /* ── Panel layout ────────────────────────────────────────────────────── */
     .panels {
         display: flex;
@@ -188,6 +220,15 @@
         <input type="checkbox" id="syncToggle" checked>
         Sync panels
     </label>
+
+    <div class="toolbar-group">
+        <button id="toggleDisplayMode" class="toolbar-btn" title="Toggle read display density">
+            <span class="btn-icon">☰</span> Squished
+        </button>
+        <button id="toggleSmallIndels" class="toolbar-btn active" title="Hide spurious small indels (long-read mode)">
+            <span class="btn-icon">🧹</span> Hide indels
+        </button>
+    </div>
 </div>
 
 <!-- Panels -->
@@ -231,6 +272,8 @@
     let currentRegionIdx = -1;
     let syncEnabled = true;
     let translating = false;
+    let displaySquished = true;          // default: squished (compact)
+    let hideSmallIndels = true;          // default: hide spurious indels (long-read mode)
 
     // ── DOM refs ────────────────────────────────────────────────────────────
     const sampleSelect = document.getElementById("sampleSelect");
@@ -241,6 +284,8 @@
     const syncToggle = document.getElementById("syncToggle");
     const loadingOverlay = document.getElementById("loadingOverlay");
     const statusBar = document.getElementById("statusBar");
+    const toggleDisplayModeBtn = document.getElementById("toggleDisplayMode");
+    const toggleSmallIndelsBtn = document.getElementById("toggleSmallIndels");
 
     // ── Helpers ─────────────────────────────────────────────────────────────
     function setStatus(msg) { statusBar.textContent = msg; }
@@ -316,6 +361,53 @@
 
     async function createBrowsers(config) {
         const baseUrl = window.location.origin;
+        const readDisplayMode = displaySquished ? "SQUISHED" : "EXPANDED";
+
+        // Helper: build an alignment track for reads (BAM or CRAM)
+        function makeReadTrack(name, bamUrl, cramUrl, refFastaUrl, opts) {
+            const isCram = !bamUrl && cramUrl;
+            const url = isCram ? cramUrl : bamUrl;
+            if (!url) return null;
+
+            const track = {
+                name: name,
+                type: "alignment",
+                format: isCram ? "cram" : "bam",
+                url: baseUrl + url,
+                indexURL: baseUrl + url + (isCram ? ".crai" : ".bai"),
+                height: 150,
+                displayMode: readDisplayMode,
+                showSoftClips: false,
+                hideSmallIndels: hideSmallIndels,
+                smallIndelThreshold: 3,
+                colorBy: "strand",
+                ...opts,
+            };
+            // CRAM files require a reference sequence URL for decoding
+            if (isCram && refFastaUrl) {
+                track.sequenceURL = baseUrl + refFastaUrl;
+                track.sequenceIndexURL = baseUrl + refFastaUrl + ".fai";
+            }
+            return track;
+        }
+
+        // Helper: build an alignment track for assembly cross-checks
+        function makeAssemblyTrack(name, bamUrl, color) {
+            if (!bamUrl) return null;
+            return {
+                name: name,
+                type: "alignment",
+                format: "bam",
+                url: baseUrl + bamUrl,
+                indexURL: baseUrl + bamUrl + ".bai",
+                height: 80,
+                color: color,
+                displayMode: "SQUISHED",
+                showSoftClips: false,
+                hideSmallIndels: hideSmallIndels,
+                smallIndelThreshold: 3,
+            };
+        }
 
         // ── Reference panel ──────────────────────────────────────────────
         const refOpts = {
@@ -331,41 +423,23 @@
             tracks: [],
         };
 
-        if (config.tracks.reads_bam) {
-            refOpts.tracks.push({
-                name: "Reads → Ref",
-                type: "alignment",
-                format: "bam",
-                url: baseUrl + config.tracks.reads_bam,
-                indexURL: baseUrl + config.tracks.reads_bam + ".bai",
-                height: 150,
-                colorBy: "strand",
-            });
-        }
-        if (config.tracks.hap1_to_ref_bam) {
-            refOpts.tracks.push({
-                name: "Hap1 → Ref",
-                type: "alignment",
-                format: "bam",
-                url: baseUrl + config.tracks.hap1_to_ref_bam,
-                indexURL: baseUrl + config.tracks.hap1_to_ref_bam + ".bai",
-                height: 80,
-                color: "#4CAF50",
-                displayMode: "SQUISHED",
-            });
-        }
-        if (config.tracks.hap2_to_ref_bam) {
-            refOpts.tracks.push({
-                name: "Hap2 → Ref",
-                type: "alignment",
-                format: "bam",
-                url: baseUrl + config.tracks.hap2_to_ref_bam,
-                indexURL: baseUrl + config.tracks.hap2_to_ref_bam + ".bai",
-                height: 80,
-                color: "#FF9800",
-                displayMode: "SQUISHED",
-            });
-        }
+        // Reads → Ref (BAM or CRAM)
+        const readsRefTrack = makeReadTrack(
+            "Reads → Ref",
+            config.tracks.reads_bam,
+            config.tracks.reads_cram,
+            config.reference.fastaURL,
+            {}
+        );
+        if (readsRefTrack) refOpts.tracks.push(readsRefTrack);
+
+        // Hap1 → Ref
+        const hap1RefTrack = makeAssemblyTrack("Hap1 → Ref", config.tracks.hap1_to_ref_bam, "#4CAF50");
+        if (hap1RefTrack) refOpts.tracks.push(hap1RefTrack);
+
+        // Hap2 → Ref
+        const hap2RefTrack = makeAssemblyTrack("Hap2 → Ref", config.tracks.hap2_to_ref_bam, "#FF9800");
+        if (hap2RefTrack) refOpts.tracks.push(hap2RefTrack);
 
         // ── Hap1 panel ───────────────────────────────────────────────────
         const hap1Opts = {
@@ -381,29 +455,19 @@
             tracks: [],
         };
 
-        if (config.tracks.reads_to_hap1_bam) {
-            hap1Opts.tracks.push({
-                name: "Reads → Hap1",
-                type: "alignment",
-                format: "bam",
-                url: baseUrl + config.tracks.reads_to_hap1_bam,
-                indexURL: baseUrl + config.tracks.reads_to_hap1_bam + ".bai",
-                height: 150,
-                colorBy: "strand",
-            });
-        }
-        if (config.tracks.ref_to_hap1_bam) {
-            hap1Opts.tracks.push({
-                name: "Ref → Hap1",
-                type: "alignment",
-                format: "bam",
-                url: baseUrl + config.tracks.ref_to_hap1_bam,
-                indexURL: baseUrl + config.tracks.ref_to_hap1_bam + ".bai",
-                height: 80,
-                color: "#2196F3",
-                displayMode: "SQUISHED",
-            });
-        }
+        // Reads → Hap1 (BAM or CRAM)
+        const readsHap1Track = makeReadTrack(
+            "Reads → Hap1",
+            config.tracks.reads_to_hap1_bam,
+            config.tracks.reads_to_hap1_cram,
+            config.hap1_assembly.fastaURL,
+            {}
+        );
+        if (readsHap1Track) hap1Opts.tracks.push(readsHap1Track);
+
+        // Ref → Hap1
+        const refHap1Track = makeAssemblyTrack("Ref → Hap1", config.tracks.ref_to_hap1_bam, "#2196F3");
+        if (refHap1Track) hap1Opts.tracks.push(refHap1Track);
 
         // ── Hap2 panel ───────────────────────────────────────────────────
         const hap2Opts = {
@@ -419,29 +483,19 @@
             tracks: [],
         };
 
-        if (config.tracks.reads_to_hap2_bam) {
-            hap2Opts.tracks.push({
-                name: "Reads → Hap2",
-                type: "alignment",
-                format: "bam",
-                url: baseUrl + config.tracks.reads_to_hap2_bam,
-                indexURL: baseUrl + config.tracks.reads_to_hap2_bam + ".bai",
-                height: 150,
-                colorBy: "strand",
-            });
-        }
-        if (config.tracks.ref_to_hap2_bam) {
-            hap2Opts.tracks.push({
-                name: "Ref → Hap2",
-                type: "alignment",
-                format: "bam",
-                url: baseUrl + config.tracks.ref_to_hap2_bam,
-                indexURL: baseUrl + config.tracks.ref_to_hap2_bam + ".bai",
-                height: 80,
-                color: "#2196F3",
-                displayMode: "SQUISHED",
-            });
-        }
+        // Reads → Hap2 (BAM or CRAM)
+        const readsHap2Track = makeReadTrack(
+            "Reads → Hap2",
+            config.tracks.reads_to_hap2_bam,
+            config.tracks.reads_to_hap2_cram,
+            config.hap2_assembly.fastaURL,
+            {}
+        );
+        if (readsHap2Track) hap2Opts.tracks.push(readsHap2Track);
+
+        // Ref → Hap2
+        const refHap2Track = makeAssemblyTrack("Ref → Hap2", config.tracks.ref_to_hap2_bam, "#2196F3");
+        if (refHap2Track) hap2Opts.tracks.push(refHap2Track);
 
         // Create all three browsers
         [refBrowser, hap1Browser, hap2Browser] = await Promise.all([
@@ -548,23 +602,49 @@
         // Navigate reference panel to the region
         const refLocus = region.ref_region || `${region.chrom}:${region.start}-${region.end}`;
         if (refBrowser) {
+            translating = true;
             await refBrowser.search(refLocus);
             document.getElementById("refLocus").textContent = refLocus;
         }
 
-        // Navigate assembly panels using pre-computed regions if available,
-        // otherwise let the sync listener handle it
-        translating = true;
+        // Navigate assembly panels using pre-computed regions if available
+        const hasHap1 = region.hap1_regions && region.hap1_regions.length > 0;
+        const hasHap2 = region.hap2_regions && region.hap2_regions.length > 0;
 
-        if (region.hap1_regions && region.hap1_regions.length > 0 && hap1Browser) {
+        if (hasHap1 && hap1Browser) {
             const h1 = region.hap1_regions[0];
             await hap1Browser.search(h1);
             document.getElementById("hap1Locus").textContent = h1;
         }
-        if (region.hap2_regions && region.hap2_regions.length > 0 && hap2Browser) {
+        if (hasHap2 && hap2Browser) {
             const h2 = region.hap2_regions[0];
             await hap2Browser.search(h2);
             document.getElementById("hap2Locus").textContent = h2;
+        }
+
+        // If either haplotype lacks pre-computed regions, use dynamic translation
+        if ((!hasHap1 || !hasHap2) && currentSample && syncEnabled) {
+            try {
+                const result = await fetchJSON(
+                    `/api/translate?sample=${currentSample.sample_id}` +
+                    `&chrom=${encodeURIComponent(region.chrom)}` +
+                    `&start=${region.start}&end=${region.end}`
+                );
+                if (!hasHap1 && result.hap1 && result.hap1.length > 0 && hap1Browser) {
+                    const r = result.hap1[0];
+                    const locus = `${r.chrom}:${r.start}-${r.end}`;
+                    await hap1Browser.search(locus);
+                    document.getElementById("hap1Locus").textContent = locus;
+                }
+                if (!hasHap2 && result.hap2 && result.hap2.length > 0 && hap2Browser) {
+                    const r = result.hap2[0];
+                    const locus = `${r.chrom}:${r.start}-${r.end}`;
+                    await hap2Browser.search(locus);
+                    document.getElementById("hap2Locus").textContent = locus;
+                }
+            } catch (err) {
+                console.warn("Region translation error:", err);
+            }
         }
 
         translating = false;
@@ -588,6 +668,51 @@
 
     syncToggle.addEventListener("change", () => {
         syncEnabled = syncToggle.checked;
+    });
+
+    // ── Display mode toggle ─────────────────────────────────────────────────
+    function updateAllTrackDisplayModes() {
+        const mode = displaySquished ? "SQUISHED" : "EXPANDED";
+        for (const browser of [refBrowser, hap1Browser, hap2Browser]) {
+            if (!browser) continue;
+            for (const track of browser.trackViews) {
+                if (track.track && track.track.type === "alignment") {
+                    track.track.displayMode = mode;
+                }
+            }
+            browser.updateViews();
+        }
+    }
+
+    function updateAllTrackIndelDisplay() {
+        for (const browser of [refBrowser, hap1Browser, hap2Browser]) {
+            if (!browser) continue;
+            for (const track of browser.trackViews) {
+                if (track.track && track.track.type === "alignment") {
+                    track.track.hideSmallIndels = hideSmallIndels;
+                    track.track.smallIndelThreshold = 3;
+                }
+            }
+            browser.updateViews();
+        }
+    }
+
+    toggleDisplayModeBtn.addEventListener("click", () => {
+        displaySquished = !displaySquished;
+        toggleDisplayModeBtn.innerHTML = displaySquished
+            ? '<span class="btn-icon">☰</span> Squished'
+            : '<span class="btn-icon">≡</span> Expanded';
+        toggleDisplayModeBtn.classList.toggle("active", !displaySquished);
+        updateAllTrackDisplayModes();
+    });
+
+    toggleSmallIndelsBtn.addEventListener("click", () => {
+        hideSmallIndels = !hideSmallIndels;
+        toggleSmallIndelsBtn.classList.toggle("active", hideSmallIndels);
+        toggleSmallIndelsBtn.innerHTML = hideSmallIndels
+            ? '<span class="btn-icon">🧹</span> Hide indels'
+            : '<span class="btn-icon">🔍</span> Show indels';
+        updateAllTrackIndelDisplay();
     });
 
     // Keyboard shortcuts
