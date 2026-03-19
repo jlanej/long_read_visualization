@@ -365,6 +365,11 @@
 
         // Helper: build an alignment track for reads (BAM or CRAM)
         function makeReadTrack(name, bamUrl, cramUrl, refFastaUrl, opts) {
+            // If bamUrl actually points to a CRAM file, treat it as CRAM
+            if (bamUrl && bamUrl.endsWith('.cram')) {
+                cramUrl = cramUrl || bamUrl;
+                bamUrl = null;
+            }
             const isCram = !bamUrl && cramUrl;
             const url = isCram ? cramUrl : bamUrl;
             if (!url) return null;
@@ -381,7 +386,7 @@
                 hideSmallIndels: hideSmallIndels,
                 smallIndelThreshold: 3,
                 colorBy: "strand",
-                visibilityWindow: 300000,
+                visibilityWindow: 30000,
                 ...opts,
             };
             // CRAM files require a reference sequence URL for decoding
