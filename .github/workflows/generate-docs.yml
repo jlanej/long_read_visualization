@@ -9,8 +9,17 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
+
+# Only one Pages deployment can run at a time; cancel any in-progress run
+# so that each push to main always results in the freshest site.
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
+  # ── Build: run pipeline, capture screenshots, generate site ──────────────
   generate-docs:
     runs-on: ubuntu-latest
     steps:
@@ -67,7 +76,7 @@ jobs:
             --url http://localhost:8080 \
             --output-dir docs/screenshots
 
-      - name: Generate documentation page
+      - name: Generate static documentation site
         run: python3 scripts/generate_docs.py
 
       - name: Upload screenshots as artifacts
@@ -85,6 +94,29 @@ jobs:
           if git diff --staged --quiet; then
             echo "No documentation changes to commit"
           else
-            git commit -m "docs: auto-generate documentation with screenshots [skip ci]"
+            git commit -m "docs: auto-generate static site with screenshots [skip ci]"
             git push
           fi
+
+      - name: Configure GitHub Pages
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/
+
+  # ── Deploy: publish the artifact to GitHub Pages ─────────────────────────
+  deploy:
+    needs: generate-docs
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
