@@ -33,26 +33,24 @@ jobs:
         run: |
           mkdir -p /tmp/toy_output
           docker run --rm \
+            --user "$(id -u):$(id -g)" \
             -v "${PWD}/resources/toy_dataset:/input:ro" \
             -v "/tmp/toy_output:/output" \
             long_read_visualization:docs \
-            bash -c "
-              cd /output &&
-              bash /opt/long_read_visualization/scripts/preprocess.sh \
-                --sample toy_reads \
-                --hap1 /input/toy_hap1.fa.gz \
-                --hap2 /input/toy_hap2.fa.gz \
-                --ref /input/toy_reference.fa.gz \
-                --reads /input/toy_reads.bam \
-                --output /output \
-                --threads 2
-            "
+            --hap1        /input/toy_hap1.fa.gz \
+            --hap2        /input/toy_hap2.fa.gz \
+            --cram        /input/toy_reads.bam \
+            --reference   /input/toy_reference.fa.gz \
+            --output-dir  /output \
+            --threads     2 \
+            --ont
 
       - name: Generate server config
         run: |
-          cat > /tmp/toy_output/samples.tsv <<'EOF'
+          RESOURCES="${PWD}/resources/toy_dataset"
+          cat > /tmp/toy_output/samples.tsv <<EOF
           #sample_id	output_dir	reference	hap1_assembly	hap2_assembly	reads_bam	regions
-          toy_reads	/tmp/toy_output	${PWD}/resources/toy_dataset/toy_reference.fa.gz	${PWD}/resources/toy_dataset/toy_hap1.fa.gz	${PWD}/resources/toy_dataset/toy_hap2.fa.gz	${PWD}/resources/toy_dataset/toy_reads.bam	${PWD}/resources/toy_dataset/toy_manifest.json
+          toy_reads	/tmp/toy_output	${RESOURCES}/toy_reference.fa.gz	${RESOURCES}/toy_hap1.fa.gz	${RESOURCES}/toy_hap2.fa.gz	${RESOURCES}/toy_reads.bam	${RESOURCES}/toy_manifest.json
           EOF
 
       - name: Start visualization server
