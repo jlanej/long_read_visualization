@@ -556,7 +556,6 @@ def write_manifest(regions, output_dir):
         v = r["variant"]
         pos = v["pos"]
         size = v["size"]
-        sv_end = v.get("end", pos + size)
         chrom = v["chrom"]
         manifest["variants"].append(
             {
@@ -564,7 +563,7 @@ def write_manifest(regions, output_dir):
                 "pos": pos,
                 "size": size,
                 "genotype": v["genotype"],
-                "ref_region": f"{chrom}:{pos}-{sv_end}",
+                "ref_region": f"{chrom}:{pos}-{pos + size}",
                 "fasta_region": r["ref_region"],
                 "hap1_regions": r["hap1_regions"],
                 "hap2_regions": r["hap2_regions"],
