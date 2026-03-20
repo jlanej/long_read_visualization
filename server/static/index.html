@@ -126,8 +126,8 @@
     .panels {
         display: flex;
         flex-direction: column;
-        gap: 2px;
-        padding: 4px;
+        gap: 1px;
+        padding: 2px;
         height: calc(100vh - 48px);
     }
     .panel {
@@ -136,10 +136,12 @@
         overflow: hidden;
         display: flex;
         flex-direction: column;
+        min-height: 0;
     }
+    .panel.ref { flex: 1.3; background: var(--panel-ref); }
     .panel-header {
-        padding: 4px 10px;
-        font-size: 13px;
+        padding: 2px 10px;
+        font-size: 12px;
         font-weight: 600;
         display: flex;
         justify-content: space-between;
@@ -154,12 +156,12 @@
     .panel-body {
         flex: 1;
         position: relative;
+        min-height: 0;
+        overflow: auto;
     }
     .panel-body > div {
         height: 100%;
     }
-
-    .panel.ref { background: var(--panel-ref); }
     .panel.ref .panel-header { background: rgba(27,58,75,0.8); }
     .panel.hap1 { background: var(--panel-hap1); }
     .panel.hap1 .panel-header { background: rgba(27,58,43,0.8); }
@@ -168,6 +170,10 @@
 
     /* ── IGV overrides ───────────────────────────────────────────────────── */
     .igv-container { background: transparent !important; }
+
+    /* Hide IGV navigation chrome on hap panels (they are synced via ref) */
+    .panel.hap1 .igv-navbar,
+    .panel.hap2 .igv-navbar { display: none !important; }
 
     /* ── Loading overlay ─────────────────────────────────────────────────── */
     .loading {
@@ -274,6 +280,7 @@
     let translating = false;
     let displaySquished = true;          // default: squished (compact)
     let hideSmallIndels = true;          // default: hide spurious indels (long-read mode)
+    let opGeneration = 0;               // increments on sample/region change to invalidate stale ops
 
     // ── DOM refs ────────────────────────────────────────────────────────────
     const sampleSelect = document.getElementById("sampleSelect");
@@ -315,7 +322,21 @@
     }
 
     // ── Sample loading ──────────────────────────────────────────────────────
+    function cancelPendingOps() {
+        opGeneration++;
+        translating = false;
+        if (activeTranslateCtrl) {
+            activeTranslateCtrl.abort();
+            activeTranslateCtrl = null;
+        }
+        if (translateTimeout) {
+            clearTimeout(translateTimeout);
+            translateTimeout = null;
+        }
+    }
+
     async function loadSample(sampleId) {
+        cancelPendingOps();
         showLoading(true);
         setStatus(`Loading sample ${sampleId}...`);
         console.log(`[LRV] Loading sample: ${sampleId}`);
@@ -408,7 +429,7 @@
                 format: isCram ? "cram" : "bam",
                 url: baseUrl + url,
                 indexURL: baseUrl + url + (isCram ? ".crai" : ".bai"),
-                height: 150,
+                height: 120,
                 displayMode: readDisplayMode,
                 showSoftClips: false,
                 hideSmallIndels: hideSmallIndels,
@@ -442,7 +463,7 @@
                 format: "bam",
                 url: baseUrl + bamUrl,
                 indexURL: baseUrl + bamUrl + ".bai",
-                height: 80,
+                height: 60,
                 color: color,
                 displayMode: "SQUISHED",
                 showSoftClips: false,
@@ -485,7 +506,7 @@
 
         // ── Hap1 panel ───────────────────────────────────────────────────
         const hap1Opts = {
-            showNavigation: true,
+            showNavigation: false,
             showCenterGuide: true,
             loadDefaultGenomes: false,
             genomeList: null,
@@ -512,7 +533,7 @@
 
         // ── Hap2 panel ───────────────────────────────────────────────────
         const hap2Opts = {
-            showNavigation: true,
+            showNavigation: false,
             showCenterGuide: true,
             loadDefaultGenomes: false,
             genomeList: null,
@@ -583,6 +604,9 @@
     async function translateAndSync(referenceFrameList) {
         if (!currentSample || !syncEnabled || translating) return;
 
+        // Capture generation so we can detect stale results.
+        const gen = opGeneration;
+
         // Abort any previous in-flight request (safety net for back-to-back calls).
         if (activeTranslateCtrl) activeTranslateCtrl.abort();
         activeTranslateCtrl = new AbortController();
@@ -602,9 +626,9 @@
                 `&chrom=${encodeURIComponent(chrom)}&start=${start}&end=${end}`,
                 { signal }
             );
-            if (signal.aborted) return;
+            if (signal.aborted || gen !== opGeneration) return;
             const result = await resp.json();
-            if (signal.aborted) return;
+            if (signal.aborted || gen !== opGeneration) return;
 
             // Set the flag *before* driving the hap browsers so that any
             // locuschange fired by their search() calls is ignored.
@@ -615,18 +639,20 @@
             translating = true;
 
             // Navigate hap1 panel
-            if (result.hap1 && result.hap1.length > 0) {
+            if (result.hap1 && result.hap1.length > 0 && hap1Browser) {
                 const r = result.hap1[0];
                 const locus = `${r.chrom}:${r.start}-${r.end}`;
                 await hap1Browser.search(locus);
+                if (gen !== opGeneration) return;
                 document.getElementById("hap1Locus").textContent = locus;
             }
 
             // Navigate hap2 panel
-            if (result.hap2 && result.hap2.length > 0) {
+            if (result.hap2 && result.hap2.length > 0 && hap2Browser) {
                 const r = result.hap2[0];
                 const locus = `${r.chrom}:${r.start}-${r.end}`;
                 await hap2Browser.search(locus);
+                if (gen !== opGeneration) return;
                 document.getElementById("hap2Locus").textContent = locus;
             }
 
@@ -673,6 +699,7 @@
 
     async function navigateToRegion(idx) {
         if (idx < 0 || idx >= regions.length) return;
+        cancelPendingOps();
         currentRegionIdx = idx;
         regionSelect.value = idx;
         regionCounter.textContent = `${idx + 1}/${regions.length}`;
@@ -680,12 +707,33 @@
         const region = regions[idx];
         setStatus(`Navigating to ${region.label}`);
 
+        const gen = opGeneration;
         translating = true;
         try {
-            // Navigate reference panel to the region
-            const refLocus = region.ref_region || `${region.chrom}:${region.start}-${region.end}`;
+            // Navigate reference panel to the region with 5x buffer on each side.
+            // Parse the region coordinates, from the explicit ref_region or chrom:start-end.
+            let refChrom, refStart, refEnd;
+            if (region.ref_region) {
+                const m = region.ref_region.match(/^(.+):(\d+)-(\d+)$/);
+                if (m) {
+                    refChrom = m[1];
+                    refStart = parseInt(m[2], 10);
+                    refEnd = parseInt(m[3], 10);
+                }
+            }
+            if (!refChrom) {
+                refChrom = region.chrom;
+                refStart = parseInt(region.start, 10);
+                refEnd = parseInt(region.end, 10);
+            }
+            const regionSize = refEnd - refStart;
+            const buffer = regionSize * 5;
+            const bufferedStart = Math.max(0, refStart - buffer);
+            const bufferedEnd = refEnd + buffer;
+            const refLocus = `${refChrom}:${bufferedStart}-${bufferedEnd}`;
             if (refBrowser) {
                 await refBrowser.search(refLocus);
+                if (gen !== opGeneration) return;
                 document.getElementById("refLocus").textContent = refLocus;
             }
 
@@ -696,11 +744,13 @@
             if (hasHap1 && hap1Browser) {
                 const h1 = region.hap1_regions[0];
                 await hap1Browser.search(h1);
+                if (gen !== opGeneration) return;
                 document.getElementById("hap1Locus").textContent = h1;
             }
             if (hasHap2 && hap2Browser) {
                 const h2 = region.hap2_regions[0];
                 await hap2Browser.search(h2);
+                if (gen !== opGeneration) return;
                 document.getElementById("hap2Locus").textContent = h2;
             }
 
@@ -712,16 +762,19 @@
                         `&chrom=${encodeURIComponent(region.chrom)}` +
                         `&start=${region.start}&end=${region.end}`
                     );
+                    if (gen !== opGeneration) return;
                     if (!hasHap1 && result.hap1 && result.hap1.length > 0 && hap1Browser) {
                         const r = result.hap1[0];
                         const locus = `${r.chrom}:${r.start}-${r.end}`;
                         await hap1Browser.search(locus);
+                        if (gen !== opGeneration) return;
                         document.getElementById("hap1Locus").textContent = locus;
                     }
                     if (!hasHap2 && result.hap2 && result.hap2.length > 0 && hap2Browser) {
                         const r = result.hap2[0];
                         const locus = `${r.chrom}:${r.start}-${r.end}`;
                         await hap2Browser.search(locus);
+                        if (gen !== opGeneration) return;
                         document.getElementById("hap2Locus").textContent = locus;
                     }
                 } catch (err) {
