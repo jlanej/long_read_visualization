@@ -7,14 +7,16 @@
 <script src="/static/igv.min.js"></script>
 <style>
     :root {
-        --bg: #121212;
-        --surface: #1a1a1a;
-        --surface2: #232323;
-        --accent: #4a4a4a;
-        --text: #f0f0f0;
-        --text-muted: #b3b3b3;
-        --border: #3a3a3a;
-        --panel-bg: #171717;
+        --bg: #f5f5f5;
+        --surface: #ffffff;
+        --surface2: #f0f0f0;
+        --accent: #374151;
+        --accent-active: #111827;
+        --text: #1f2937;
+        --text-muted: #6b7280;
+        --border: #d1d5db;
+        --border-light: #e5e7eb;
+        --panel-bg: #ffffff;
         --ref-panel-flex: 1.3;
     }
 
@@ -31,37 +33,47 @@
     .header {
         background: var(--surface);
         border-bottom: 1px solid var(--border);
-        padding: 8px 16px;
+        padding: 6px 16px;
         display: flex;
         align-items: center;
-        gap: 16px;
+        gap: 12px;
         flex-wrap: wrap;
     }
     .header h1 {
-        font-size: 16px;
+        font-size: 15px;
         font-weight: 600;
         white-space: nowrap;
+        color: var(--text);
     }
     .header label {
-        font-size: 13px;
+        font-size: 12px;
         color: var(--text-muted);
+        font-weight: 500;
     }
     .header select, .header input, .header button {
-        font-size: 13px;
+        font-size: 12px;
         padding: 4px 8px;
         border-radius: 4px;
         border: 1px solid var(--border);
-        background: var(--surface2);
+        background: var(--surface);
         color: var(--text);
     }
-    .header select { min-width: 160px; max-width: 400px; }
+    .header select {
+        min-width: 160px;
+        max-width: 400px;
+        background: var(--surface);
+    }
     .header button {
         cursor: pointer;
-        background: var(--accent);
-        border-color: var(--accent);
-        font-weight: 600;
+        background: var(--surface2);
+        border-color: var(--border);
+        font-weight: 500;
+        color: var(--text);
     }
-    .header button:hover { opacity: 0.85; }
+    .header button:hover {
+        background: var(--border-light);
+        border-color: var(--text-muted);
+    }
     .header button:disabled { opacity: 0.4; cursor: default; }
 
     .spacer { flex: 1; }
@@ -69,12 +81,12 @@
     .nav-group {
         display: flex;
         align-items: center;
-        gap: 6px;
+        gap: 4px;
     }
     .region-counter {
-        font-size: 12px;
+        font-size: 11px;
         color: var(--text-muted);
-        min-width: 60px;
+        min-width: 48px;
         text-align: center;
     }
 
@@ -82,8 +94,9 @@
         display: flex;
         align-items: center;
         gap: 4px;
-        font-size: 13px;
+        font-size: 12px;
         cursor: pointer;
+        color: var(--text-muted);
     }
     .sync-toggle input[type="checkbox"] {
         accent-color: var(--accent);
@@ -93,25 +106,25 @@
     .toolbar-group {
         display: flex;
         align-items: center;
-        gap: 6px;
-        margin-left: 8px;
+        gap: 4px;
+        margin-left: 4px;
     }
     .toolbar-btn {
         display: inline-flex;
         align-items: center;
-        gap: 4px;
-        font-size: 12px;
-        padding: 4px 10px;
+        gap: 3px;
+        font-size: 11px;
+        padding: 3px 8px;
         border-radius: 4px;
         border: 1px solid var(--border);
-        background: var(--surface2);
+        background: var(--surface);
         color: var(--text-muted);
         cursor: pointer;
         transition: background 0.15s, color 0.15s, border-color 0.15s;
         white-space: nowrap;
     }
     .toolbar-btn:hover {
-        background: var(--surface);
+        background: var(--surface2);
         color: var(--text);
     }
     .toolbar-btn.active {
@@ -119,7 +132,7 @@
         border-color: var(--accent);
         color: #fff;
     }
-    .btn-icon { font-size: 13px; }
+    .btn-icon { font-size: 12px; }
 
     /* ── Panel layout ────────────────────────────────────────────────────── */
     .panels {
@@ -127,8 +140,9 @@
         flex-direction: column;
         gap: 0;
         padding: 0;
-        height: calc(100vh - 48px);
+        height: calc(100vh - 44px);
         overflow: hidden;
+        background: var(--bg);
     }
     .panel {
         flex: 0 0 auto;
@@ -137,22 +151,28 @@
         flex-direction: column;
         min-height: 0;
         background: var(--panel-bg);
-        border-top: 1px solid var(--border);
     }
     .panel.ref { border-top: 0; }
     .panel-header {
         padding: 2px 10px;
-        font-size: 13px;
+        font-size: 11px;
         font-weight: 600;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+        color: var(--text-muted);
         display: flex;
         justify-content: space-between;
         align-items: center;
+        background: var(--surface2);
+        border-bottom: 1px solid var(--border-light);
     }
     .panel-header .locus {
         font-size: 11px;
         font-weight: 400;
-        color: #c8c8c8;
+        color: var(--text-muted);
         font-family: monospace;
+        text-transform: none;
+        letter-spacing: normal;
     }
     .panel-body {
         flex: 1;
@@ -163,36 +183,38 @@
     .panel-body > div {
         height: 100%;
     }
-    .panel-header { background: rgba(26,26,26,0.94); }
     .splitter {
-        height: 8px;
-        flex: 0 0 8px;
+        height: 6px;
+        flex: 0 0 6px;
         cursor: row-resize;
         position: relative;
-        background: transparent;
+        background: var(--bg);
+        border-top: 1px solid var(--border-light);
+        border-bottom: 1px solid var(--border-light);
     }
-    .splitter::before {
-        content: "";
-        position: absolute;
-        left: 10px;
-        right: 10px;
-        top: 50%;
-        border-top: 1px solid #575757;
-        transform: translateY(-50%);
-    }
-    .splitter:hover::before,
-    .splitter.active::before {
-        border-top-color: #777777;
+    .splitter:hover,
+    .splitter.active {
+        background: var(--border);
     }
 
     /* ── IGV overrides ───────────────────────────────────────────────────── */
-    .igv-container { background: transparent !important; }
-    .igv-track-label,
-    .igv-track-name {
-        font-size: 12px !important;
-        font-weight: 600 !important;
-        color: #f0f0f0 !important;
-        text-shadow: 0 1px 1px rgba(0, 0, 0, 0.65);
+    /* Let IGV.js use its native white background */
+    .igv-container {
+        border: none !important;
+        background: var(--panel-bg) !important;
+    }
+    /* Tame the IGV navbar to match the light theme */
+    .igv-navbar {
+        background: var(--surface) !important;
+        border-bottom: 1px solid var(--border-light) !important;
+    }
+    /* Track labels: keep readable against the white IGV canvas */
+    .igv-track-label {
+        background: rgba(255,255,255,0.85) !important;
+        color: var(--accent) !important;
+        border: 1px solid var(--border) !important;
+        font-size: 11px !important;
+        text-shadow: none !important;
     }
 
     /* Hide IGV navigation chrome on hap panels (they are synced via ref) */
@@ -203,12 +225,13 @@
     .loading {
         position: fixed;
         inset: 0;
-        background: rgba(0,0,0,0.7);
+        background: rgba(255,255,255,0.85);
         display: flex;
         align-items: center;
         justify-content: center;
         z-index: 9999;
-        font-size: 18px;
+        font-size: 16px;
+        color: var(--text);
     }
     .loading.hidden { display: none; }
 
@@ -219,7 +242,7 @@
         left: 0;
         right: 0;
         background: var(--surface);
-        border-top: 1px solid var(--border);
+        border-top: 1px solid var(--border-light);
         padding: 2px 12px;
         font-size: 11px;
         color: var(--text-muted);
@@ -309,7 +332,7 @@
     let opGeneration = 0;               // increments on sample/region change to invalidate stale ops
     const REGION_BUFFER_MULTIPLIER = 5;   // buffer = 5 × SV event size on each side (~4.2 kb for an 834 bp SV)
     const MIN_REGION_BUFFER = 1000;       // minimum buffer so tiny regions still show context
-    const SPLITTER_HEIGHT = 8;
+    const SPLITTER_HEIGHT = 6;
     const MIN_PANEL_HEIGHT = 120;
     const MIN_TOTAL_PANEL_HEIGHT = 300;
     const REF_PANEL_HEIGHT_RATIO = 0.44;  // keeps reference panel slightly larger by default
