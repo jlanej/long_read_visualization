@@ -1511,7 +1511,7 @@
 
     // ── Dot Plot ────────────────────────────────────────────────────────────
 
-    // Colour palette following wotplot conventions (Fedarko 2023).
+    // Color palette following wotplot conventions (Fedarko 2023).
     // Forward matches in blue, RC in red, palindromes in dark purple.
     const DOTPLOT_COLORS = {
         forward: "#2563eb",       // blue-600
@@ -1600,15 +1600,46 @@
             { key: "reverse",    color: DOTPLOT_COLORS.reverse },
             { key: "forward",    color: DOTPLOT_COLORS.forward },
         ];
-        for (const layer of layers) {
-            const pts = data[layer.key];
-            if (!pts || pts.length === 0) continue;
-            ctx.fillStyle = layer.color;
-            ctx.globalAlpha = 0.6;
-            for (let i = 0; i < pts.length; i++) {
-                const px = margin.left + pts[i][0] * xScale;
-                const py = margin.top + pts[i][1] * yScale;
-                ctx.fillRect(px, py, Math.max(markerSize, xScale), Math.max(markerSize, yScale));
+        const totalMatches = layers.reduce((n, l) => n + (data[l.key]?.length || 0), 0);
+
+        if (totalMatches > 50000) {
+            // ImageData path — much faster for dense dot plots
+            const imgData = ctx.createImageData(plotW * dpr, plotH * dpr);
+            const buf = imgData.data;
+            const pw = plotW * dpr;
+            const ph = plotH * dpr;
+            const xS = pw / s1Len;
+            const yS = ph / s2Len;
+            function hexToRgb(hex) {
+                const v = parseInt(hex.slice(1), 16);
+                return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+            }
+            for (const layer of layers) {
+                const pts = data[layer.key];
+                if (!pts || pts.length === 0) continue;
+                const [r, g, b] = hexToRgb(layer.color);
+                for (let i = 0; i < pts.length; i++) {
+                    const px = Math.floor(pts[i][0] * xS);
+                    const py = Math.floor(pts[i][1] * yS);
+                    if (px >= 0 && px < pw && py >= 0 && py < ph) {
+                        const idx = (py * pw + px) * 4;
+                        buf[idx] = r; buf[idx + 1] = g; buf[idx + 2] = b; buf[idx + 3] = 180;
+                    }
+                }
+            }
+            ctx.putImageData(imgData, margin.left * dpr, margin.top * dpr);
+        } else {
+            // fillRect path — better visual quality for sparse dot plots
+            for (const layer of layers) {
+                const pts = data[layer.key];
+                if (!pts || pts.length === 0) continue;
+                ctx.fillStyle = layer.color;
+                ctx.globalAlpha = 0.6;
+                for (let i = 0; i < pts.length; i++) {
+                    const px = margin.left + pts[i][0] * xScale;
+                    const py = margin.top + pts[i][1] * yScale;
+                    ctx.fillRect(px, py, Math.max(markerSize, xScale), Math.max(markerSize, yScale));
+                }
             }
         }
         ctx.globalAlpha = 1.0;

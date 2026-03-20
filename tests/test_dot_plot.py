@@ -12,7 +12,8 @@ import dot_plot
 class TestReverseComplement(unittest.TestCase):
     """Tests for reverse_complement()."""
 
-    def test_simple(self):
+    def test_simple_palindrome(self):
+        """ACGT reverse-complements to ACGT (it is a palindromic k-mer)."""
         self.assertEqual(dot_plot.reverse_complement("ACGT"), "ACGT")
 
     def test_poly_a(self):
@@ -112,8 +113,8 @@ class TestComputeDotplot(unittest.TestCase):
             self.assertNotIn("N", kmer)
 
     def test_palindrome_detection(self):
-        """A palindromic k-mer should be classified as palindrome."""
-        # "ACGT" is a palindrome (RC of ACGT = ACGT)
+        """A palindromic k-mer (equals its own reverse complement) should be classified as palindrome."""
+        # "ACGT" is palindromic: reverse_complement("ACGT") == "ACGT"
         seq = "ACGT"
         result = dot_plot.compute_dotplot(seq, seq, k=4)
         # The single 4-mer "ACGT" is palindromic
