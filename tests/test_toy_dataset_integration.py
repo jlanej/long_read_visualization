@@ -81,7 +81,7 @@ class TestToyManifest(unittest.TestCase):
         """Every variant has the expected fields."""
         required_keys = {
             "chrom", "pos", "size", "genotype",
-            "ref_region", "hap1_regions", "hap2_regions",
+            "ref_region", "fasta_region", "hap1_regions", "hap2_regions",
         }
         for i, v in enumerate(self.manifest["variants"]):
             with self.subTest(variant=i):
@@ -91,12 +91,14 @@ class TestToyManifest(unittest.TestCase):
                 )
 
     def test_variant_regions_format(self):
-        """Ref and assembly regions follow the 'chrom:start-end' format."""
+        """Ref, fasta, and assembly regions follow the 'chrom:start-end' format."""
         import re
         region_re = re.compile(r"^[^\s:]+:\d+-\d+$")
         for i, v in enumerate(self.manifest["variants"]):
             with self.subTest(variant=i, field="ref_region"):
                 self.assertRegex(v["ref_region"], region_re)
+            with self.subTest(variant=i, field="fasta_region"):
+                self.assertRegex(v["fasta_region"], region_re)
             for field in ("hap1_regions", "hap2_regions"):
                 for region in v[field]:
                     with self.subTest(variant=i, field=field, region=region):
@@ -124,6 +126,31 @@ class TestToyManifest(unittest.TestCase):
         for v in self.manifest["variants"]:
             region_chrom = v["ref_region"].split(":")[0]
             self.assertEqual(region_chrom, v["chrom"])
+
+    def test_ref_region_is_sv_coords(self):
+        """ref_region should be actual SV coords (not padded) and match pos/size."""
+        for v in self.manifest["variants"]:
+            parts = v["ref_region"].split(":")[1].split("-")
+            ref_start = int(parts[0])
+            ref_end = int(parts[1])
+            self.assertEqual(ref_start, v["pos"],
+                             f"ref_region start should equal pos for {v['chrom']}")
+            self.assertEqual(ref_end, v["pos"] + v["size"],
+                             f"ref_region end should equal pos+size for {v['chrom']}")
+
+    def test_fasta_region_is_padded(self):
+        """fasta_region should be the padded FASTA sequence name (larger than SV)."""
+        for v in self.manifest["variants"]:
+            fasta = v["fasta_region"]
+            fasta_chrom = fasta.split(":")[0]
+            self.assertEqual(fasta_chrom, v["chrom"],
+                             "fasta_region chromosome should match variant chrom")
+            parts = fasta.split(":")[1].split("-")
+            fasta_start = int(parts[0])
+            fasta_end = int(parts[1])
+            fasta_span = fasta_end - fasta_start
+            self.assertGreater(fasta_span, v["size"],
+                               "fasta_region should be larger than the SV size")
 
 
 class TestToyFastaIndices(unittest.TestCase):

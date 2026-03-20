@@ -203,7 +203,12 @@ class TestLoadRegions(unittest.TestCase):
     """Tests for loading regions of interest."""
 
     def test_load_manifest_json(self):
-        """Load regions from a manifest JSON file."""
+        """Load regions from a manifest JSON file.
+
+        start/end should now come from pos/size (actual SV region),
+        not from the (potentially padded) ref_region field.
+        The original ref_region is preserved as fasta_region.
+        """
         manifest = {
             "description": "test",
             "variants": [
@@ -226,10 +231,72 @@ class TestLoadRegions(unittest.TestCase):
         os.unlink(f.name)
         self.assertEqual(len(regions), 1)
         self.assertEqual(regions[0]["chrom"], "chr1")
-        self.assertEqual(regions[0]["start"], 500)
-        self.assertEqual(regions[0]["end"], 2000)
+        # start/end come from pos/size, NOT from the padded ref_region
+        self.assertEqual(regions[0]["start"], 1000)
+        self.assertEqual(regions[0]["end"], 1500)
         self.assertEqual(regions[0]["size"], 500)
         self.assertIn("1|0", regions[0]["label"])
+        # ref_region reflects actual SV, fasta_region holds original padded value
+        self.assertEqual(regions[0]["ref_region"], "chr1:1000-1500")
+        self.assertEqual(regions[0]["fasta_region"], "chr1:500-2000")
+
+    def test_load_manifest_json_label_uses_sv_coords(self):
+        """The region label shows actual SV coordinates, not padded ref_region."""
+        manifest = {
+            "description": "test",
+            "variants": [
+                {
+                    "chrom": "chr1",
+                    "pos": 460749,
+                    "size": 834,
+                    "genotype": "0|1",
+                    "ref_region": "chr1:410749-511583",
+                    "hap1_regions": [],
+                    "hap2_regions": [],
+                }
+            ]
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json",
+                                         delete=False) as f:
+            json.dump(manifest, f)
+            f.flush()
+            regions = server_app.load_regions(f.name)
+        os.unlink(f.name)
+        r = regions[0]
+        self.assertEqual(r["start"], 460749)
+        self.assertEqual(r["end"], 461583)
+        # The label must show the actual SV region
+        self.assertIn("460749", r["label"])
+        self.assertIn("461583", r["label"])
+        # fasta_region is the original padded ref_region
+        self.assertEqual(r["fasta_region"], "chr1:410749-511583")
+
+    def test_load_vcf_regions_no_padding(self):
+        """VCF regions store actual SV coords without 50 kb padding."""
+        ref_allele = "A" * 835
+        vcf_lines = [
+            "##fileformat=VCFv4.2",
+            "#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	SAMPLE",
+            # A deletion: REF is 835 bp, ALT is 1 bp -> sv_len = 834
+            f"chr1	460749	.	{ref_allele}	A	.	.	SVLEN=834	GT	0|1",
+        ]
+        vcf_content = chr(10).join(vcf_lines) + chr(10)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".vcf",
+                                         delete=False) as f:
+            f.write(vcf_content)
+            f.flush()
+            regions = server_app.load_regions(f.name)
+        os.unlink(f.name)
+        self.assertEqual(len(regions), 1)
+        r = regions[0]
+        self.assertEqual(r["chrom"], "chr1")
+        # start/end must be actual SV coords — NO 50 kb padding
+        self.assertEqual(r["start"], 460749)
+        self.assertEqual(r["end"], 460749 + 834)
+        self.assertEqual(r["size"], 834)
+        self.assertEqual(r["ref_region"], "chr1:460749-461583")
+        # VCF regions have no fasta_region (that is for toy-dataset manifests)
+        self.assertNotIn("fasta_region", r)
 
     def test_load_nonexistent_file(self):
         """Non-existent file returns empty list."""
@@ -254,7 +321,14 @@ class TestLoadRegions(unittest.TestCase):
             self.assertIn("end", r)
             self.assertIn("label", r)
             self.assertIn("ref_region", r)
+            self.assertIn("fasta_region", r)
             self.assertTrue(r["end"] > r["start"])
+            # ref_region must be the actual SV region "chrom:start-end"
+            # (not a padded region); fasta_region holds the padded FASTA name
+            chrom = r["chrom"]
+            expected_ref = f"{chrom}:{r['start']}-{r['end']}"
+            self.assertEqual(r["ref_region"], expected_ref,
+                             "ref_region should be 'chrom:start-end' matching pos/size")
 
 
 class TestMergeRegions(unittest.TestCase):

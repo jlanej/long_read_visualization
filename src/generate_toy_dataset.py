@@ -319,6 +319,18 @@ def index_and_compress_fasta(fasta_path):
 def write_manifest(regions, output_dir):
     """Write a JSON manifest describing the toy dataset.
 
+    The manifest stores two region fields per variant:
+
+    * ``ref_region`` -- the *actual* unpadded SV region
+      "chrom:pos-(pos+size)".  The server uses this as the base for
+      the proportional buffer computed by ``computeBufferedLocus``.
+    * ``fasta_region`` (formerly ``ref_region``) -- the padded subregion
+      that was extracted from the full reference into the toy FASTA.
+      Its sequence name IS the ``fasta_region`` string (e.g.
+      "chr1:9319383-9349426").  The client navigates directly to this
+      name when loading toy-dataset manifests so that IGV can locate
+      the sequence in the toy reference FASTA.
+
     Args:
         regions: List of region dicts from compute_regions().
         output_dir: Output directory.
@@ -328,13 +340,19 @@ def write_manifest(regions, output_dir):
         "variants": [],
     }
     for r in regions:
+        v = r["variant"]
+        pos = v["pos"]
+        size = v["size"]
+        sv_end = v.get("end", pos + size)
+        chrom = v["chrom"]
         manifest["variants"].append(
             {
-                "chrom": r["variant"]["chrom"],
-                "pos": r["variant"]["pos"],
-                "size": r["variant"]["size"],
-                "genotype": r["variant"]["genotype"],
-                "ref_region": r["ref_region"],
+                "chrom": chrom,
+                "pos": pos,
+                "size": size,
+                "genotype": v["genotype"],
+                "ref_region": f"{chrom}:{pos}-{sv_end}",
+                "fasta_region": r["ref_region"],
                 "hap1_regions": r["hap1_regions"],
                 "hap2_regions": r["hap2_regions"],
             }
