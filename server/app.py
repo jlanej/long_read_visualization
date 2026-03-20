@@ -222,12 +222,14 @@ def _load_manifest_regions(path):
 
         label = f"{chrom}:{sv_start}-{sv_end} ({_format_size(size)}, {gt})"
 
-        # fasta_region: the original manifest ref_region, which for toy
-        # datasets is the FASTA sequence name (a padded subregion string
-        # like "chr1:9319383-9349426").  The client uses this to navigate
-        # directly to the toy reference sequence by its full name rather
-        # than looking up "chr1" which does not exist in the toy FASTA.
-        fasta_region = manifest_ref_region if manifest_ref_region else None
+        # fasta_region: explicit FASTA sequence name when present in the
+        # manifest (preferred), otherwise fall back to the original
+        # ref_region value for backward compatibility with older manifests.
+        # The client uses this to navigate directly to toy FASTA sequence
+        # names like "chr1:9319383-9349426" instead of chromosome "chr1".
+        fasta_region = v.get("fasta_region") or (
+            manifest_ref_region if manifest_ref_region else None
+        )
 
         regions.append({
             "label": label,
