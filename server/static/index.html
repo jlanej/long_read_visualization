@@ -318,6 +318,7 @@
     async function loadSample(sampleId) {
         showLoading(true);
         setStatus(`Loading sample ${sampleId}...`);
+        console.log(`[LRV] Loading sample: ${sampleId}`);
 
         // Destroy existing browsers
         await destroyBrowsers();
@@ -329,13 +330,26 @@
             return;
         }
         currentSample = config;
+        console.log("[LRV] Sample config:", JSON.stringify({
+            cram_ref: config.cram_ref || "(not set)",
+            reads_cram: config.tracks.reads_cram || null,
+            reads_to_hap1_cram: config.tracks.reads_to_hap1_cram || null,
+            reads_to_hap2_cram: config.tracks.reads_to_hap2_cram || null,
+        }));
 
         // Load regions
         regions = await fetchJSON(`/api/regions/${sampleId}`);
         populateRegions();
 
         // Create browsers
-        await createBrowsers(config);
+        try {
+            await createBrowsers(config);
+        } catch (err) {
+            console.error("[LRV] Error creating browsers:", err);
+            setStatus(`Error creating browsers: ${err.message}`);
+            showLoading(false);
+            return;
+        }
 
         currentRegionIdx = -1;
         if (regions.length > 0) {
@@ -363,8 +377,22 @@
         const baseUrl = window.location.origin;
         const readDisplayMode = displaySquished ? "SQUISHED" : "EXPANDED";
 
+        // Resolve the CRAM decoding reference.  When the server provides
+        // an explicit cram_ref, every CRAM track uses that FASTA for
+        // decoding.  Otherwise we leave sequenceURL unset so igv.js falls
+        // back to the browser-panel genome reference (which already carries
+        // the .fai *and* .gzi indices).  Setting a redundant sequenceURL
+        // creates a second IndexedFasta reader that may miss the .gzi
+        // compressed index and attempt to download the entire bgzipped
+        // reference into memory — the most likely cause of tab crashes.
+        const cramRefUrl = config.cram_ref ? (baseUrl + config.cram_ref) : null;
+        const cramRefIdxUrl = cramRefUrl ? (cramRefUrl + ".fai") : null;
+        if (cramRefUrl) {
+            console.log("[LRV] Using explicit cram_ref for CRAM decoding:", cramRefUrl);
+        }
+
         // Helper: build an alignment track for reads (BAM or CRAM)
-        function makeReadTrack(name, bamUrl, cramUrl, refFastaUrl, opts) {
+        function makeReadTrack(name, bamUrl, cramUrl, opts) {
             // If bamUrl actually points to a CRAM file, treat it as CRAM
             if (bamUrl && bamUrl.endsWith('.cram')) {
                 cramUrl = cramUrl || bamUrl;
@@ -389,10 +417,18 @@
                 visibilityWindow: 30000,
                 ...opts,
             };
-            // CRAM files require a reference sequence URL for decoding
-            if (isCram && refFastaUrl) {
-                track.sequenceURL = baseUrl + refFastaUrl;
-                track.sequenceIndexURL = baseUrl + refFastaUrl + ".fai";
+            // CRAM files require a reference FASTA for decoding.
+            // When an explicit cram_ref is configured, use it.
+            // Otherwise, let igv.js use the panel's genome reference
+            // which already has proper .fai and .gzi indices loaded.
+            if (isCram) {
+                if (cramRefUrl) {
+                    track.sequenceURL = cramRefUrl;
+                    track.sequenceIndexURL = cramRefIdxUrl;
+                    console.log(`[LRV] CRAM track "${name}": using explicit cram_ref`);
+                } else {
+                    console.log(`[LRV] CRAM track "${name}": using panel genome reference for decoding`);
+                }
             }
             return track;
         }
@@ -435,7 +471,6 @@
             "Reads → Ref",
             config.tracks.reads_bam,
             config.tracks.reads_cram,
-            config.reference.fastaURL,
             {}
         );
         if (readsRefTrack) refOpts.tracks.push(readsRefTrack);
@@ -467,7 +502,6 @@
             "Reads → Hap1",
             config.tracks.reads_to_hap1_bam,
             config.tracks.reads_to_hap1_cram,
-            config.hap1_assembly.fastaURL,
             {}
         );
         if (readsHap1Track) hap1Opts.tracks.push(readsHap1Track);
@@ -495,7 +529,6 @@
             "Reads → Hap2",
             config.tracks.reads_to_hap2_bam,
             config.tracks.reads_to_hap2_cram,
-            config.hap2_assembly.fastaURL,
             {}
         );
         if (readsHap2Track) hap2Opts.tracks.push(readsHap2Track);
@@ -505,11 +538,21 @@
         if (refHap2Track) hap2Opts.tracks.push(refHap2Track);
 
         // Create all three browsers
+        console.log("[LRV] Creating IGV browsers...");
+        console.log("[LRV] Ref panel tracks:", refOpts.tracks.length,
+                     refOpts.tracks.map(t => `${t.name}(${t.format})`));
+        console.log("[LRV] Hap1 panel tracks:", hap1Opts.tracks.length,
+                     hap1Opts.tracks.map(t => `${t.name}(${t.format})`));
+        console.log("[LRV] Hap2 panel tracks:", hap2Opts.tracks.length,
+                     hap2Opts.tracks.map(t => `${t.name}(${t.format})`));
+
         [refBrowser, hap1Browser, hap2Browser] = await Promise.all([
             igv.createBrowser(document.getElementById("igv-ref"), refOpts),
             igv.createBrowser(document.getElementById("igv-hap1"), hap1Opts),
             igv.createBrowser(document.getElementById("igv-hap2"), hap2Opts),
         ]);
+
+        console.log("[LRV] All IGV browsers created successfully");
 
         // Attach coordination listener to reference panel
         refBrowser.on("locuschange", onRefLocusChange);

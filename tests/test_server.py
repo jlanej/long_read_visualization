@@ -110,6 +110,29 @@ class TestLoadConfig(unittest.TestCase):
         self.assertEqual(samples[0]["reads_bam"], "")
         self.assertEqual(samples[0]["reads_cram"], "/data/primary.cram")
 
+    def test_cram_ref_column_loaded(self):
+        """cram_ref column is loaded from TSV."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".tsv",
+                                         delete=False) as f:
+            f.write("#sample_id\treads_bam\tcram_ref\n")
+            f.write("S1\t/data/sample.cram\t/ref/genome.fa.gz\n")
+            f.flush()
+            samples = server_app.load_config(f.name)
+        os.unlink(f.name)
+        self.assertEqual(len(samples), 1)
+        self.assertEqual(samples[0]["cram_ref"], "/ref/genome.fa.gz")
+
+    def test_cram_ref_column_empty_when_absent(self):
+        """Missing cram_ref column results in empty string via .get()."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".tsv",
+                                         delete=False) as f:
+            f.write("#sample_id\treads_bam\n")
+            f.write("S1\t/data/sample.bam\n")
+            f.flush()
+            samples = server_app.load_config(f.name)
+        os.unlink(f.name)
+        self.assertEqual(samples[0].get("cram_ref", ""), "")
+
 
 class TestDiscoverPipelineFiles(unittest.TestCase):
     """Tests for auto-discovering pipeline output files."""
@@ -311,6 +334,104 @@ class TestGuessType(unittest.TestCase):
         self.assertEqual(
             server_app.IGVHandler._guess_type("ref.fa.gz.fai"),
             "text/plain")
+
+
+class TestValidateCramRef(unittest.TestCase):
+    """Tests for CRAM reference validation."""
+
+    def test_empty_path_no_warnings(self):
+        """Empty cram_ref produces no warnings."""
+        self.assertEqual(server_app._validate_cram_ref(""), [])
+
+    def test_missing_file_warns(self):
+        """Non-existent file produces a warning."""
+        warnings = server_app._validate_cram_ref("/no/such/file.fa")
+        self.assertTrue(any("not found" in w for w in warnings))
+
+    def test_missing_fai_warns(self):
+        """A FASTA without .fai index produces a warning."""
+        with tempfile.NamedTemporaryFile(suffix=".fa", delete=False) as f:
+            f.write(b">chr1\nACGT\n")
+        try:
+            warnings = server_app._validate_cram_ref(f.name)
+            self.assertTrue(any(".fai" in w for w in warnings))
+        finally:
+            os.unlink(f.name)
+
+    def test_bgzip_missing_gzi_warns(self):
+        """A .fa.gz file without .gzi produces a warning."""
+        import gzip as gz
+        with tempfile.NamedTemporaryFile(suffix=".fa.gz",
+                                          delete=False) as tmp:
+            tmp_name = tmp.name
+        with gz.open(tmp_name, "wb") as f:
+            f.write(b">chr1\nACGT\n")
+        try:
+            warnings = server_app._validate_cram_ref(tmp_name)
+            self.assertTrue(any(".gzi" in w for w in warnings))
+        finally:
+            os.unlink(tmp_name)
+
+    def test_valid_ref_no_warnings(self):
+        """A properly indexed reference produces no warnings."""
+        with tempfile.NamedTemporaryFile(suffix=".fa", delete=False) as f:
+            f.write(b">chr1\nACGT\n")
+            fai_path = f.name + ".fai"
+        open(fai_path, "w").close()
+        try:
+            warnings = server_app._validate_cram_ref(f.name)
+            self.assertEqual(warnings, [])
+        finally:
+            os.unlink(f.name)
+            os.unlink(fai_path)
+
+
+class TestReadItf8(unittest.TestCase):
+    """Tests for the ITF-8 integer decoding used by the CRAM parser."""
+
+    def _decode(self, byte_values):
+        """Helper: decode ITF-8 from a list of byte values."""
+        import io
+        return server_app._read_itf8(io.BytesIO(bytes(byte_values)))
+
+    def test_single_byte(self):
+        """Values 0-127 are encoded as a single byte."""
+        self.assertEqual(self._decode([0]), 0)
+        self.assertEqual(self._decode([42]), 42)
+        self.assertEqual(self._decode([127]), 127)
+
+    def test_two_byte(self):
+        """Values 128-16383 use two bytes (high bit set)."""
+        # 0x80 | 0x01 = 0x81, second byte 0x00  → (1 << 8) | 0 = 256
+        self.assertEqual(self._decode([0x81, 0x00]), 256)
+
+    def test_eof_raises(self):
+        """Empty input raises EOFError."""
+        import io
+        with self.assertRaises(EOFError):
+            server_app._read_itf8(io.BytesIO(b""))
+
+
+class TestCheckCramEmbeddedRef(unittest.TestCase):
+    """Tests for CRAM header UR path extraction."""
+
+    def test_non_cram_file_returns_empty(self):
+        """A non-CRAM file returns empty results."""
+        with tempfile.NamedTemporaryFile(suffix=".cram", delete=False) as f:
+            f.write(b"NOT_CRAM_DATA")
+        try:
+            ur_paths, warnings = server_app._check_cram_embedded_ref(f.name)
+            self.assertEqual(ur_paths, set())
+            self.assertEqual(warnings, [])
+        finally:
+            os.unlink(f.name)
+
+    def test_nonexistent_file_returns_empty(self):
+        """A non-existent file returns empty results."""
+        ur_paths, warnings = server_app._check_cram_embedded_ref(
+            "/no/such/file.cram")
+        self.assertEqual(ur_paths, set())
+        self.assertEqual(warnings, [])
 
 
 class TestCoordinateTranslator(unittest.TestCase):

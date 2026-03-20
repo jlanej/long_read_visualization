@@ -63,6 +63,23 @@ class TestBuildSampleRow(unittest.TestCase):
         self.assertEqual(row["hap2_assembly"], "/h2.fa")
         self.assertTrue(os.path.isabs(row["output_dir"]))
 
+    def test_cram_ref_in_row(self):
+        """cram_ref is included in sample row when provided."""
+        row = gen_config.build_sample_row(
+            self.tmpdir, "test",
+            reference="/ref.fa",
+            cram_ref="/cram_ref.fa",
+        )
+        self.assertEqual(row["cram_ref"], "/cram_ref.fa")
+
+    def test_cram_ref_empty_by_default(self):
+        """cram_ref is empty when not provided."""
+        row = gen_config.build_sample_row(
+            self.tmpdir, "test",
+            reference="/ref.fa",
+        )
+        self.assertEqual(row["cram_ref"], "")
+
 
 class TestWriteConfig(unittest.TestCase):
     """Tests for writing the TSV configuration file."""
@@ -92,6 +109,26 @@ class TestWriteConfig(unittest.TestCase):
         fields = lines[1].strip().split("\t")
         self.assertEqual(fields[0], "S1")
 
+    def test_cram_ref_in_header(self):
+        """TSV header includes cram_ref column."""
+        samples = [{
+            "sample_id": "S1",
+            "output_dir": "/out",
+            "reference": "/ref.fa",
+            "hap1_assembly": "",
+            "hap2_assembly": "",
+            "reads_bam": "",
+            "regions": "",
+            "cram_ref": "/cram_ref.fa",
+        }]
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".tsv",
+                                         delete=False) as f:
+            gen_config.write_config(samples, f.name)
+        with open(f.name) as fh:
+            header = fh.readline()
+        os.unlink(f.name)
+        self.assertIn("cram_ref", header)
+
 
 class TestValidateSample(unittest.TestCase):
     """Tests for sample validation warnings."""
@@ -107,6 +144,57 @@ class TestValidateSample(unittest.TestCase):
         }
         warnings = gen_config.validate_sample(row)
         self.assertTrue(any("reference" in w for w in warnings))
+
+    def test_cram_ref_missing_file_warns(self):
+        """Non-existent cram_ref generates a warning."""
+        row = {
+            "sample_id": "test",
+            "output_dir": "/tmp",
+            "reference": "",
+            "hap1_assembly": "",
+            "hap2_assembly": "",
+            "cram_ref": "/no/such/file.fa",
+        }
+        warnings = gen_config.validate_sample(row)
+        self.assertTrue(any("cram_ref" in w and "not found" in w
+                            for w in warnings))
+
+    def test_cram_ref_missing_fai_warns(self):
+        """cram_ref without .fai generates a warning."""
+        with tempfile.NamedTemporaryFile(suffix=".fa", delete=False) as f:
+            f.write(b">chr1\nACGT\n")
+        try:
+            row = {
+                "sample_id": "test",
+                "output_dir": "/tmp",
+                "reference": "",
+                "hap1_assembly": "",
+                "hap2_assembly": "",
+                "cram_ref": f.name,
+            }
+            warnings = gen_config.validate_sample(row)
+            self.assertTrue(any(".fai" in w for w in warnings))
+        finally:
+            os.unlink(f.name)
+
+
+class TestCheckCramUrPaths(unittest.TestCase):
+    """Tests for _check_cram_ur_paths."""
+
+    def test_non_cram_file(self):
+        """Non-CRAM file returns empty list."""
+        with tempfile.NamedTemporaryFile(suffix=".cram", delete=False) as f:
+            f.write(b"NOT_CRAM_DATA")
+        try:
+            result = gen_config._check_cram_ur_paths(f.name)
+            self.assertEqual(result, [])
+        finally:
+            os.unlink(f.name)
+
+    def test_nonexistent_file(self):
+        """Non-existent file returns empty list."""
+        result = gen_config._check_cram_ur_paths("/no/such/file.cram")
+        self.assertEqual(result, [])
 
 
 class TestScanParentDir(unittest.TestCase):

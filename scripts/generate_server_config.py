@@ -42,6 +42,7 @@ IMAGE = docker://ghcr.io/jlanej/long_read_visualization:main
 import argparse
 import glob
 import os
+import subprocess
 import sys
 
 
@@ -124,7 +125,7 @@ def scan_parent_dir(scan_dir, reference):
 
 
 def build_sample_row(output_dir, prefix, reference="", hap1="", hap2="",
-                     regions="", reads_bam=""):
+                     regions="", reads_bam="", cram_ref=""):
     """Build a sample configuration dict.
 
     Resolves all paths to absolute paths and fills in missing values
@@ -151,7 +152,35 @@ def build_sample_row(output_dir, prefix, reference="", hap1="", hap2="",
         "hap2_assembly": os.path.abspath(hap2) if hap2 else "",
         "reads_bam": os.path.abspath(reads_bam) if reads_bam else "",
         "regions": os.path.abspath(regions) if regions else "",
+        "cram_ref": os.path.abspath(cram_ref) if cram_ref else "",
     }
+
+
+def _check_cram_ur_paths(cram_path):
+    """Return UR paths from a CRAM header that do not exist locally.
+
+    Uses ``samtools view -H`` when available; silently returns an empty
+    list when samtools is not installed or the file cannot be read.
+    """
+    missing = []
+    try:
+        proc = subprocess.run(
+            ["samtools", "view", "-H", cram_path],
+            capture_output=True, text=True, timeout=30,
+        )
+        if proc.returncode != 0:
+            return missing
+        for line in proc.stdout.splitlines():
+            if not line.startswith("@SQ"):
+                continue
+            for field in line.split("\t"):
+                if field.startswith("UR:"):
+                    ur = field[3:]
+                    if ur and not os.path.isfile(ur):
+                        missing.append(ur)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return list(dict.fromkeys(missing))
 
 
 def validate_sample(row):
@@ -173,6 +202,48 @@ def validate_sample(row):
             warnings.append(f"  WARNING: Missing pipeline output: "
                             f"{prefix}{suffix}")
 
+    # Validate cram_ref if provided
+    cram_ref = row.get("cram_ref", "")
+    if cram_ref:
+        if not os.path.isfile(cram_ref):
+            warnings.append(f"  WARNING: cram_ref file not found: {cram_ref}")
+        else:
+            fai = cram_ref + ".fai"
+            if not os.path.isfile(fai):
+                warnings.append(f"  WARNING: cram_ref missing .fai index: "
+                                f"{fai}")
+            if cram_ref.endswith(".gz"):
+                gzi = cram_ref + ".gzi"
+                if not os.path.isfile(gzi):
+                    warnings.append(
+                        f"  WARNING: cram_ref is bgzipped but missing "
+                        f".gzi index: {gzi}")
+
+    # Warn if CRAM files exist in output_dir but no cram_ref is set
+    cram_found = []
+    for suffix in ("_reads.cram", "_reads_to_hap1.cram",
+                    "_reads_to_hap2.cram"):
+        fpath = os.path.join(output_dir, f"{prefix}{suffix}")
+        if os.path.isfile(fpath):
+            cram_found.append(fpath)
+    if cram_found and not cram_ref:
+        warnings.append(
+            f"  NOTE: CRAM file(s) found "
+            f"({', '.join(os.path.basename(c) for c in cram_found)}) "
+            f"but no --cram-ref specified. CRAM decoding will use "
+            f"each panel's reference. Supply --cram-ref if the "
+            f"CRAMs were encoded against a different FASTA.")
+
+    # Check embedded UR paths in each CRAM file
+    for cram_path in cram_found:
+        missing_urs = _check_cram_ur_paths(cram_path)
+        for ur in missing_urs:
+            warnings.append(
+                f"  WARNING: {os.path.basename(cram_path)} embeds "
+                f"UR:{ur} which does not exist locally. "
+                f"Supply --cram-ref with a local copy of this "
+                f"reference to ensure correct CRAM decoding.")
+
     return warnings
 
 
@@ -180,7 +251,7 @@ def write_config(samples, output_path):
     """Write samples to a TSV configuration file."""
     header = [
         "sample_id", "output_dir", "reference", "hap1_assembly",
-        "hap2_assembly", "reads_bam", "regions",
+        "hap2_assembly", "reads_bam", "regions", "cram_ref",
     ]
     with open(output_path, "w") as fh:
         fh.write("#" + "\t".join(header) + "\n")
@@ -217,6 +288,12 @@ def main():
     parser.add_argument(
         "--regions", nargs="*", default=[],
         help="Region file(s) — manifest JSON or VCF (optional)")
+    parser.add_argument(
+        "--cram-ref", default="",
+        help="Reference FASTA used when encoding CRAM files.  Required for "
+             "CRAM decoding when the encoding reference differs from the "
+             "panel reference.  The file must have a .fai index (and .gzi "
+             "if bgzipped).")
     parser.add_argument(
         "--output", "-o", default="samples.tsv",
         help="Output TSV file path (default: samples.tsv)")
@@ -264,6 +341,7 @@ def main():
             reference=args.reference,
             hap1=hap1, hap2=hap2,
             regions=rgn, reads_bam=reads,
+            cram_ref=args.cram_ref,
         )
         samples.append(row)
 
@@ -278,6 +356,8 @@ def main():
         print(f"    hap2_assembly: {row['hap2_assembly']}")
         if row["reads_bam"]:
             print(f"    reads_bam:     {row['reads_bam']}")
+        if row.get("cram_ref"):
+            print(f"    cram_ref:      {row['cram_ref']}")
         if row["regions"]:
             print(f"    regions:       {row['regions']}")
         warnings = validate_sample(row)
