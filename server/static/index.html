@@ -313,11 +313,17 @@
 
     function parseLocusSpan(locus) {
         if (!locus) return null;
-        const m = locus.match(/^.+:(\d+)-(\d+)$/);
+        // Match the final ":start-end" suffix so contig names containing ':'
+        // (toy/reference subregion names) are handled correctly.
+        const m = locus.match(/^(.+):(\d+)-(\d+)$/);
         if (!m) return null;
-        const start = parseInt(m[1], 10);
-        const end = parseInt(m[2], 10);
-        if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+        const start = parseInt(m[2], 10);
+        const end = parseInt(m[3], 10);
+        return computeInclusiveSpan(start, end);
+    }
+
+    function computeInclusiveSpan(start, end) {
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
         return end - start + 1;
     }
 
@@ -674,13 +680,17 @@
             if (signal.aborted || gen !== opGeneration) return;
             const result = await resp.json();
             if (signal.aborted || gen !== opGeneration) return;
-            const refSpan = Math.max(1, end - start);
+            const refSpan = computeInclusiveSpan(start, end) || 1;
             const translatedWidths = [refSpan];
             if (result.hap1 && result.hap1.length > 0) {
-                translatedWidths.push(Math.max(1, result.hap1[0].end - result.hap1[0].start));
+                translatedWidths.push(
+                    computeInclusiveSpan(result.hap1[0].start, result.hap1[0].end) || 1
+                );
             }
             if (result.hap2 && result.hap2.length > 0) {
-                translatedWidths.push(Math.max(1, result.hap2[0].end - result.hap2[0].start));
+                translatedWidths.push(
+                    computeInclusiveSpan(result.hap2[0].start, result.hap2[0].end) || 1
+                );
             }
             setVisibilityWindow(Math.max(...translatedWidths));
 
@@ -752,10 +762,12 @@
         if (region.fasta_region) {
             const fm = region.fasta_region.match(/^(.+):(\d+)-(\d+)$/);
             if (fm) {
-                const fastaSpan = parseInt(fm[3], 10) - parseInt(fm[2], 10);
+                const fastaStart = parseInt(fm[2], 10);
+                const fastaEnd = parseInt(fm[3], 10);
+                const fastaSpan = computeInclusiveSpan(fastaStart, fastaEnd);
                 return {
                     locus: region.fasta_region,
-                    viewWidth: fastaSpan + 1,
+                    viewWidth: fastaSpan || 1,
                 };
             }
         }
@@ -784,7 +796,7 @@
         const bufferedEnd = refEnd + buffer;
         return {
             locus: `${refChrom}:${bufferedStart}-${bufferedEnd}`,
-            viewWidth: bufferedEnd - bufferedStart + 1,
+            viewWidth: computeInclusiveSpan(bufferedStart, bufferedEnd) || 1,
         };
     }
 
@@ -880,7 +892,7 @@
                     if (!hasHap1 && result.hap1 && result.hap1.length > 0 && hap1Browser) {
                         const r = result.hap1[0];
                         const locus = `${r.chrom}:${r.start}-${r.end}`;
-                        translatedWidths.push(Math.max(1, r.end - r.start));
+                        translatedWidths.push(computeInclusiveSpan(r.start, r.end) || 1);
                         await hap1Browser.search(locus);
                         if (gen !== opGeneration) return;
                         document.getElementById("hap1Locus").textContent = locus;
@@ -888,7 +900,7 @@
                     if (!hasHap2 && result.hap2 && result.hap2.length > 0 && hap2Browser) {
                         const r = result.hap2[0];
                         const locus = `${r.chrom}:${r.start}-${r.end}`;
-                        translatedWidths.push(Math.max(1, r.end - r.start));
+                        translatedWidths.push(computeInclusiveSpan(r.start, r.end) || 1);
                         await hap2Browser.search(locus);
                         if (gen !== opGeneration) return;
                         document.getElementById("hap2Locus").textContent = locus;
