@@ -309,6 +309,10 @@
     let opGeneration = 0;               // increments on sample/region change to invalidate stale ops
     const REGION_BUFFER_MULTIPLIER = 5;   // buffer = 5 × SV event size on each side (~4.2 kb for an 834 bp SV)
     const MIN_REGION_BUFFER = 1000;       // minimum buffer so tiny regions still show context
+    const SPLITTER_HEIGHT = 8;
+    const MIN_PANEL_HEIGHT = 120;
+    const MIN_TOTAL_PANEL_HEIGHT = 300;
+    const REF_PANEL_HEIGHT_RATIO = 0.44;  // keeps reference panel slightly larger by default
     // No MAX_REGION_BUFFER — buffer is fully dynamic, proportional to the SV event size.
 
     // ── DOM refs ────────────────────────────────────────────────────────────
@@ -358,10 +362,13 @@
 
     function setInitialPanelHeights() {
         if (!panelsContainer || !refPanel || !hap1Panel || !hap2Panel) return;
-        const splitterHeight = (splitterRefHap1?.offsetHeight || 8) +
-            (splitterHap1Hap2?.offsetHeight || 8);
-        const available = Math.max(300, panelsContainer.clientHeight - splitterHeight);
-        const refHeight = Math.round(available * 0.44);
+        const splitterHeight = ((splitterRefHap1?.offsetHeight || 0) +
+            (splitterHap1Hap2?.offsetHeight || 0)) || (2 * SPLITTER_HEIGHT);
+        const available = Math.max(
+            MIN_TOTAL_PANEL_HEIGHT,
+            panelsContainer.clientHeight - splitterHeight
+        );
+        const refHeight = Math.round(available * REF_PANEL_HEIGHT_RATIO);
         const hapHeight = Math.round((available - refHeight) / 2);
         refPanel.style.height = `${refHeight}px`;
         hap1Panel.style.height = `${hapHeight}px`;
@@ -370,7 +377,6 @@
 
     function setupPanelResizer(splitter, upperPanel, lowerPanel) {
         if (!splitter || !upperPanel || !lowerPanel) return;
-        const MIN_PANEL_HEIGHT = 120;
         let startY = 0;
         let upperStart = 0;
         let lowerStart = 0;

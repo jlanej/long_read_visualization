@@ -20,10 +20,12 @@ if [[ ! -f "${CONFIG}" ]] || [[ ! -d "${TOY_OUTPUT}" ]]; then
 fi
 
 LOG="/tmp/lrv-server.log"
+MAX_RETRIES=20
+RETRY_DELAY=1
 
 # Stop any stale server process from previous starts so port 8080 is clean.
 if command -v pgrep >/dev/null 2>&1; then
-    for pid in $(pgrep -f "server/app.py.*--port 8080" || true); do
+    for pid in $(pgrep -f "python3 .*server/app.py.*--port 8080" || true); do
         if [[ -n "${pid}" ]]; then
             kill "${pid}" 2>/dev/null || true
         fi
@@ -38,15 +40,19 @@ nohup python3 "${REPO_ROOT}/server/app.py" \
     > "${LOG}" 2>&1 &
 SERVER_PID=$!
 
+check_server_ready() {
+    curl -fsS "http://127.0.0.1:8080/" >/dev/null 2>&1
+}
+
 # Wait briefly for startup and verify the server is actually serving content.
-for _ in {1..20}; do
-    if curl -fsS "http://127.0.0.1:8080/" >/dev/null 2>&1; then
+for ((i=1; i<=MAX_RETRIES; i++)); do
+    if check_server_ready; then
         break
     fi
-    sleep 1
+    sleep "${RETRY_DELAY}"
 done
 
-if ! curl -fsS "http://127.0.0.1:8080/" >/dev/null 2>&1; then
+if ! check_server_ready; then
     echo "ERROR: Server failed to serve content on port 8080."
     echo "Last server log lines:"
     tail -n 40 "${LOG}" || true
