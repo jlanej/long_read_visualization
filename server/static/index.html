@@ -221,6 +221,96 @@
     .panel.hap1 .igv-navbar,
     .panel.hap2 .igv-navbar { display: none !important; }
 
+    /* ── Read Comparison modal ──────────────────────────────────────────── */
+    .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.35);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10000;
+    }
+    .modal-backdrop.hidden { display: none; }
+    .modal-box {
+        background: var(--surface);
+        border-radius: 8px;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+        padding: 24px;
+        min-width: 420px;
+        max-width: 640px;
+        max-height: 80vh;
+        overflow-y: auto;
+    }
+    .modal-box h2 {
+        font-size: 16px;
+        font-weight: 600;
+        margin-bottom: 12px;
+        color: var(--text);
+    }
+    .modal-box .close-btn {
+        float: right;
+        background: none;
+        border: none;
+        font-size: 20px;
+        cursor: pointer;
+        color: var(--text-muted);
+        padding: 0 4px;
+        line-height: 1;
+    }
+    .modal-box .close-btn:hover { color: var(--text); }
+    .modal-box table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+        margin-top: 8px;
+    }
+    .modal-box th, .modal-box td {
+        text-align: left;
+        padding: 6px 10px;
+        border-bottom: 1px solid var(--border-light);
+    }
+    .modal-box th {
+        font-weight: 600;
+        color: var(--text-muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    .modal-box td.count { text-align: right; font-variant-numeric: tabular-nums; }
+    .modal-box .section-label {
+        font-weight: 600;
+        font-size: 12px;
+        color: var(--accent);
+        padding-top: 10px;
+    }
+    .modal-box .read-list {
+        max-height: 120px;
+        overflow-y: auto;
+        font-family: monospace;
+        font-size: 11px;
+        background: var(--bg);
+        border: 1px solid var(--border-light);
+        border-radius: 4px;
+        padding: 6px 8px;
+        margin-top: 4px;
+        white-space: pre-wrap;
+        word-break: break-all;
+    }
+    .modal-box details { margin-top: 6px; }
+    .modal-box summary {
+        cursor: pointer;
+        font-size: 12px;
+        color: var(--accent);
+    }
+    .modal-box summary:hover { text-decoration: underline; }
+    .modal-box .note {
+        font-size: 11px;
+        color: var(--text-muted);
+        margin-top: 12px;
+        line-height: 1.4;
+    }
+
     /* ── Loading overlay ─────────────────────────────────────────────────── */
     .loading {
         position: fixed;
@@ -281,6 +371,9 @@
         <button id="toggleSmallIndels" class="toolbar-btn active" title="Hide spurious small indels (long-read mode)">
             <span class="btn-icon">🧹</span> Hide indels
         </button>
+        <button id="compareReads" class="toolbar-btn" title="Compare read IDs across all three panels">
+            <span class="btn-icon">📊</span> Compare Reads
+        </button>
     </div>
 </div>
 
@@ -308,6 +401,15 @@
             <span class="locus" id="hap2Locus"></span>
         </div>
         <div class="panel-body"><div id="igv-hap2"></div></div>
+    </div>
+</div>
+
+<!-- Read Comparison modal -->
+<div class="modal-backdrop hidden" id="readCompareModal">
+    <div class="modal-box">
+        <button class="close-btn" id="readCompareClose" title="Close">&times;</button>
+        <h2>📊 Read ID Comparison</h2>
+        <div id="readCompareBody">Analysing...</div>
     </div>
 </div>
 
@@ -349,6 +451,10 @@
     const statusBar = document.getElementById("statusBar");
     const toggleDisplayModeBtn = document.getElementById("toggleDisplayMode");
     const toggleSmallIndelsBtn = document.getElementById("toggleSmallIndels");
+    const compareReadsBtn = document.getElementById("compareReads");
+    const readCompareModal = document.getElementById("readCompareModal");
+    const readCompareClose = document.getElementById("readCompareClose");
+    const readCompareBody = document.getElementById("readCompareBody");
     const panelsContainer = document.querySelector(".panels");
     const refPanel = document.querySelector(".panel.ref");
     const hap1Panel = document.querySelector(".panel.hap1");
@@ -1045,13 +1151,20 @@
     });
 
     // ── Display mode toggle ─────────────────────────────────────────────────
+    // Update display properties on all alignment tracks in every panel.
+    // Sets the property on both the track instance AND its config object so
+    // that IGV.js rendering code picks up the new value regardless of which
+    // property it reads internally.  After updating, each browser is forced
+    // to fully re-render its tracks.
     function updateAllTrackDisplayModes() {
         const mode = displaySquished ? "SQUISHED" : "EXPANDED";
         for (const browser of [refBrowser, hap1Browser, hap2Browser]) {
             if (!browser) continue;
-            for (const track of browser.trackViews) {
-                if (track.track && track.track.type === "alignment") {
-                    track.track.displayMode = mode;
+            for (const tv of browser.trackViews) {
+                const t = tv.track;
+                if (t && t.type === "alignment") {
+                    t.displayMode = mode;
+                    if (t.config) t.config.displayMode = mode;
                 }
             }
             browser.updateViews();
@@ -1061,10 +1174,15 @@
     function updateAllTrackIndelDisplay() {
         for (const browser of [refBrowser, hap1Browser, hap2Browser]) {
             if (!browser) continue;
-            for (const track of browser.trackViews) {
-                if (track.track && track.track.type === "alignment") {
-                    track.track.hideSmallIndels = hideSmallIndels;
-                    track.track.smallIndelThreshold = 3;
+            for (const tv of browser.trackViews) {
+                const t = tv.track;
+                if (t && t.type === "alignment") {
+                    t.hideSmallIndels = hideSmallIndels;
+                    t.smallIndelThreshold = 3;
+                    if (t.config) {
+                        t.config.hideSmallIndels = hideSmallIndels;
+                        t.config.smallIndelThreshold = 3;
+                    }
                 }
             }
             browser.updateViews();
@@ -1089,8 +1207,176 @@
         updateAllTrackIndelDisplay();
     });
 
+    // ── Read ID comparison ──────────────────────────────────────────────────
+
+    // Extract read names from the "Reads → …" alignment track in a browser.
+    // Only considers read tracks (name starting with "Reads"), not assembly
+    // alignment tracks, so the comparison reflects actual sequenced reads.
+    async function collectReadNames(browser) {
+        const names = new Set();
+        if (!browser) return names;
+        for (const tv of browser.trackViews) {
+            const track = tv.track;
+            if (!track || track.type !== "alignment") continue;
+            if (!track.name || !track.name.startsWith("Reads")) continue;
+
+            // Attempt to read from cached alignment containers first.
+            // IGV.js stores these after rendering the visible region.
+            try {
+                const containers = track.alignmentContainers;
+                if (containers && containers.length > 0) {
+                    for (const ac of containers) {
+                        if (!ac || !ac.alignments) continue;
+                        for (const a of ac.alignments) {
+                            if (a.readName) names.add(a.readName);
+                        }
+                    }
+                    if (names.size > 0) continue;
+                }
+            } catch (_) { /* fall through */ }
+
+            // Fallback: fetch from the featureSource for the current viewport.
+            try {
+                const refFrame = browser.referenceFrameList && browser.referenceFrameList[0];
+                if (!refFrame) continue;
+                const chr = refFrame.chr;
+                const start = Math.floor(refFrame.start);
+                const end = Math.ceil(refFrame.end);
+                const fs = track.featureSource;
+                if (!fs) continue;
+                // Try getAlignments (IGV.js ≥3.x alignment source)
+                if (typeof fs.getAlignments === "function") {
+                    const ac = await fs.getAlignments(chr, start, end);
+                    if (ac && ac.alignments) {
+                        for (const a of ac.alignments) {
+                            if (a.readName) names.add(a.readName);
+                        }
+                    }
+                } else if (typeof fs.getFeatures === "function") {
+                    const feats = await fs.getFeatures({chr, start, end});
+                    if (Array.isArray(feats)) {
+                        for (const f of feats) {
+                            if (f.readName) names.add(f.readName);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.warn("[LRV] Could not fetch reads from", track.name, e);
+            }
+        }
+        return names;
+    }
+
+    function renderReadCompare(refReads, hap1Reads, hap2Reads) {
+        // Compute set categories
+        const all3 = [];
+        const refHap1Only = [];
+        const refHap2Only = [];
+        const hap1Hap2Only = [];
+        const refOnly = [];
+        const hap1Only = [];
+        const hap2Only = [];
+        const allNames = new Set([...refReads, ...hap1Reads, ...hap2Reads]);
+
+        for (const name of allNames) {
+            const inRef = refReads.has(name);
+            const inH1 = hap1Reads.has(name);
+            const inH2 = hap2Reads.has(name);
+            if (inRef && inH1 && inH2)        all3.push(name);
+            else if (inRef && inH1)            refHap1Only.push(name);
+            else if (inRef && inH2)            refHap2Only.push(name);
+            else if (inH1 && inH2)             hap1Hap2Only.push(name);
+            else if (inRef)                    refOnly.push(name);
+            else if (inH1)                     hap1Only.push(name);
+            else if (inH2)                     hap2Only.push(name);
+        }
+
+        const rows = [
+            { label: "All three panels",              count: all3.length,        reads: all3,        cls: "" },
+            { label: "Ref ∩ Hap1 only",               count: refHap1Only.length, reads: refHap1Only, cls: "" },
+            { label: "Ref ∩ Hap2 only",               count: refHap2Only.length, reads: refHap2Only, cls: "" },
+            { label: "Hap1 ∩ Hap2 only",              count: hap1Hap2Only.length,reads: hap1Hap2Only,cls: "" },
+            { label: "Ref only",                       count: refOnly.length,     reads: refOnly,     cls: "" },
+            { label: "Hap1 only",                      count: hap1Only.length,    reads: hap1Only,    cls: "" },
+            { label: "Hap2 only",                      count: hap2Only.length,    reads: hap2Only,    cls: "" },
+        ];
+
+        let html = `<table>
+            <tr><th colspan="2" style="padding-bottom:4px">Panel totals</th></tr>
+            <tr><td>Reference</td><td class="count">${refReads.size}</td></tr>
+            <tr><td>Haplotype 1</td><td class="count">${hap1Reads.size}</td></tr>
+            <tr><td>Haplotype 2</td><td class="count">${hap2Reads.size}</td></tr>
+            <tr><td><strong>Union (unique)</strong></td><td class="count"><strong>${allNames.size}</strong></td></tr>
+        </table>
+        <table style="margin-top:14px">
+            <tr><th>Category</th><th style="text-align:right">Count</th></tr>`;
+        for (const r of rows) {
+            const pct = allNames.size > 0 ? ((r.count / allNames.size) * 100).toFixed(1) : "0.0";
+            html += `<tr>
+                <td>${r.label}</td>
+                <td class="count">${r.count} <span style="color:var(--text-muted)">(${pct}%)</span></td>
+            </tr>`;
+            if (r.reads.length > 0) {
+                const sorted = r.reads.slice().sort();
+                const preview = sorted.slice(0, 200).join("\n");
+                const more = sorted.length > 200 ? `\n… and ${sorted.length - 200} more` : "";
+                html += `<tr><td colspan="2">
+                    <details><summary>Show read names</summary>
+                    <div class="read-list">${escapeHtml(preview + more)}</div>
+                    </details>
+                </td></tr>`;
+            }
+        }
+        html += `</table>`;
+        html += `<p class="note">
+            <strong>Sanity check:</strong> reads aligned to all three panels confirm that the
+            reference, hap1, and hap2 regions overlap the same genomic locus.
+            Reads appearing in only one or two panels may indicate region boundary
+            differences or mapping-quality filtering.
+        </p>`;
+        return html;
+    }
+
+    function escapeHtml(str) {
+        return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    compareReadsBtn.addEventListener("click", async () => {
+        readCompareModal.classList.remove("hidden");
+        readCompareBody.innerHTML = "Collecting read IDs from all panels…";
+        try {
+            const [refReads, hap1Reads, hap2Reads] = await Promise.all([
+                collectReadNames(refBrowser),
+                collectReadNames(hap1Browser),
+                collectReadNames(hap2Browser),
+            ]);
+            if (refReads.size === 0 && hap1Reads.size === 0 && hap2Reads.size === 0) {
+                readCompareBody.innerHTML =
+                    "<p>No reads found in any panel. Navigate to a region first " +
+                    "and ensure the alignment data has loaded.</p>";
+            } else {
+                readCompareBody.innerHTML = renderReadCompare(refReads, hap1Reads, hap2Reads);
+            }
+        } catch (err) {
+            readCompareBody.innerHTML = `<p>Error collecting reads: ${escapeHtml(err.message)}</p>`;
+            console.error("[LRV] Read comparison error:", err);
+        }
+    });
+
+    readCompareClose.addEventListener("click", () => {
+        readCompareModal.classList.add("hidden");
+    });
+    readCompareModal.addEventListener("click", (e) => {
+        if (e.target === readCompareModal) readCompareModal.classList.add("hidden");
+    });
+
     // Keyboard shortcuts
     document.addEventListener("keydown", (e) => {
+        // Close modal on Escape
+        if (e.key === "Escape" && !readCompareModal.classList.contains("hidden")) {
+            readCompareModal.classList.add("hidden");
+            return;
+        }
         if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
         if (e.key === "ArrowLeft" || e.key === "[") {
             e.preventDefault();
