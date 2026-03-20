@@ -326,10 +326,9 @@ class TestLoadRegions(unittest.TestCase):
             # ref_region must be the actual SV region "chrom:start-end"
             # (not a padded region); fasta_region holds the padded FASTA name
             chrom = r["chrom"]
-            self.assertTrue(r["ref_region"].startswith(chrom + ":"),
-                            f"ref_region should start with chrom: {r['ref_region']}")
-            self.assertEqual(r["start"], int(r["ref_region"].split(":")[1].split("-")[0]),
-                             "start must match ref_region start")
+            expected_ref = f"{chrom}:{r['start']}-{r['end']}"
+            self.assertEqual(r["ref_region"], expected_ref,
+                             "ref_region should be 'chrom:start-end' matching pos/size")
 
 
 class TestMergeRegions(unittest.TestCase):

@@ -282,7 +282,7 @@
     let displaySquished = true;          // default: squished (compact)
     let hideSmallIndels = true;          // default: hide spurious indels (long-read mode)
     let opGeneration = 0;               // increments on sample/region change to invalidate stale ops
-    const REGION_BUFFER_MULTIPLIER = 5;   // buffer = 5 × SV event size on each side (~4.1 kb for an 834 bp SV)
+    const REGION_BUFFER_MULTIPLIER = 5;   // buffer = 5 × SV event size on each side (~4.2 kb for an 834 bp SV)
     const MIN_REGION_BUFFER = 1000;       // minimum buffer so tiny regions still show context
     // No MAX_REGION_BUFFER — buffer is fully dynamic, proportional to the SV event size.
 
