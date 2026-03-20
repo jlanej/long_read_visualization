@@ -21,9 +21,11 @@ Usage
 import argparse
 import gzip
 import json
+import logging
 import mimetypes
 import os
 import re
+import subprocess
 import sys
 import urllib.parse
 import urllib.request
@@ -36,6 +38,21 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT / "src"))
 import coordinate_mapper  # noqa: E402
+
+# ── Logging setup ───────────────────────────────────────────────────────────
+
+logger = logging.getLogger("lrv")
+
+
+def _setup_logging(level=logging.INFO):
+    """Configure logging for the visualization server."""
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    logger.addHandler(handler)
+    logger.setLevel(level)
 
 
 # ── Configuration loading ───────────────────────────────────────────────────
@@ -51,6 +68,10 @@ def load_config(tsv_path):
         hap2_assembly   Path to haplotype 2 assembly FASTA (.fa.gz)
         reads_bam       (optional) Path to reads-vs-reference BAM or CRAM
         regions         (optional) Path to regions file (manifest JSON or VCF)
+        cram_ref        (optional) Path to the reference FASTA used for CRAM
+                        encoding.  When set, this reference is served to
+                        igv.js for CRAM decoding instead of the panel
+                        reference.
 
     Lines beginning with ``#`` are ignored.  Additional columns are stored
     as extra metadata.  If ``reads_bam`` points to a ``.cram`` file it is
@@ -80,6 +101,13 @@ def load_config(tsv_path):
                 row.setdefault("reads_cram", bam_val)
                 row["reads_bam"] = ""
             samples.append(row)
+
+    # Log loaded samples
+    for s in samples:
+        cram_keys = [k for k in s if "cram" in k and s[k]]
+        cram_ref = s.get("cram_ref", "")
+        logger.info("Config sample=%s cram_files=%s cram_ref=%s",
+                     s.get("sample_id"), cram_keys, cram_ref or "(not set)")
     return samples
 
 
@@ -92,6 +120,7 @@ def discover_pipeline_files(sample):
     """
     output_dir = sample.get("output_dir", "")
     if not output_dir or not os.path.isdir(output_dir):
+        logger.debug("discover_pipeline_files: skipping (no output_dir)")
         return sample
 
     # Auto-detect the sample prefix by looking for *_hap1_to_ref.bam
@@ -102,6 +131,8 @@ def discover_pipeline_files(sample):
             break
 
     if prefix is None:
+        logger.debug("discover_pipeline_files: no prefix found in %s",
+                      output_dir)
         return sample
 
     sample["_prefix"] = prefix
@@ -132,6 +163,7 @@ def discover_pipeline_files(sample):
         path = os.path.join(output_dir, fname)
         if os.path.isfile(path):
             sample[key] = path
+            logger.info("Discovered CRAM file %s=%s", key, path)
 
     return sample
 
@@ -410,6 +442,21 @@ class IGVHandler(SimpleHTTPRequestHandler):
                     self.file_registry[idx_url] = idx
             return url_path
 
+        # Build cram_ref URL if the sample provides one
+        cram_ref_url = data_url("cram_ref")
+        if cram_ref_url:
+            logger.info("Sample %s: using explicit cram_ref=%s",
+                         sample_id, sample.get("cram_ref"))
+        else:
+            cram_keys = [k for k in ("reads_cram", "reads_to_hap1_cram",
+                                      "reads_to_hap2_cram")
+                         if sample.get(k)]
+            if cram_keys:
+                logger.info(
+                    "Sample %s: CRAM files present (%s) but no cram_ref; "
+                    "using panel reference for CRAM decoding",
+                    sample_id, ", ".join(cram_keys))
+
         config = {
             "sample_id": sample_id,
             "reference": {
@@ -433,6 +480,7 @@ class IGVHandler(SimpleHTTPRequestHandler):
                 "reads_to_hap1_cram": data_url("reads_to_hap1_cram"),
                 "reads_to_hap2_cram": data_url("reads_to_hap2_cram"),
             },
+            "cram_ref": cram_ref_url,
         }
         return config
 
@@ -485,7 +533,7 @@ class IGVHandler(SimpleHTTPRequestHandler):
                     # Search in output_dir and assembly/reference directories
                     candidates = [sample.get("_output_dir", "")]
                     for key in ("reference", "hap1_assembly", "hap2_assembly",
-                                "reads_bam"):
+                                "reads_bam", "cram_ref"):
                         v = sample.get(key, "")
                         if v:
                             candidates.append(os.path.dirname(v))
@@ -494,14 +542,25 @@ class IGVHandler(SimpleHTTPRequestHandler):
                         if os.path.isfile(check):
                             fs_path = check
                             self.file_registry[url_path] = fs_path
+                            logger.debug("Resolved %s → %s", url_path,
+                                          fs_path)
                             break
 
         if fs_path is None or not os.path.isfile(fs_path):
+            logger.warning("File not found: %s (resolved=%s)", url_path,
+                            fs_path)
             self.send_error(HTTPStatus.NOT_FOUND)
             return
 
         file_size = os.path.getsize(fs_path)
         content_type = self._guess_type(fs_path)
+
+        # Log CRAM-related requests at INFO level for diagnostics
+        if url_path.endswith((".cram", ".crai")):
+            range_hdr = self.headers.get("Range", "none")
+            logger.info("CRAM request: %s %s size=%d range=%s",
+                         "HEAD" if head_only else "GET", url_path,
+                         file_size, range_hdr)
 
         # Parse Range header
         range_header = self.headers.get("Range")
@@ -650,11 +709,17 @@ class IGVHandler(SimpleHTTPRequestHandler):
             remaining -= len(chunk)
 
     def log_message(self, format, *args):
-        """Quieter logging — skip successful data requests."""
-        path = args[0] if args else ""
-        if isinstance(path, str) and "/data/" in path and "200" in str(args):
+        """Override default logging.
+
+        Successful /data/ responses are logged at DEBUG level to reduce
+        noise while still being available when --verbose is used.
+        Everything else is logged at INFO via the standard handler.
+        """
+        msg = format % args if args else format
+        if "/data/" in msg and (" 200 " in msg or " 206 " in msg):
+            logger.debug("HTTP %s", msg)
             return
-        super().log_message(format, *args)
+        logger.info("HTTP %s", msg)
 
 
 # ── IGV.js dependency ───────────────────────────────────────────────────────
@@ -682,6 +747,187 @@ def _ensure_igv_js(static_dir):
         print(f"  Download it manually from: {IGV_JS_URL}")
 
 
+def _validate_cram_ref(path):
+    """Check that a CRAM reference FASTA is readable and indexed.
+
+    Returns a list of warning strings (empty when everything is OK).
+    """
+    warnings = []
+    if not path:
+        return warnings
+    if not os.path.isfile(path):
+        warnings.append(f"cram_ref file not found: {path}")
+        return warnings
+
+    fai = path + ".fai"
+    if not os.path.isfile(fai):
+        warnings.append(f"cram_ref missing .fai index: {fai}")
+
+    if path.endswith(".gz"):
+        gzi = path + ".gzi"
+        if not os.path.isfile(gzi):
+            warnings.append(f"cram_ref is bgzipped but missing .gzi index: "
+                            f"{gzi}")
+
+    # Quick sanity check: try reading the first few bytes
+    try:
+        with open(path, "rb") as fh:
+            magic = fh.read(2)
+        if path.endswith(".gz") and magic != b"\x1f\x8b":
+            warnings.append(
+                f"cram_ref has .gz extension but does not look bgzipped "
+                f"(magic bytes: {magic!r})")
+    except OSError as exc:
+        warnings.append(f"cram_ref cannot be read: {exc}")
+
+    return warnings
+
+
+def _check_cram_embedded_ref(cram_path):
+    """Read a CRAM file's header and return the set of UR paths found.
+
+    Uses ``samtools view -H`` when *samtools* is on PATH; otherwise
+    falls back to a lightweight binary scan of the CRAM container that
+    extracts the SAM header text without any external dependency.
+
+    Returns ``(ur_paths, warnings)`` where *ur_paths* is the set of
+    unique ``UR:`` values and *warnings* is a list of human-readable
+    warning strings for any UR path that is not reachable locally.
+    """
+    header_text = _read_cram_header(cram_path)
+    if header_text is None:
+        return set(), []
+
+    ur_paths = set()
+    for line in header_text.splitlines():
+        if not line.startswith("@SQ"):
+            continue
+        for field in line.split("\t"):
+            if field.startswith("UR:"):
+                ur_paths.add(field[3:])
+
+    warnings = []
+    for ur in sorted(ur_paths):
+        if not os.path.isfile(ur):
+            warnings.append(
+                f"CRAM header embeds UR:{ur} which does not exist locally. "
+                f"Decoding will use the panel reference (or explicit "
+                f"cram_ref) instead.")
+    return ur_paths, warnings
+
+
+def _read_cram_header(cram_path):
+    """Extract the SAM header text from a CRAM file.
+
+    Tries ``samtools view -H`` first.  When samtools is unavailable,
+    does a minimal binary parse of the CRAM v3 container to pull out the
+    header without any external dependency.
+
+    Returns the header string, or *None* on failure.
+    """
+    # ── Try samtools first ──────────────────────────────────────────────
+    try:
+        proc = subprocess.run(
+            ["samtools", "view", "-H", cram_path],
+            capture_output=True, text=True, timeout=30,
+        )
+        if proc.returncode == 0 and proc.stdout:
+            return proc.stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    # ── Fallback: lightweight binary parse ──────────────────────────────
+    # CRAM v2/v3 layout (first container):
+    #   magic  (4 bytes)  "CRAM"
+    #   major  (1 byte)
+    #   minor  (1 byte)
+    #   file_id (20 bytes)
+    #   --- first container (the SAM header) ---
+    #   container_length   (ITF-8)
+    #   ref_seq_id         (ITF-8)
+    #   start_pos          (ITF-8)
+    #   alignment_span     (ITF-8)
+    #   num_records        (ITF-8)
+    #   record_counter     (ITF-8 in v3, absent in v2)
+    #   num_bases          (ITF-8)
+    #   num_blocks         (ITF-8)
+    #   landmarks_len      (ITF-8)  + landmark array
+    #   crc32              (4 bytes, v3 only)
+    #   --- first block (header block) ---
+    #   block_method       (1 byte)    0 = raw
+    #   block_content_type (1 byte)    0 = FILE_HEADER
+    #   block_content_id   (ITF-8)
+    #   compressed_size    (ITF-8)
+    #   raw_size           (ITF-8)
+    #   data               (raw_size bytes — ITF-8 length + SAM header text)
+    try:
+        with open(cram_path, "rb") as fh:
+            magic = fh.read(4)
+            if magic != b"CRAM":
+                logger.debug("Not a CRAM file (magic=%r): %s",
+                              magic, cram_path)
+                return None
+            major = fh.read(1)[0]
+            _minor = fh.read(1)[0]
+            _file_id = fh.read(20)
+
+            # Skip the container header — we need to read ITF-8 values
+            _cont_len = _read_itf8(fh)
+            _ref_id = _read_itf8(fh)
+            _start = _read_itf8(fh)
+            _span = _read_itf8(fh)
+            _n_rec = _read_itf8(fh)
+            if major >= 3:
+                _rec_ctr = _read_itf8(fh)
+            _n_bases = _read_itf8(fh)
+            n_blocks = _read_itf8(fh)
+            landmarks_len = _read_itf8(fh)
+            for _ in range(landmarks_len):
+                _read_itf8(fh)
+            if major >= 3:
+                fh.read(4)  # CRC32
+
+            # First block: the header block
+            _blk_method = fh.read(1)[0]
+            _blk_ctype = fh.read(1)[0]
+            _blk_cid = _read_itf8(fh)
+            _comp_sz = _read_itf8(fh)
+            raw_sz = _read_itf8(fh)
+
+            # The block data starts with an ITF-8 header length, then
+            # the SAM header text.
+            hdr_len = _read_itf8(fh)
+            hdr_bytes = fh.read(hdr_len)
+            return hdr_bytes.decode("utf-8", errors="replace")
+    except Exception as exc:
+        logger.debug("Could not parse CRAM header from %s: %s",
+                      cram_path, exc)
+        return None
+
+
+def _read_itf8(fh):
+    """Read an ITF-8 encoded integer from a binary file handle."""
+    b0 = fh.read(1)
+    if not b0:
+        raise EOFError("Unexpected end of CRAM file")
+    b0 = b0[0]
+    if b0 < 0x80:
+        return b0
+    if b0 < 0xC0:
+        b1 = fh.read(1)[0]
+        return ((b0 & 0x3F) << 8) | b1
+    if b0 < 0xE0:
+        rest = fh.read(2)
+        return ((b0 & 0x1F) << 16) | (rest[0] << 8) | rest[1]
+    if b0 < 0xF0:
+        rest = fh.read(3)
+        return (((b0 & 0x0F) << 24) | (rest[0] << 16)
+                | (rest[1] << 8) | rest[2])
+    rest = fh.read(4)
+    return (((b0 & 0x0F) << 28) | (rest[0] << 20)
+            | (rest[1] << 12) | (rest[2] << 4) | (rest[3] & 0x0F))
+
+
 # ── Main ────────────────────────────────────────────────────────────────────
 
 def main():
@@ -693,14 +939,19 @@ def main():
                         help="Server port (default: 8080)")
     parser.add_argument("--host", default="0.0.0.0",
                         help="Server host (default: 0.0.0.0)")
+    parser.add_argument("--verbose", "-v", action="store_true",
+                        help="Enable verbose (DEBUG) logging")
     args = parser.parse_args()
+
+    # Initialise logging
+    _setup_logging(logging.DEBUG if args.verbose else logging.INFO)
 
     # Load configuration
     config_path = os.path.abspath(args.config)
-    print(f"Loading configuration from {config_path}")
+    logger.info("Loading configuration from %s", config_path)
     samples = load_config(config_path)
     if not samples:
-        print("ERROR: No samples found in configuration file", file=sys.stderr)
+        logger.error("No samples found in configuration file")
         sys.exit(1)
 
     # Discover pipeline files and load mapping indices
@@ -708,7 +959,38 @@ def main():
     for sample in samples:
         sample = discover_pipeline_files(sample)
         translator.load_sample(sample)
-        print(f"  Loaded sample: {sample['sample_id']}")
+        logger.info("Loaded sample: %s", sample["sample_id"])
+
+    # Validate CRAM references
+    for sample in samples:
+        sid = sample["sample_id"]
+        cram_ref = sample.get("cram_ref", "")
+        cram_keys = [k for k in ("reads_cram", "reads_to_hap1_cram",
+                                  "reads_to_hap2_cram")
+                     if sample.get(k)]
+        if cram_keys and not cram_ref:
+            logger.warning(
+                "Sample %s has CRAM file(s) (%s) but no cram_ref column. "
+                "CRAM decoding will use each panel's reference genome. "
+                "If the browser crashes, set cram_ref to the FASTA that "
+                "was used when encoding the CRAMs.",
+                sid, ", ".join(cram_keys))
+        if cram_ref:
+            for w in _validate_cram_ref(cram_ref):
+                logger.warning("Sample %s: %s", sid, w)
+
+        # Check each CRAM file's embedded UR reference path
+        for cram_key in cram_keys:
+            cram_path = sample.get(cram_key, "")
+            if not cram_path or not os.path.isfile(cram_path):
+                continue
+            ur_paths, ur_warnings = _check_cram_embedded_ref(cram_path)
+            for w in ur_warnings:
+                logger.warning("Sample %s (%s): %s", sid, cram_key, w)
+            if ur_paths:
+                logger.info(
+                    "Sample %s (%s): embedded UR path(s): %s",
+                    sid, cram_key, ", ".join(sorted(ur_paths)))
 
     # Pre-register data files for all samples
     file_registry = {}
@@ -719,7 +1001,7 @@ def main():
                      "reads_to_hap1_bam", "reads_to_hap2_bam",
                      "ref_to_hap1_bam", "ref_to_hap2_bam",
                      "reads_cram", "reads_to_hap1_cram",
-                     "reads_to_hap2_cram"):
+                     "reads_to_hap2_cram", "cram_ref"):
             path = sample.get(key)
             if path and os.path.isfile(path):
                 url = f"/data/{sid}/{os.path.basename(path)}"
@@ -729,6 +1011,10 @@ def main():
                     idx = path + ext
                     if os.path.isfile(idx):
                         file_registry[url + ext] = idx
+
+    logger.info("File registry: %d entries", len(file_registry))
+    for url, fspath in sorted(file_registry.items()):
+        logger.debug("  %s → %s", url, fspath)
 
     # Configure the handler
     static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -742,14 +1028,14 @@ def main():
     # Start server
     server = HTTPServer((args.host, args.port), IGVHandler)
     url = f"http://{'localhost' if args.host == '0.0.0.0' else args.host}:{args.port}"
-    print(f"\nServer running at {url}")
-    print(f"Serving {len(samples)} sample(s)")
-    print("Press Ctrl+C to stop\n")
+    logger.info("Server running at %s", url)
+    logger.info("Serving %d sample(s)", len(samples))
+    logger.info("Press Ctrl+C to stop")
 
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nShutting down...")
+        logger.info("Shutting down...")
         server.shutdown()
 
 
