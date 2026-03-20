@@ -563,6 +563,14 @@
     let displaySquished = true;          // default: squished (compact)
     let hideSmallIndels = true;          // default: hide spurious indels (long-read mode)
     let opGeneration = 0;               // increments on sample/region change to invalidate stale ops
+
+    // Anchor loci: the known-good region placements set during navigateToRegion.
+    // Used as a proportional fallback when coordinate-mapping indices are
+    // unavailable (e.g. no minimap2 PAF) or return empty results for a
+    // zoom/pan event.  Each anchor stores { chr, start, end }.
+    let anchorRef  = null;
+    let anchorHap1 = null;
+    let anchorHap2 = null;
     const REGION_BUFFER_MULTIPLIER = 5;   // buffer = 5 × SV event size on each side (~4.2 kb for an 834 bp SV)
     const MIN_REGION_BUFFER = 1000;       // minimum buffer so tiny regions still show context
     const SPLITTER_HEIGHT = 6;
@@ -620,6 +628,46 @@
     function computeInclusiveSpan(start, end) {
         if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
         return end - start + 1;
+    }
+
+    // Parse a locus string "chr:start-end" into { chr, start, end }.
+    function parseLocus(locus) {
+        if (!locus) return null;
+        const m = locus.match(/^(.+):(\d+)-(\d+)$/);
+        if (!m) return null;
+        return { chr: m[1], start: parseInt(m[2], 10), end: parseInt(m[3], 10) };
+    }
+
+    // Compute a proportional haplotype locus from a ref viewport change.
+    //
+    // When the user zooms/pans the reference panel, we map the new ref
+    // viewport onto the haplotype using the anchor relationship established
+    // during navigateToRegion.  This correctly handles length differences
+    // between ref and hap sequences caused by real structural variation:
+    // a 10 kb deletion in ref maps to ~0 bp in the corresponding hap region,
+    // while a 10 kb insertion in hap expands the same ref span.
+    //
+    //   refFrac = (viewStart - anchorRef.start) / anchorRefSpan
+    //   hapStart = anchorHap.start + refFrac × anchorHapSpan
+    //
+    // The zoom factor is preserved so both panels show the same relative
+    // fraction of their respective sequences.
+    function computeProportionalLocus(anchor, anchorRefObj, refStart, refEnd) {
+        if (!anchor || !anchorRefObj) return null;
+        const anchorRefSpan = anchorRefObj.end - anchorRefObj.start;
+        const anchorHapSpan = anchor.end - anchor.start;
+        if (anchorRefSpan <= 0 || anchorHapSpan <= 0) return null;
+
+        // Fractional positions within the anchor reference window
+        const fracStart = (refStart - anchorRefObj.start) / anchorRefSpan;
+        const fracEnd = (refEnd - anchorRefObj.start) / anchorRefSpan;
+
+        // Map onto haplotype coordinate space (may be longer or shorter
+        // than the reference due to insertions/deletions)
+        const hapStart = Math.max(0, Math.round(anchor.start + fracStart * anchorHapSpan));
+        const hapEnd = Math.max(hapStart + 1, Math.round(anchor.start + fracEnd * anchorHapSpan));
+
+        return `${anchor.chr}:${hapStart}-${hapEnd}`;
     }
 
     async function fetchJSON(url) {
@@ -701,6 +749,7 @@
     function cancelPendingOps() {
         opGeneration++;
         translating = false;
+        anchorRef = anchorHap1 = anchorHap2 = null;
         if (activeTranslateCtrl) {
             activeTranslateCtrl.abort();
             activeTranslateCtrl = null;
@@ -1027,19 +1076,48 @@
                 { signal }
             );
             if (signal.aborted || gen !== opGeneration) return;
-            const result = await resp.json();
-            if (signal.aborted || gen !== opGeneration) return;
+
+            let result = { hap1: [], hap2: [] };
+            if (resp.ok) {
+                result = await resp.json();
+                if (signal.aborted || gen !== opGeneration) return;
+            }
+
+            // Determine hap loci: prefer index-based translation, fall back to
+            // proportional mapping from the anchor relationship established
+            // during navigateToRegion.  This ensures zoom/pan sync works even
+            // when coordinate-mapping indices are absent or return empty results
+            // (e.g. the user zooms into a sub-region that has no direct
+            // alignment in the PAF).  The proportional fallback correctly
+            // accounts for length differences between reference and haplotype
+            // sequences caused by real structural variation.
+            let hap1Locus = null;
+            let hap2Locus = null;
+
+            if (result.hap1 && result.hap1.length > 0) {
+                const r = result.hap1[0];
+                hap1Locus = `${r.chrom}:${r.start}-${r.end}`;
+            } else if (anchorRef && anchorHap1) {
+                hap1Locus = computeProportionalLocus(anchorHap1, anchorRef, start, end);
+            }
+
+            if (result.hap2 && result.hap2.length > 0) {
+                const r = result.hap2[0];
+                hap2Locus = `${r.chrom}:${r.start}-${r.end}`;
+            } else if (anchorRef && anchorHap2) {
+                hap2Locus = computeProportionalLocus(anchorHap2, anchorRef, start, end);
+            }
+
+            // Compute visibility window from all available spans
             const refSpan = computeInclusiveSpan(start, end) || 1;
             const translatedWidths = [refSpan];
-            if (result.hap1 && result.hap1.length > 0) {
-                translatedWidths.push(
-                    computeInclusiveSpan(result.hap1[0].start, result.hap1[0].end) || 1
-                );
+            if (hap1Locus) {
+                const h1Span = parseLocusSpan(hap1Locus);
+                if (h1Span) translatedWidths.push(h1Span);
             }
-            if (result.hap2 && result.hap2.length > 0) {
-                translatedWidths.push(
-                    computeInclusiveSpan(result.hap2[0].start, result.hap2[0].end) || 1
-                );
+            if (hap2Locus) {
+                const h2Span = parseLocusSpan(hap2Locus);
+                if (h2Span) translatedWidths.push(h2Span);
             }
             setVisibilityWindow(Math.max(...translatedWidths));
 
@@ -1052,21 +1130,17 @@
             translating = true;
 
             // Navigate hap1 panel
-            if (result.hap1 && result.hap1.length > 0 && hap1Browser) {
-                const r = result.hap1[0];
-                const locus = `${r.chrom}:${r.start}-${r.end}`;
-                await hap1Browser.search(locus);
+            if (hap1Locus && hap1Browser) {
+                await hap1Browser.search(hap1Locus);
                 if (gen !== opGeneration) return;
-                document.getElementById("hap1Locus").textContent = locus;
+                document.getElementById("hap1Locus").textContent = hap1Locus;
             }
 
             // Navigate hap2 panel
-            if (result.hap2 && result.hap2.length > 0 && hap2Browser) {
-                const r = result.hap2[0];
-                const locus = `${r.chrom}:${r.start}-${r.end}`;
-                await hap2Browser.search(locus);
+            if (hap2Locus && hap2Browser) {
+                await hap2Browser.search(hap2Locus);
                 if (gen !== opGeneration) return;
-                document.getElementById("hap2Locus").textContent = locus;
+                document.getElementById("hap2Locus").textContent = hap2Locus;
             }
 
             translating = false;
@@ -1263,9 +1337,23 @@
                     console.warn("Region translation error:", err);
                 }
             }
+
+            // Store anchor loci from the final browser positions so that
+            // subsequent zoom/pan events can use proportional mapping when
+            // coordinate-mapping indices are unavailable.
+            anchorRef  = _readBrowserAnchor(refBrowser);
+            anchorHap1 = _readBrowserAnchor(hap1Browser);
+            anchorHap2 = _readBrowserAnchor(hap2Browser);
         } finally {
             translating = false;
         }
+    }
+
+    function _readBrowserAnchor(browser) {
+        if (!browser) return null;
+        const rf = browser.referenceFrameList && browser.referenceFrameList[0];
+        if (!rf || !rf.chr) return null;
+        return { chr: rf.chr, start: Math.round(rf.start), end: Math.round(rf.end) };
     }
 
     // ── Event listeners ─────────────────────────────────────────────────────
