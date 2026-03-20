@@ -19,6 +19,7 @@ Usage
 """
 
 import argparse
+import collections
 import gzip
 import json
 import logging
@@ -329,12 +330,12 @@ class CoordinateTranslator:
     coordinates multiple times).
     """
 
-    _CACHE_SIZE = 256
+    DEFAULT_CACHE_SIZE = 256
 
-    def __init__(self):
+    def __init__(self, cache_size=None):
         self._indices = {}  # (sample_id, haplotype) → loaded index
-        self._cache = {}    # cache_key → result dict
-        self._cache_order = []  # LRU eviction order
+        self._cache_size = cache_size or self.DEFAULT_CACHE_SIZE
+        self._cache = collections.OrderedDict()
 
     def load_sample(self, sample):
         """Load mapping indices for a sample."""
@@ -349,14 +350,15 @@ class CoordinateTranslator:
     def translate(self, sample_id, chrom, start, end, min_mapq=0):
         """Translate a reference region to assembly coordinates.
 
-        Results are cached (LRU, up to :attr:`_CACHE_SIZE` entries) so
-        that repeated identical queries are free.
+        Results are cached (LRU, up to *cache_size* entries) so that
+        repeated identical queries are free.
 
         Returns a dict with hap1 and hap2 assembly region lists.
         """
         cache_key = (sample_id, chrom, start, end, min_mapq)
         cached = self._cache.get(cache_key)
         if cached is not None:
+            self._cache.move_to_end(cache_key)
             return cached
 
         result = {"hap1": [], "hap2": []}
@@ -383,12 +385,10 @@ class CoordinateTranslator:
             # Merge overlapping regions per contig
             result[hap] = _merge_regions(asm_regions)
 
-        # LRU cache insertion
-        if len(self._cache) >= self._CACHE_SIZE:
-            oldest = self._cache_order.pop(0)
-            self._cache.pop(oldest, None)
+        # LRU cache insertion (OrderedDict provides O(1) eviction)
         self._cache[cache_key] = result
-        self._cache_order.append(cache_key)
+        if len(self._cache) > self._cache_size:
+            self._cache.popitem(last=False)
 
         return result
 

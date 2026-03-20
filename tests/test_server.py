@@ -615,8 +615,7 @@ class TestTranslatorCache(unittest.TestCase):
 
     def test_cache_eviction(self):
         """Cache evicts oldest entries when full."""
-        translator = server_app.CoordinateTranslator()
-        translator._CACHE_SIZE = 3
+        translator = server_app.CoordinateTranslator(cache_size=3)
 
         # Fill the cache
         translator.translate("s", "chr1", 0, 100)
