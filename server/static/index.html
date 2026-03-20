@@ -560,6 +560,7 @@
 
     // ── Coordinate translation & panel sync ─────────────────────────────────
     let translateTimeout = null;
+    let activeTranslateCtrl = null;   // AbortController for in-flight translate fetch
 
     function onRefLocusChange(referenceFrameList) {
         if (!syncEnabled || translating) return;
@@ -568,13 +569,25 @@
         const locus = formatLocus(referenceFrameList);
         document.getElementById("refLocus").textContent = locus;
 
-        // Debounce translation
+        // Cancel any in-flight translate request and reset the debounce.
+        // This is the primary guard against concurrent syncs: each pan event
+        // aborts the previous network call before scheduling a new one.
+        if (activeTranslateCtrl) {
+            activeTranslateCtrl.abort();
+            activeTranslateCtrl = null;
+        }
         if (translateTimeout) clearTimeout(translateTimeout);
-        translateTimeout = setTimeout(() => translateAndSync(referenceFrameList), 300);
+        translateTimeout = setTimeout(() => translateAndSync(referenceFrameList), 500);
     }
 
     async function translateAndSync(referenceFrameList) {
-        if (!currentSample || !syncEnabled) return;
+        if (!currentSample || !syncEnabled || translating) return;
+
+        // Abort any previous in-flight request (safety net for back-to-back calls).
+        if (activeTranslateCtrl) activeTranslateCtrl.abort();
+        activeTranslateCtrl = new AbortController();
+        const thisCtrl = activeTranslateCtrl;
+        const { signal } = thisCtrl;
 
         const frame = referenceFrameList[0];
         if (!frame) return;
@@ -584,11 +597,21 @@
         const end = Math.round(frame.end);
 
         try {
-            const result = await fetchJSON(
+            const resp = await fetch(
                 `/api/translate?sample=${currentSample.sample_id}` +
-                `&chrom=${encodeURIComponent(chrom)}&start=${start}&end=${end}`
+                `&chrom=${encodeURIComponent(chrom)}&start=${start}&end=${end}`,
+                { signal }
             );
+            if (signal.aborted) return;
+            const result = await resp.json();
+            if (signal.aborted) return;
 
+            // Set the flag *before* driving the hap browsers so that any
+            // locuschange fired by their search() calls is ignored.
+            // NOTE: we intentionally do NOT set translating=true before the
+            // fetch above, because onRefLocusChange needs translating=false
+            // to abort this request and queue an updated position if the user
+            // keeps panning during the network round-trip.
             translating = true;
 
             // Navigate hap1 panel
@@ -610,7 +633,15 @@
             translating = false;
         } catch (err) {
             translating = false;
-            console.warn("Translation error:", err);
+            if (err.name !== "AbortError") {
+                console.warn("Translation error:", err);
+            }
+        } finally {
+            // Only clear activeTranslateCtrl if this call is still the active
+            // one; a newer call may have already replaced it.
+            if (activeTranslateCtrl === thisCtrl) {
+                activeTranslateCtrl = null;
+            }
         }
     }
 
