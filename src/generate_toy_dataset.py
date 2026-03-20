@@ -28,6 +28,7 @@ import argparse
 import gzip
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -297,6 +298,218 @@ def extract_reads(cram_path, ref_regions, output_bam, reference=None,
     os.remove(unsorted)
 
 
+def remap_reads_to_toy_contigs(cram_path, ref_regions, output_bam,
+                               reference=None, cram_ref=None):
+    """Extract reads and remap them to toy reference coordinate space.
+
+    The toy reference FASTA has contig names that ARE the region strings
+    (e.g. ``"chr1:9319383-9349426"``), with coordinates starting at 1.
+    Reads in the original CRAM/BAM use the real chromosome name
+    (``"chr1"``) with full-genome positions.
+
+    This function extracts reads for each padded region, remaps RNAME and
+    POS to match the toy reference contig space, adjusts mate fields and
+    the SA supplementary-alignment tag, then writes a sorted, indexed
+    BAM.
+
+    Args:
+        cram_path: Path to the input CRAM/BAM.
+        ref_regions: List of ``"chrom:start-end"`` strings that match the
+            toy reference contig names.
+        output_bam: Output BAM path.
+        reference: Reference FASTA (for CRAM decoding, optional).
+        cram_ref: Explicit CRAM reference (overrides *reference*).
+    """
+    if not ref_regions:
+        return
+
+    ref_opt = []
+    if cram_ref:
+        ref_opt = ["--reference", cram_ref]
+    elif reference:
+        ref_opt = ["--reference", reference]
+
+    # Parse regions ── each region string becomes a toy contig name.
+    parsed = []
+    for region_str in ref_regions:
+        chrom, start, end = coordinate_mapper.parse_region(region_str)
+        parsed.append({
+            "chrom": chrom,
+            "start": start,
+            "end": end,
+            "name": region_str,
+            "length": end - start + 1,
+        })
+
+    # Build chrom → [(toy_name, start, end), ...] for SA tag remapping.
+    region_map = {}
+    for pr in parsed:
+        region_map.setdefault(pr["chrom"], []).append(
+            (pr["name"], pr["start"], pr["end"])
+        )
+
+    # Build the set of valid toy contig names (for RNEXT validation).
+    toy_contig_names = {pr["name"] for pr in parsed}
+
+    # Collect header lines and remapped reads.
+    hd_lines = []
+    rg_lines = []
+    pg_lines = []
+    sq_lines = []
+    reads = []
+    seen_reads = set()  # (QNAME, FLAG, orig_RNAME, orig_POS) dedup
+
+    print(f"  Remapping reads to {len(parsed)} toy contig(s)",
+          file=sys.stderr)
+
+    for pr in parsed:
+        region_str = pr["name"]
+        chrom = pr["chrom"]
+        start = pr["start"]
+
+        sq_lines.append(f"@SQ\tSN:{region_str}\tLN:{pr['length']}")
+
+        # Extract reads as SAM text — exclude unmapped reads (-F 4).
+        cmd = (["samtools", "view", "-h", "-F", "4"]
+               + ref_opt + [cram_path, region_str])
+        cmd_str = " ".join(shlex.quote(c) for c in cmd)
+        print(f"  CMD: {cmd_str}", file=sys.stderr)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"  Warning: samtools view failed for {region_str}: "
+                  f"{result.stderr}", file=sys.stderr)
+            continue
+
+        for line in result.stdout.splitlines():
+            if not line:
+                continue
+            if line.startswith("@"):
+                # Keep non-SQ header lines (HD, RG, PG) from the first region
+                if line.startswith("@HD") and not hd_lines:
+                    hd_lines.append(line)
+                elif line.startswith("@RG") and line not in rg_lines:
+                    rg_lines.append(line)
+                elif line.startswith("@PG") and line not in pg_lines:
+                    pg_lines.append(line)
+                continue
+
+            fields = line.split("\t")
+            if len(fields) < 11:
+                continue
+
+            # Deduplicate — same read alignment extracted from overlapping
+            # regions.  Keep the first occurrence.
+            dedup_key = (fields[0], fields[1], fields[2], fields[3])
+            if dedup_key in seen_reads:
+                continue
+            seen_reads.add(dedup_key)
+
+            # ── Remap RNAME and POS ──
+            if fields[2] == chrom:
+                fields[2] = region_str
+                old_pos = int(fields[3])
+                fields[3] = str(max(1, old_pos - start + 1))
+
+                # Remap RNEXT/PNEXT (mate fields)
+                if fields[6] == "=" or fields[6] == chrom:
+                    if fields[6] == chrom:
+                        fields[6] = region_str
+                    old_pnext = int(fields[7])
+                    if old_pnext > 0:
+                        fields[7] = str(max(1, old_pnext - start + 1))
+                elif fields[6] != "*" and fields[6] not in toy_contig_names:
+                    # Mate on a chromosome not in the toy reference —
+                    # mark as unavailable so samtools won't error.
+                    fields[6] = "*"
+                    fields[7] = "0"
+            elif fields[2] == "*":
+                # Unmapped read — skip (shouldn't reach here with -F 4)
+                continue
+            else:
+                # Read on a chromosome we don't have a toy contig for
+                continue
+
+            # ── Remap SA (supplementary alignment) tag ──
+            for i in range(11, len(fields)):
+                if fields[i].startswith("SA:Z:"):
+                    fields[i] = _remap_sa_tag(fields[i], region_map)
+
+            reads.append("\t".join(fields))
+
+    # Build SAM content
+    header_lines = hd_lines + sq_lines + rg_lines + pg_lines
+    sam_content = "\n".join(header_lines + reads) + "\n"
+
+    # Convert SAM → sorted, indexed BAM
+    unsorted = output_bam + ".unsorted.bam"
+    cmd = ["samtools", "view", "-b", "-o", unsorted, "-"]
+    print(f"  Converting {len(reads)} remapped reads to BAM",
+          file=sys.stderr)
+    proc = subprocess.run(cmd, input=sam_content, text=True,
+                          capture_output=True)
+    if proc.returncode != 0:
+        print(f"ERROR converting SAM to BAM: {proc.stderr}",
+              file=sys.stderr)
+        sys.exit(1)
+
+    _run(["samtools", "sort", "-o", output_bam, unsorted],
+         f"Sorting → {output_bam}")
+    _run(["samtools", "index", output_bam], f"Indexing {output_bam}")
+    os.remove(unsorted)
+
+
+def _remap_sa_tag(sa_field, region_map):
+    """Remap the SA:Z: supplementary-alignment tag.
+
+    SA format: ``SA:Z:rname,pos,strand,CIGAR,mapQ,NM;[...]``
+
+    For each SA entry whose *rname* is a chromosome present in
+    *region_map*, the position is remapped to the toy contig that
+    contains it.  Entries on chromosomes not in *region_map* (or
+    positions not inside any toy contig) are dropped since the toy
+    reference does not carry those sequences.
+
+    Args:
+        sa_field: Full SA tag string (e.g. ``"SA:Z:chr1,500,+,50M,60,0;"``).
+        region_map: ``{chrom: [(toy_name, start, end), ...]}`` mapping.
+
+    Returns:
+        The remapped SA tag string, or the original if nothing changed.
+    """
+    if not sa_field.startswith("SA:Z:"):
+        return sa_field
+
+    entries = sa_field[5:].rstrip(";").split(";")
+    remapped = []
+    for entry in entries:
+        if not entry:
+            continue
+        parts = entry.split(",")
+        if len(parts) < 6:
+            continue
+        sa_chrom = parts[0]
+        if sa_chrom in region_map:
+            sa_pos = int(parts[1])
+            matched = False
+            for toy_name, rstart, rend in region_map[sa_chrom]:
+                if rstart <= sa_pos <= rend:
+                    parts[0] = toy_name
+                    parts[1] = str(max(1, sa_pos - rstart + 1))
+                    matched = True
+                    break
+            if not matched:
+                # Position not inside any toy contig — drop this entry
+                continue
+        else:
+            # Chromosome not in toy reference — drop this entry
+            continue
+        remapped.append(",".join(parts))
+
+    if not remapped:
+        return "SA:Z:*"
+    return "SA:Z:" + ";".join(remapped) + ";"
+
+
 def index_and_compress_fasta(fasta_path):
     """bgzip-compress and index a FASTA file.
 
@@ -500,17 +713,17 @@ def main():
     index_and_compress_fasta(toy_hap1)
     index_and_compress_fasta(toy_hap2)
 
-    # ── Step 5: Extract reads ───────────────────────────────────────────
-    print("Step 5: Extracting reads for selected regions", file=sys.stderr)
+    # ── Step 5: Extract reads and remap to toy reference contigs ───────
+    print("Step 5: Extracting and remapping reads to toy contigs",
+          file=sys.stderr)
     toy_reads_bam = os.path.join(args.output_dir, "toy_reads.bam")
-    extract_reads(
+    remap_reads_to_toy_contigs(
         args.cram,
         ref_regions,
         toy_reads_bam,
         reference=args.reference,
         cram_ref=args.cram_ref,
     )
-    _run(["samtools", "index", toy_reads_bam], f"Indexing {toy_reads_bam}")
 
     # ── Step 6: Write manifest ──────────────────────────────────────────
     print("Step 6: Writing manifest", file=sys.stderr)

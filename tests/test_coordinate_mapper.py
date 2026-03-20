@@ -1923,5 +1923,169 @@ class TestClassifySvGapUnit(unittest.TestCase):
         self.assertEqual(result["mapq"], 20)
 
 
+class TestBuildCigarIndex(unittest.TestCase):
+    """Tests for _build_cigar_index cumulative offset computation."""
+
+    def test_match_only(self):
+        ops = [(100, "M")]
+        idx = coordinate_mapper._build_cigar_index(ops)
+        self.assertEqual(idx["ref_cumul"], [0, 100])
+        self.assertEqual(idx["asm_cumul"], [0, 100])
+
+    def test_with_deletion(self):
+        ops = [(50, "M"), (10, "D"), (40, "M")]
+        idx = coordinate_mapper._build_cigar_index(ops)
+        # ref: 0→50→60→100   asm: 0→50→50→90
+        self.assertEqual(idx["ref_cumul"], [0, 50, 60, 100])
+        self.assertEqual(idx["asm_cumul"], [0, 50, 50, 90])
+
+    def test_with_insertion(self):
+        ops = [(50, "M"), (5, "I"), (40, "M")]
+        idx = coordinate_mapper._build_cigar_index(ops)
+        # ref: 0→50→50→90   asm: 0→50→55→95
+        self.assertEqual(idx["ref_cumul"], [0, 50, 50, 90])
+        self.assertEqual(idx["asm_cumul"], [0, 50, 55, 95])
+
+    def test_complex_cigar(self):
+        ops = [(100, "M"), (5, "D"), (200, "M"), (3, "I"), (50, "M")]
+        idx = coordinate_mapper._build_cigar_index(ops)
+        self.assertEqual(idx["ref_cumul"], [0, 100, 105, 305, 305, 355])
+        self.assertEqual(idx["asm_cumul"], [0, 100, 100, 300, 303, 353])
+
+
+class TestProjectCigarWithIndex(unittest.TestCase):
+    """Verify project_cigar produces identical results with/without index."""
+
+    def _assert_same_result(self, cigar_str, ref_start, ref_end, strand="+",
+                            asm_start=0, asm_end=1000):
+        ops = coordinate_mapper.parse_cigar(cigar_str)
+        idx = coordinate_mapper._build_cigar_index(ops)
+
+        result_linear = coordinate_mapper.project_cigar(
+            ops, ref_start, ref_end, strand, asm_start, asm_end)
+        result_indexed = coordinate_mapper.project_cigar(
+            ops, ref_start, ref_end, strand, asm_start, asm_end,
+            cigar_index=idx)
+
+        self.assertEqual(result_linear, result_indexed,
+                         f"CIGAR={cigar_str} ref=[{ref_start},{ref_end}) "
+                         f"strand={strand}")
+
+    def test_simple_match(self):
+        self._assert_same_result("500M", 100, 200)
+
+    def test_with_deletion(self):
+        self._assert_same_result("100M50D200M", 90, 160)
+
+    def test_with_insertion(self):
+        self._assert_same_result("100M10I200M", 90, 200)
+
+    def test_query_inside_deletion(self):
+        self._assert_same_result("100M50D200M", 110, 140)
+
+    def test_query_spans_deletion(self):
+        self._assert_same_result("100M50D200M", 50, 200)
+
+    def test_query_at_start(self):
+        self._assert_same_result("300M50D200M", 0, 100)
+
+    def test_query_at_end(self):
+        self._assert_same_result("300M50D200M", 400, 550)
+
+    def test_minus_strand(self):
+        self._assert_same_result("100M5D100M", 50, 150, strand="-",
+                                 asm_start=0, asm_end=200)
+
+    def test_complex_cigar_various_offsets(self):
+        cigar = "100M5D200M3I50M10D100M"
+        for start, end in [(0, 50), (95, 110), (200, 350), (300, 465)]:
+            self._assert_same_result(cigar, start, end, asm_end=500)
+
+    def test_long_cigar_deep_offset(self):
+        """Indexed path should handle queries deep into a long CIGAR."""
+        # Simulate a long CIGAR: 500 operations of M and D
+        parts = []
+        for _ in range(250):
+            parts.append("1000M")
+            parts.append("5D")
+        cigar_str = "".join(parts)
+        ops = coordinate_mapper.parse_cigar(cigar_str)
+        idx = coordinate_mapper._build_cigar_index(ops)
+
+        # Query deep into the CIGAR (operation ~400+)
+        result_linear = coordinate_mapper.project_cigar(
+            ops, 200000, 200500, "+", 0, 300000)
+        result_indexed = coordinate_mapper.project_cigar(
+            ops, 200000, 200500, "+", 0, 300000, cigar_index=idx)
+        self.assertEqual(result_linear, result_indexed)
+
+
+class TestLoadIndexPreparsesCigars(unittest.TestCase):
+    """Verify that load_index pre-parses CIGARs and builds indices."""
+
+    def test_short_cigar_preparsed_no_index(self):
+        """Short CIGARs get pre-parsed ops but no cumulative index."""
+        blocks = [{
+            "ref_chrom": "chr1",
+            "ref_start": 0,
+            "ref_end": 100,
+            "asm_chrom": "ctg1",
+            "asm_start": 0,
+            "asm_end": 100,
+            "strand": "+",
+            "mapq": 60,
+            "matches": 100,
+            "block_len": 100,
+            "cigar": "100M",
+            "tp": "",
+        }]
+        with tempfile.NamedTemporaryFile(suffix=".json.gz", delete=False) as f:
+            path = f.name
+        try:
+            coordinate_mapper.build_json_index(blocks, path)
+            idx = coordinate_mapper.load_index(path)
+            block = idx["chr1"]["blocks"][0]
+            self.assertIn("_cg_ops", block)
+            self.assertEqual(block["_cg_ops"], [(100, "M")])
+            # Short CIGAR — no cumulative index
+            self.assertNotIn("_cg_idx", block)
+        finally:
+            os.unlink(path)
+
+    def test_long_cigar_gets_index(self):
+        """Long CIGARs also get a cumulative-offset index."""
+        # Build a CIGAR with more than _CIGAR_INDEX_THRESHOLD operations
+        cigar = "".join(["10M5D"] * 40)  # 80 operations
+        blocks = [{
+            "ref_chrom": "chr1",
+            "ref_start": 0,
+            "ref_end": 600,
+            "asm_chrom": "ctg1",
+            "asm_start": 0,
+            "asm_end": 400,
+            "strand": "+",
+            "mapq": 60,
+            "matches": 400,
+            "block_len": 600,
+            "cigar": cigar,
+            "tp": "",
+        }]
+        with tempfile.NamedTemporaryFile(suffix=".json.gz", delete=False) as f:
+            path = f.name
+        try:
+            coordinate_mapper.build_json_index(blocks, path)
+            idx = coordinate_mapper.load_index(path)
+            block = idx["chr1"]["blocks"][0]
+            self.assertIn("_cg_ops", block)
+            self.assertIn("_cg_idx", block)
+            # Verify index structure
+            self.assertIn("ref_cumul", block["_cg_idx"])
+            self.assertIn("asm_cumul", block["_cg_idx"])
+            self.assertEqual(len(block["_cg_idx"]["ref_cumul"]),
+                             len(block["_cg_ops"]) + 1)
+        finally:
+            os.unlink(path)
+
+
 if __name__ == '__main__':
     unittest.main()
