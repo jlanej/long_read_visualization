@@ -218,6 +218,7 @@ class TestLoadRegions(unittest.TestCase):
                     "size": 500,
                     "genotype": "1|0",
                     "ref_region": "chr1:500-2000",
+                    "fasta_region": "chr1:900-2100",
                     "hap1_regions": ["asm1:500-2000"],
                     "hap2_regions": ["asm2:500-2000"],
                 }
@@ -236,9 +237,33 @@ class TestLoadRegions(unittest.TestCase):
         self.assertEqual(regions[0]["end"], 1500)
         self.assertEqual(regions[0]["size"], 500)
         self.assertIn("1|0", regions[0]["label"])
-        # ref_region reflects actual SV, fasta_region holds original padded value
+        # ref_region reflects actual SV; fasta_region uses explicit field
         self.assertEqual(regions[0]["ref_region"], "chr1:1000-1500")
-        self.assertEqual(regions[0]["fasta_region"], "chr1:500-2000")
+        self.assertEqual(regions[0]["fasta_region"], "chr1:900-2100")
+
+    def test_load_manifest_json_fasta_region_falls_back_to_ref_region(self):
+        """When fasta_region is absent, fallback keeps backward compatibility."""
+        manifest = {
+            "description": "test",
+            "variants": [
+                {
+                    "chrom": "chr2",
+                    "pos": 2000,
+                    "size": 400,
+                    "genotype": "1|1",
+                    "ref_region": "chr2:1500-2600",
+                    "hap1_regions": [],
+                    "hap2_regions": [],
+                }
+            ]
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json",
+                                         delete=False) as f:
+            json.dump(manifest, f)
+            f.flush()
+            regions = server_app.load_regions(f.name)
+        os.unlink(f.name)
+        self.assertEqual(regions[0]["fasta_region"], "chr2:1500-2600")
 
     def test_load_manifest_json_label_uses_sv_coords(self):
         """The region label shows actual SV coordinates, not padded ref_region."""
