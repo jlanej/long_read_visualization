@@ -434,12 +434,40 @@ standard library (igv.js is bundled in the container image).
 | **Three coordinated panels** | Reference, Haplotype 1, and Haplotype 2 — each with its own IGV.js browser instance |
 | **Synchronized navigation** | Navigate in the reference panel and both assembly panels follow via server-side coordinate translation |
 | **Region-of-interest browsing** | Load regions from a manifest JSON or SV VCF; step through them with ◀/▶ buttons or arrow keys |
+| **K-mer dot plots** | Generate interactive dot plots comparing sequences across all three panels (Ref↔Hap1, Ref↔Hap2, Hap1↔Hap2) with configurable k-mer size |
 | **BAM & CRAM support** | Reads can be loaded from BAM or CRAM files; CRAM reference sequences are resolved automatically |
 | **Long-read display mode** | Spurious small indels (≤ 3 bp) are hidden by default, matching Java IGV's third-gen display mode |
 | **Squished display** | Reads default to squished (compact) view; toggle to expanded with a single toolbar button |
+| **Read comparison** | Compare read IDs across all three panels to verify region overlap |
 | **Multi-sample support** | TSV configuration file lists multiple samples; switch between them in the UI |
 | **Byte-range HTTP** | Full support for HTTP Range requests, enabling efficient BAM/CRAM/FASTA random access |
 | **Containerized** | Runs via Apptainer with the same container image used for the pipeline — nothing extra to install |
+
+### K-mer dot plots
+
+The **Dot Plots** toolbar button opens a modal that generates pairwise k-mer
+dot plots for the sequences currently visible in all three panels:
+
+| Comparison | X-axis | Y-axis |
+|---|---|---|
+| **Hap1 vs Ref** | Reference | Haplotype 1 |
+| **Hap2 vs Ref** | Reference | Haplotype 2 |
+| **Hap1 vs Hap2** | Haplotype 1 | Haplotype 2 |
+
+Sequences are extracted from the panel reference FASTA files using `samtools
+faidx` for the currently displayed genomic window.  K-mer matches are
+classified as:
+
+- **Forward match** (blue) — identical k-mers
+- **Reverse complement** (red) — reverse-complement k-mers
+- **Palindrome** (purple) — k-mer equals its own reverse complement
+
+The k-mer size defaults to 31 and can be adjusted (1–101) in the modal.
+Larger k values reduce noise; smaller values reveal short repeats.
+
+The dot plot algorithm follows the approach described in
+[wotplot](https://github.com/fedarko/wotplot) (Fedarko, 2023. *JOSS* 8(92),
+6012. [doi:10.21105/joss.06012](https://doi.org/10.21105/joss.06012)).
 
 ### Running the server with Apptainer
 

@@ -20,6 +20,7 @@ BAM and CRAM read formats.
 | **Long-read display mode** | Spurious small indels are hidden by default (threshold ≤ 3 bp), matching Java IGV behavior |
 | **Squished display** | Reads default to squished (compact) view for better overview; toggle to expanded with one click |
 | **Byte-range HTTP** | Full support for HTTP Range requests enabling efficient BAM/CRAM random access |
+| **K-mer dot plots** | Generate pairwise dot plots comparing sequences across all three panels |
 | **Containerized** | Run via Apptainer/Docker with the same image used for the pipeline |
 
 ## Display Controls
@@ -28,6 +29,8 @@ The toolbar provides quick-access toggle buttons:
 
 - **☰ Squished / ≡ Expanded** — Switch between compact and full-height read display
 - **🧹 Hide indels / 🔍 Show indels** — Toggle suppression of spurious small indels (≤ 3 bp)
+- **📊 Compare Reads** — Compare read IDs across all three panels
+- **🔵 Dot Plots** — Generate k-mer dot plots for the currently visible regions
 - **Sync panels** — Enable/disable cross-panel coordinate synchronization
 
 ## Keyboard Shortcuts
@@ -36,6 +39,35 @@ The toolbar provides quick-access toggle buttons:
 |-----|--------|
 | `←` or `[` | Previous region |
 | `→` or `]` | Next region |
+| `Escape` | Close open modal |
+
+## K-mer Dot Plots
+
+Click **🔵 Dot Plots** in the toolbar to open the dot plot modal.
+
+1. Navigate to a region of interest in the three panels.
+2. Optionally adjust the **k-mer size** (default: 31).
+3. Click **Generate** to compute three pairwise dot plots:
+   - **Hap1 vs Reference** — the reference sequence on the x-axis and haplotype 1 on the y-axis
+   - **Hap2 vs Reference** — the reference sequence on the x-axis and haplotype 2 on the y-axis
+   - **Hap1 vs Hap2** — haplotype 1 on the x-axis and haplotype 2 on the y-axis
+
+Matches are color-coded:
+- 🟦 **Blue** — Forward match (identical k-mers)
+- 🟥 **Red** — Reverse complement match
+- 🟪 **Purple** — Palindromic match (k-mer equals its own reverse complement)
+
+A clean diagonal indicates high collinearity between the two sequences.
+Breaks, shifts, or off-diagonal clusters indicate structural differences.
+
+The algorithm follows the approach described in
+[wotplot](https://github.com/fedarko/wotplot) (Fedarko, 2023).
+
+### Dot Plots Example
+
+![Dot Plots](screenshots/04_dot_plots.png)
+
+K-mer dot plots for three pairwise sequence comparisons at a structural variant region. Forward matches (blue) along the diagonal indicate sequence collinearity; breaks or offsets reveal structural differences between haplotypes.
 
 ## Screenshots
 

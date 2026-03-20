@@ -50,6 +50,7 @@ From: ubuntu:22.04
         ca-certificates \
         python3 \
         python3-pip \
+        samtools \
     && rm -rf /var/lib/apt/lists/*
 
     mkdir -p /opt/long_read_visualization
