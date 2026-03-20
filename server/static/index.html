@@ -409,7 +409,7 @@
     <div class="modal-box">
         <button class="close-btn" id="readCompareClose" title="Close">&times;</button>
         <h2>📊 Read ID Comparison</h2>
-        <div id="readCompareBody">Analysing...</div>
+        <div id="readCompareBody">Analyzing...</div>
     </div>
 </div>
 
@@ -1268,6 +1268,7 @@
     }
 
     function renderReadCompare(refReads, hap1Reads, hap2Reads) {
+        const MAX_DISPLAYED_READS = 200;
         // Compute set categories
         const all3 = [];
         const refHap1Only = [];
@@ -1318,8 +1319,8 @@
             </tr>`;
             if (r.reads.length > 0) {
                 const sorted = r.reads.slice().sort();
-                const preview = sorted.slice(0, 200).join("\n");
-                const more = sorted.length > 200 ? `\n… and ${sorted.length - 200} more` : "";
+                const preview = sorted.slice(0, MAX_DISPLAYED_READS).join("\n");
+                const more = sorted.length > MAX_DISPLAYED_READS ? `\n… and ${sorted.length - MAX_DISPLAYED_READS} more` : "";
                 html += `<tr><td colspan="2">
                     <details><summary>Show read names</summary>
                     <div class="read-list">${escapeHtml(preview + more)}</div>
@@ -1343,7 +1344,7 @@
 
     compareReadsBtn.addEventListener("click", async () => {
         readCompareModal.classList.remove("hidden");
-        readCompareBody.innerHTML = "Collecting read IDs from all panels…";
+        readCompareBody.innerHTML = "Analyzing read IDs from all panels…";
         try {
             const [refReads, hap1Reads, hap2Reads] = await Promise.all([
                 collectReadNames(refBrowser),
