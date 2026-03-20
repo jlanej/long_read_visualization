@@ -282,7 +282,7 @@
     let displaySquished = true;          // default: squished (compact)
     let hideSmallIndels = true;          // default: hide spurious indels (long-read mode)
     let opGeneration = 0;               // increments on sample/region change to invalidate stale ops
-    const REGION_BUFFER_MULTIPLIER = 0.5; // buffer = 0.5 × SV event size on each side
+    const REGION_BUFFER_MULTIPLIER = 5;   // buffer = 5 × SV event size on each side (~4.1 kb for an 834 bp SV)
     const MIN_REGION_BUFFER = 1000;       // minimum buffer so tiny regions still show context
     // No MAX_REGION_BUFFER — buffer is fully dynamic, proportional to the SV event size.
 
@@ -704,9 +704,30 @@
     // Compute a buffered reference-panel locus for a region.
     // The buffer is proportional to the SV event size (region.size) so that
     // the view widens with larger events — no static maximum cap.
+    //
+    // When region.fasta_region is set the ref_region is a padded subregion
+    // FASTA sequence name (toy-dataset style, e.g. "chr1:9319383-9349426").
+    // In that case we navigate directly to the fasta_region string so that
+    // IGV falls back to treating the full string as the chromosome name and
+    // locates the toy FASTA sequence correctly.
+    //
     // Returns { locus, viewWidth } where viewWidth is the bp span of the
     // buffered view — used to size visibilityWindow on all tracks.
     function computeBufferedLocus(region) {
+        // Toy-dataset case: fasta_region is the FASTA sequence name (e.g.
+        // "chr1:9319383-9349426").  Navigate directly to it without adding
+        // extra buffer so IGV can match the full string as the chromosome.
+        if (region.fasta_region) {
+            const fm = region.fasta_region.match(/^(.+):(\d+)-(\d+)$/);
+            if (fm) {
+                const fastaSpan = parseInt(fm[3], 10) - parseInt(fm[2], 10);
+                return {
+                    locus: region.fasta_region,
+                    viewWidth: fastaSpan,
+                };
+            }
+        }
+
         let refChrom, refStart, refEnd;
         if (region.ref_region) {
             const m = region.ref_region.match(/^(.+):(\d+)-(\d+)$/);

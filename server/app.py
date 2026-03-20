@@ -189,26 +189,53 @@ def load_regions(regions_path):
 
 
 def _load_manifest_regions(path):
-    """Load regions from a toy_manifest.json-style file."""
+    """Load regions from a toy_manifest.json-style file.
+
+    Each variant entry must have at minimum ``chrom``, ``pos``, and
+    ``size``.  The ``ref_region`` field stored in the manifest is kept
+    as ``fasta_region`` -- it identifies the reference FASTA sequence
+    used for the toy dataset (e.g. "chr1:9319383-9349426" as a
+    chromosome name in toy_reference.fa.gz).  The ``ref_region`` field
+    in the returned dict is set to the *actual* unpadded SV region
+    "chrom:pos-(pos+size)" so that the client can add the correct
+    proportional buffer without double-padding.
+    """
     with open(path) as fh:
         data = json.load(fh)
     regions = []
     for v in data.get("variants", []):
         chrom = v["chrom"]
-        ref_region = v.get("ref_region", "")
-        # Parse start/end from ref_region  "chr1:9279383-9389426"
-        m = re.match(r"(.+):(\d+)-(\d+)", ref_region)
-        start = int(m.group(2)) if m else v.get("pos", 0)
-        end = int(m.group(3)) if m else start + v.get("size", 1000)
-        size = v.get("size", end - start)
+        manifest_ref_region = v.get("ref_region", "")
+        pos = v.get("pos")
+        size = v.get("size", 0)
         gt = v.get("genotype", "?")
-        label = f"{chrom}:{start}-{end} ({_format_size(size)}, {gt})"
+
+        if pos is not None and size is not None:
+            sv_start = pos
+            sv_end = pos + size
+        else:
+            # Fall back to parsing ref_region coordinates
+            m = re.match(r"(.+):(\d+)-(\d+)", manifest_ref_region)
+            sv_start = int(m.group(2)) if m else v.get("pos", 0)
+            sv_end = int(m.group(3)) if m else sv_start + size
+            size = v.get("size", sv_end - sv_start)
+
+        label = f"{chrom}:{sv_start}-{sv_end} ({_format_size(size)}, {gt})"
+
+        # fasta_region: the original manifest ref_region, which for toy
+        # datasets is the FASTA sequence name (a padded subregion string
+        # like "chr1:9319383-9349426").  The client uses this to navigate
+        # directly to the toy reference sequence by its full name rather
+        # than looking up "chr1" which does not exist in the toy FASTA.
+        fasta_region = manifest_ref_region if manifest_ref_region else None
+
         regions.append({
             "label": label,
             "chrom": chrom,
-            "start": start,
-            "end": end,
-            "ref_region": ref_region,
+            "start": sv_start,
+            "end": sv_end,
+            "ref_region": f"{chrom}:{sv_start}-{sv_end}",
+            "fasta_region": fasta_region,
             "hap1_regions": v.get("hap1_regions", []),
             "hap2_regions": v.get("hap2_regions", []),
             "genotype": gt,
@@ -218,7 +245,14 @@ def _load_manifest_regions(path):
 
 
 def _load_vcf_regions(path, padding=50000, min_size=500):
-    """Load SV deletion regions from a VCF file."""
+    """Load SV deletion regions from a VCF file.
+
+    The ``padding`` parameter is no longer baked into the stored
+    ``ref_region`` / ``start`` / ``end`` fields.  Buffering is now
+    done entirely by the client (``computeBufferedLocus``) so that the
+    view width scales dynamically with the SV event size.  The parameter
+    is kept for API compatibility but is unused.
+    """
     open_fn = gzip.open if path.endswith(".gz") else open
     regions = []
     with open_fn(path, "rt") as fh:
@@ -247,8 +281,6 @@ def _load_vcf_regions(path, padding=50000, min_size=500):
                 continue
 
             end = pos + sv_len
-            padded_start = max(0, pos - padding)
-            padded_end = end + padding
 
             # Parse genotype if available
             gt = ""
@@ -264,9 +296,9 @@ def _load_vcf_regions(path, padding=50000, min_size=500):
             regions.append({
                 "label": label,
                 "chrom": chrom,
-                "start": padded_start,
-                "end": padded_end,
-                "ref_region": f"{chrom}:{padded_start}-{padded_end}",
+                "start": pos,
+                "end": end,
+                "ref_region": f"{chrom}:{pos}-{end}",
                 "hap1_regions": [],
                 "hap2_regions": [],
                 "genotype": gt,
