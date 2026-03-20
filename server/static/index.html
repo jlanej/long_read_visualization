@@ -392,7 +392,7 @@
         }
 
         // Helper: build an alignment track for reads (BAM or CRAM)
-        function makeReadTrack(name, bamUrl, cramUrl, panelRefUrl, opts) {
+        function makeReadTrack(name, bamUrl, cramUrl, opts) {
             // If bamUrl actually points to a CRAM file, treat it as CRAM
             if (bamUrl && bamUrl.endsWith('.cram')) {
                 cramUrl = cramUrl || bamUrl;
@@ -471,7 +471,6 @@
             "Reads → Ref",
             config.tracks.reads_bam,
             config.tracks.reads_cram,
-            config.reference.fastaURL,
             {}
         );
         if (readsRefTrack) refOpts.tracks.push(readsRefTrack);
@@ -503,7 +502,6 @@
             "Reads → Hap1",
             config.tracks.reads_to_hap1_bam,
             config.tracks.reads_to_hap1_cram,
-            config.hap1_assembly.fastaURL,
             {}
         );
         if (readsHap1Track) hap1Opts.tracks.push(readsHap1Track);
@@ -531,7 +529,6 @@
             "Reads → Hap2",
             config.tracks.reads_to_hap2_bam,
             config.tracks.reads_to_hap2_cram,
-            config.hap2_assembly.fastaURL,
             {}
         );
         if (readsHap2Track) hap2Opts.tracks.push(readsHap2Track);

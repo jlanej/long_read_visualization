@@ -180,14 +180,7 @@ def _check_cram_ur_paths(cram_path):
                         missing.append(ur)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
-    # Deduplicate while preserving order
-    seen = set()
-    unique = []
-    for p in missing:
-        if p not in seen:
-            seen.add(p)
-            unique.append(p)
-    return unique
+    return list(dict.fromkeys(missing))
 
 
 def validate_sample(row):
