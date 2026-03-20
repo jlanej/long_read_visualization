@@ -1,0 +1,31 @@
+{
+    "name": "Long Read Visualization",
+
+    // Use the pre-built image so no Docker build is needed on Codespace creation.
+    // The image includes minimap2, samtools/htslib, and all pipeline dependencies.
+    "image": "ghcr.io/jlanej/long_read_visualization:main",
+
+    // Forward the visualization server port to the browser.
+    "forwardPorts": [8080],
+    "portsAttributes": {
+        "8080": {
+            "label": "Visualization Server",
+            "onAutoForward": "openBrowserOnce"
+        }
+    },
+
+    // One-time setup: run the toy-dataset preprocessing pipeline and generate
+    // the server config (takes ~3 minutes; skipped on subsequent restarts).
+    "postCreateCommand": "bash .devcontainer/on_create.sh",
+
+    // Start the visualization server every time the Codespace starts/restarts.
+    "postStartCommand": "bash .devcontainer/on_start.sh",
+
+    "customizations": {
+        "vscode": {
+            "extensions": ["ms-python.python"]
+        }
+    },
+
+    "remoteUser": "root"
+}

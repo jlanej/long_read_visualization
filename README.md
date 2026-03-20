@@ -65,6 +65,32 @@ filename (everything before the first `.`): `NA21110.t2t.cram` → `NA21110`.
 
 ## Quick start
 
+### With GitHub Codespaces (no local setup required)
+
+The easiest way to explore the toy dataset is via
+[GitHub Codespaces](https://github.com/features/codespaces) — a cloud
+development environment that anyone with a GitHub account can launch directly
+from the repository page.
+
+1. Click **Code → Codespaces → Create codespace on main** at the top of this
+   page.
+2. Wait for the environment to finish setting up (**~3–5 minutes** on first
+   launch; the preprocessing pipeline runs automatically in the background).
+3. When the **Ports** panel shows port **8080** as forwarded, click
+   **Open in Browser** to view the visualization.
+
+The codespace runs the full preprocessing pipeline on the bundled toy dataset
+(40 deletion SVs from NA21110) and starts the server automatically.  On
+subsequent starts the preprocessing is skipped and the server is ready in
+seconds.
+
+> **Note:** Codespace minutes are included for free on all GitHub plans.
+> The environment uses the pre-built container image from GHCR
+> (`ghcr.io/jlanej/long_read_visualization:main`), so no Docker build is
+> required.
+
+---
+
 ### With Apptainer (recommended for HPC)
 
 Run from the **parent directory** that contains the sample folder. The
