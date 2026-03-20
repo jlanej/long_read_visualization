@@ -282,9 +282,9 @@
     let displaySquished = true;          // default: squished (compact)
     let hideSmallIndels = true;          // default: hide spurious indels (long-read mode)
     let opGeneration = 0;               // increments on sample/region change to invalidate stale ops
-    const REGION_BUFFER_MULTIPLIER = 5;  // zoom out to region ± N× region-size
-    const MIN_REGION_BUFFER = 1000;      // minimum buffer so tiny regions still show context
-    const MAX_REGION_BUFFER = 2085;      // cap buffer so view stays ~4170 bp wide (reads stay visible)
+    const REGION_BUFFER_MULTIPLIER = 0.5; // buffer = 0.5 × SV event size on each side
+    const MIN_REGION_BUFFER = 1000;       // minimum buffer so tiny regions still show context
+    // No MAX_REGION_BUFFER — buffer is fully dynamic, proportional to the SV event size.
 
     // ── DOM refs ────────────────────────────────────────────────────────────
     const sampleSelect = document.getElementById("sampleSelect");
@@ -701,8 +701,9 @@
 
     // ── Region navigation ───────────────────────────────────────────────────
 
-    // Compute a buffered reference-panel locus for a region, capped so that
-    // large SVs don't create multi-megabase views that crash the browser.
+    // Compute a buffered reference-panel locus for a region.
+    // The buffer is proportional to the SV event size (region.size) so that
+    // the view widens with larger events — no static maximum cap.
     // Returns { locus, viewWidth } where viewWidth is the bp span of the
     // buffered view — used to size visibilityWindow on all tracks.
     function computeBufferedLocus(region) {
@@ -720,8 +721,12 @@
             refStart = parseInt(region.start, 10);
             refEnd = parseInt(region.end, 10);
         }
-        const regionSize = refEnd - refStart;
-        const buffer = Math.min(Math.max(regionSize * REGION_BUFFER_MULTIPLIER, MIN_REGION_BUFFER), MAX_REGION_BUFFER);
+        // Use the SV event size (displayed in the region navigator) as the
+        // basis for the buffer, falling back to the ref-region span.
+        // No maximum cap — the view intentionally scales with the event so
+        // that reads spanning both breakpoints remain visible for any SV size.
+        const svSize = region.size || (refEnd - refStart);
+        const buffer = Math.max(svSize * REGION_BUFFER_MULTIPLIER, MIN_REGION_BUFFER);
         const bufferedStart = Math.max(0, refStart - buffer);
         const bufferedEnd = refEnd + buffer;
         return {
