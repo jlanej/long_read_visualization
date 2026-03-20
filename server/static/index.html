@@ -284,7 +284,7 @@
     let opGeneration = 0;               // increments on sample/region change to invalidate stale ops
     const REGION_BUFFER_MULTIPLIER = 5;  // zoom out to region ± N× region-size
     const MIN_REGION_BUFFER = 1000;      // minimum buffer so tiny regions still show context
-    const MAX_REGION_BUFFER = 50000;     // cap buffer so large SVs don't create MB-wide views
+    const MAX_REGION_BUFFER = 2085;      // cap buffer so view stays ~4170 bp wide (reads stay visible)
 
     // ── DOM refs ────────────────────────────────────────────────────────────
     const sampleSelect = document.getElementById("sampleSelect");
