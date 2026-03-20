@@ -283,6 +283,8 @@
     let hideSmallIndels = true;          // default: hide spurious indels (long-read mode)
     let opGeneration = 0;               // increments on sample/region change to invalidate stale ops
     const REGION_BUFFER_MULTIPLIER = 5;  // zoom out to region ± N× region-size
+    const MIN_REGION_BUFFER = 1000;      // minimum buffer so tiny regions still show context
+    const MAX_REGION_BUFFER = 50000;     // cap buffer so large SVs don't create MB-wide views
 
     // ── DOM refs ────────────────────────────────────────────────────────────
     const sampleSelect = document.getElementById("sampleSelect");
@@ -437,7 +439,6 @@
                 hideSmallIndels: hideSmallIndels,
                 smallIndelThreshold: 3,
                 colorBy: "strand",
-                visibilityWindow: 30000,
                 ...opts,
             };
             // CRAM files require a reference FASTA for decoding.
@@ -471,7 +472,6 @@
                 showSoftClips: false,
                 hideSmallIndels: hideSmallIndels,
                 smallIndelThreshold: 3,
-                visibilityWindow: 1000000,
             };
         }
 
@@ -559,6 +559,26 @@
         // Ref → Hap2
         const refHap2Track = makeAssemblyTrack("Ref → Hap2", config.tracks.ref_to_hap2_bam, "#2196F3");
         if (refHap2Track) hap2Opts.tracks.push(refHap2Track);
+
+        // Pre-set initial loci and visibilityWindow from the first region so
+        // browsers load the correct data immediately instead of the default
+        // whole-chromosome view (~100 kb).  The visibilityWindow is derived
+        // from the buffered view width so tracks only load what is displayed.
+        if (regions.length > 0) {
+            const r0 = regions[0];
+            const { locus: r0Locus, viewWidth: r0Width } = computeBufferedLocus(r0);
+            refOpts.locus = r0Locus;
+            if (r0.hap1_regions && r0.hap1_regions.length > 0)
+                hap1Opts.locus = r0.hap1_regions[0];
+            if (r0.hap2_regions && r0.hap2_regions.length > 0)
+                hap2Opts.locus = r0.hap2_regions[0];
+            // Apply region-derived visibilityWindow to every track in every panel
+            for (const opts of [refOpts, hap1Opts, hap2Opts]) {
+                for (const t of opts.tracks) {
+                    t.visibilityWindow = r0Width;
+                }
+            }
+        }
 
         // Create all three browsers
         console.log("[LRV] Creating IGV browsers...");
@@ -680,6 +700,47 @@
     }
 
     // ── Region navigation ───────────────────────────────────────────────────
+
+    // Compute a buffered reference-panel locus for a region, capped so that
+    // large SVs don't create multi-megabase views that crash the browser.
+    // Returns { locus, viewWidth } where viewWidth is the bp span of the
+    // buffered view — used to size visibilityWindow on all tracks.
+    function computeBufferedLocus(region) {
+        let refChrom, refStart, refEnd;
+        if (region.ref_region) {
+            const m = region.ref_region.match(/^(.+):(\d+)-(\d+)$/);
+            if (m) {
+                refChrom = m[1];
+                refStart = parseInt(m[2], 10);
+                refEnd = parseInt(m[3], 10);
+            }
+        }
+        if (!refChrom) {
+            refChrom = region.chrom;
+            refStart = parseInt(region.start, 10);
+            refEnd = parseInt(region.end, 10);
+        }
+        const regionSize = refEnd - refStart;
+        const buffer = Math.min(Math.max(regionSize * REGION_BUFFER_MULTIPLIER, MIN_REGION_BUFFER), MAX_REGION_BUFFER);
+        const bufferedStart = Math.max(0, refStart - buffer);
+        const bufferedEnd = refEnd + buffer;
+        return {
+            locus: `${refChrom}:${bufferedStart}-${bufferedEnd}`,
+            viewWidth: bufferedEnd - bufferedStart,
+        };
+    }
+
+    // Update visibilityWindow on every track in every panel to match the
+    // current displayed region, so tracks load exactly what is shown.
+    function setVisibilityWindow(width) {
+        for (const browser of [refBrowser, hap1Browser, hap2Browser]) {
+            if (!browser) continue;
+            for (const tv of browser.trackViews || []) {
+                if (tv.track) tv.track.visibilityWindow = width;
+            }
+        }
+    }
+
     function populateRegions() {
         regionSelect.innerHTML = "";
         if (regions.length === 0) {
@@ -712,27 +773,11 @@
         const gen = opGeneration;
         translating = true;
         try {
-            // Navigate reference panel to the region with 5x buffer on each side.
-            // Parse the region coordinates, from the explicit ref_region or chrom:start-end.
-            let refChrom, refStart, refEnd;
-            if (region.ref_region) {
-                const m = region.ref_region.match(/^(.+):(\d+)-(\d+)$/);
-                if (m) {
-                    refChrom = m[1];
-                    refStart = parseInt(m[2], 10);
-                    refEnd = parseInt(m[3], 10);
-                }
-            }
-            if (!refChrom) {
-                refChrom = region.chrom;
-                refStart = parseInt(region.start, 10);
-                refEnd = parseInt(region.end, 10);
-            }
-            const regionSize = refEnd - refStart;
-            const buffer = regionSize * REGION_BUFFER_MULTIPLIER;
-            const bufferedStart = Math.max(0, refStart - buffer);
-            const bufferedEnd = refEnd + buffer;
-            const refLocus = `${refChrom}:${bufferedStart}-${bufferedEnd}`;
+            // Navigate reference panel to the region with a capped buffer on each side.
+            // Derive visibilityWindow from the buffered view width so every track
+            // loads exactly what is displayed, no more.
+            const { locus: refLocus, viewWidth } = computeBufferedLocus(region);
+            setVisibilityWindow(viewWidth);
             if (refBrowser) {
                 await refBrowser.search(refLocus);
                 if (gen !== opGeneration) return;
