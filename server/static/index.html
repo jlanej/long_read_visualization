@@ -311,6 +311,114 @@
         line-height: 1.4;
     }
 
+    /* ── Dot Plot modal ────────────────────────────────────────────────── */
+    .dotplot-modal .modal-box {
+        min-width: 320px;
+        max-width: 95vw;
+        width: 1100px;
+        max-height: 92vh;
+    }
+    .dotplot-controls {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 14px;
+        flex-wrap: wrap;
+    }
+    .dotplot-controls label {
+        font-size: 12px;
+        color: var(--text-muted);
+        font-weight: 500;
+    }
+    .dotplot-controls input[type="number"] {
+        width: 64px;
+        font-size: 12px;
+        padding: 3px 6px;
+        border-radius: 4px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--text);
+    }
+    .dotplot-controls button {
+        font-size: 11px;
+        padding: 4px 12px;
+        border-radius: 4px;
+        border: 1px solid var(--border);
+        background: var(--accent);
+        color: #fff;
+        cursor: pointer;
+        font-weight: 500;
+    }
+    .dotplot-controls button:hover {
+        background: var(--accent-active);
+    }
+    .dotplot-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 12px;
+    }
+    @media (max-width: 900px) {
+        .dotplot-grid { grid-template-columns: 1fr; }
+    }
+    .dotplot-cell {
+        background: var(--surface);
+        border: 1px solid var(--border-light);
+        border-radius: 6px;
+        padding: 8px;
+        text-align: center;
+    }
+    .dotplot-cell h3 {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text);
+        margin-bottom: 6px;
+    }
+    .dotplot-cell canvas {
+        display: block;
+        margin: 0 auto;
+        border: 1px solid var(--border-light);
+        border-radius: 2px;
+        background: #fff;
+        max-width: 100%;
+        height: auto;
+    }
+    .dotplot-cell .dotplot-info {
+        font-size: 10px;
+        color: var(--text-muted);
+        margin-top: 4px;
+    }
+    .dotplot-legend {
+        display: flex;
+        justify-content: center;
+        gap: 16px;
+        margin-top: 10px;
+        font-size: 11px;
+        color: var(--text-muted);
+    }
+    .dotplot-legend-item {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+    .dotplot-legend-swatch {
+        width: 12px;
+        height: 12px;
+        border-radius: 2px;
+        border: 1px solid var(--border);
+    }
+    .dotplot-citation {
+        font-size: 10px;
+        color: var(--text-muted);
+        margin-top: 10px;
+        text-align: center;
+        line-height: 1.4;
+    }
+    .dotplot-citation a {
+        color: var(--accent);
+        text-decoration: none;
+    }
+    .dotplot-citation a:hover { text-decoration: underline; }
+
     /* ── Loading overlay ─────────────────────────────────────────────────── */
     .loading {
         position: fixed;
@@ -374,6 +482,9 @@
         <button id="compareReads" class="toolbar-btn" title="Compare read IDs across all three panels">
             <span class="btn-icon">📊</span> Compare Reads
         </button>
+        <button id="dotPlotBtn" class="toolbar-btn" title="Generate k-mer dot plots comparing sequences across panels">
+            <span class="btn-icon">🔵</span> Dot Plots
+        </button>
     </div>
 </div>
 
@@ -410,6 +521,26 @@
         <button class="close-btn" id="readCompareClose" title="Close">&times;</button>
         <h2>📊 Read ID Comparison</h2>
         <div id="readCompareBody">Analyzing...</div>
+    </div>
+</div>
+
+<!-- Dot Plot modal -->
+<div class="modal-backdrop hidden dotplot-modal" id="dotPlotModal">
+    <div class="modal-box">
+        <button class="close-btn" id="dotPlotClose" title="Close">&times;</button>
+        <h2>🔵 K-mer Dot Plots</h2>
+        <div class="dotplot-controls">
+            <label>K-mer size:</label>
+            <input type="number" id="dotPlotK" value="31" min="1" max="101" step="2">
+            <button id="dotPlotRun">Generate</button>
+            <span id="dotPlotStatus" style="font-size:11px;color:var(--text-muted)"></span>
+        </div>
+        <div id="dotPlotBody">
+            <p style="font-size:12px;color:var(--text-muted)">
+                Click <strong>Generate</strong> to compute dot plots for the
+                currently visible regions in all three panels.
+            </p>
+        </div>
     </div>
 </div>
 
@@ -461,6 +592,13 @@
     const hap2Panel = document.querySelector(".panel.hap2");
     const splitterRefHap1 = document.getElementById("splitter-ref-hap1");
     const splitterHap1Hap2 = document.getElementById("splitter-hap1-hap2");
+    const dotPlotBtn = document.getElementById("dotPlotBtn");
+    const dotPlotModal = document.getElementById("dotPlotModal");
+    const dotPlotClose = document.getElementById("dotPlotClose");
+    const dotPlotBody = document.getElementById("dotPlotBody");
+    const dotPlotKInput = document.getElementById("dotPlotK");
+    const dotPlotRunBtn = document.getElementById("dotPlotRun");
+    const dotPlotStatus = document.getElementById("dotPlotStatus");
 
     // ── Helpers ─────────────────────────────────────────────────────────────
     function setStatus(msg) { statusBar.textContent = msg; }
@@ -1371,12 +1509,307 @@
         if (e.target === readCompareModal) readCompareModal.classList.add("hidden");
     });
 
+    // ── Dot Plot ────────────────────────────────────────────────────────────
+
+    // Colour palette following wotplot conventions (Fedarko 2023).
+    // Forward matches in blue, RC in red, palindromes in dark purple.
+    const DOTPLOT_COLORS = {
+        forward: "#2563eb",       // blue-600
+        reverse: "#dc2626",       // red-600
+        palindrome: "#7c3aed",    // violet-600
+    };
+
+    // Canvas rendering size (CSS pixels).  Actual backing pixels use
+    // devicePixelRatio for crispness on high-DPI displays.
+    const DOTPLOT_CANVAS_SIZE = 320;
+
+    function getBrowserLocus(browser) {
+        if (!browser) return null;
+        const rf = browser.referenceFrameList && browser.referenceFrameList[0];
+        if (!rf) return null;
+        const chr = rf.chr;
+        const start = Math.round(rf.start);
+        const end = Math.round(rf.end);
+        if (!chr || !Number.isFinite(start) || !Number.isFinite(end)) return null;
+        return `${chr}:${start}-${end}`;
+    }
+
+    function renderDotPlotCanvas(canvas, data, xLabel, yLabel) {
+        /**
+         * Render a single dot plot onto an HTML5 Canvas element.
+         *
+         * Layout:
+         *   ┌──────────────────────────────────────┐
+         *   │  margin-top (axis label space)        │
+         *   │   ┌─────────────────────────────┐     │
+         *   │   │       dot plot area          │     │
+         *   │   │                              │     │
+         *   │   │                              │     │
+         *   │   │                              │     │
+         *   │   └─────────────────────────────┘     │
+         *   │  margin-bottom (x-axis ticks)         │
+         *   └──────────────────────────────────────┘
+         */
+        const dpr = window.devicePixelRatio || 1;
+        const cssSize = DOTPLOT_CANVAS_SIZE;
+        const margin = { top: 6, right: 6, bottom: 42, left: 50 };
+        const totalW = cssSize;
+        const totalH = cssSize;
+        const plotW = totalW - margin.left - margin.right;
+        const plotH = totalH - margin.top - margin.bottom;
+
+        canvas.style.width = totalW + "px";
+        canvas.style.height = totalH + "px";
+        canvas.width = totalW * dpr;
+        canvas.height = totalH * dpr;
+
+        const ctx = canvas.getContext("2d");
+        ctx.scale(dpr, dpr);
+        ctx.clearRect(0, 0, totalW, totalH);
+
+        // Background for plot area
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(margin.left, margin.top, plotW, plotH);
+
+        const s1Len = data.seq1_len;
+        const s2Len = data.seq2_len;
+
+        if (s1Len === 0 || s2Len === 0) {
+            ctx.fillStyle = "#9ca3af";
+            ctx.font = "11px -apple-system, sans-serif";
+            ctx.textAlign = "center";
+            ctx.fillText("No sequence data", totalW / 2, totalH / 2);
+            return;
+        }
+
+        // Scale factors: x-axis is seq1 (horizontal), y-axis is seq2 (vertical, top-to-bottom)
+        const xScale = plotW / s1Len;
+        const yScale = plotH / s2Len;
+
+        // Determine marker size based on data density
+        const maxDim = Math.max(s1Len, s2Len);
+        let markerSize;
+        if (maxDim < 1000) markerSize = 2.5;
+        else if (maxDim < 10000) markerSize = 1.5;
+        else if (maxDim < 50000) markerSize = 0.8;
+        else markerSize = 0.4;
+
+        // Draw matches (back-to-front: palindromes first, then RC, then forward)
+        const layers = [
+            { key: "palindrome", color: DOTPLOT_COLORS.palindrome },
+            { key: "reverse",    color: DOTPLOT_COLORS.reverse },
+            { key: "forward",    color: DOTPLOT_COLORS.forward },
+        ];
+        for (const layer of layers) {
+            const pts = data[layer.key];
+            if (!pts || pts.length === 0) continue;
+            ctx.fillStyle = layer.color;
+            ctx.globalAlpha = 0.6;
+            for (let i = 0; i < pts.length; i++) {
+                const px = margin.left + pts[i][0] * xScale;
+                const py = margin.top + pts[i][1] * yScale;
+                ctx.fillRect(px, py, Math.max(markerSize, xScale), Math.max(markerSize, yScale));
+            }
+        }
+        ctx.globalAlpha = 1.0;
+
+        // Plot border
+        ctx.strokeStyle = "#d1d5db";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(margin.left, margin.top, plotW, plotH);
+
+        // Axis ticks and labels
+        ctx.fillStyle = "#6b7280";
+        ctx.strokeStyle = "#d1d5db";
+        ctx.lineWidth = 0.5;
+        ctx.font = "9px -apple-system, sans-serif";
+
+        // X-axis ticks (seq1)
+        const nTicks = 5;
+        ctx.textAlign = "center";
+        for (let t = 0; t <= nTicks; t++) {
+            const frac = t / nTicks;
+            const px = margin.left + frac * plotW;
+            const val = Math.round(frac * s1Len);
+            // Tick mark
+            ctx.beginPath();
+            ctx.moveTo(px, margin.top + plotH);
+            ctx.lineTo(px, margin.top + plotH + 4);
+            ctx.stroke();
+            // Label
+            ctx.fillText(_formatBpLabel(val), px, margin.top + plotH + 14);
+        }
+
+        // Y-axis ticks (seq2)
+        ctx.textAlign = "right";
+        for (let t = 0; t <= nTicks; t++) {
+            const frac = t / nTicks;
+            const py = margin.top + frac * plotH;
+            const val = Math.round(frac * s2Len);
+            ctx.beginPath();
+            ctx.moveTo(margin.left, py);
+            ctx.lineTo(margin.left - 4, py);
+            ctx.stroke();
+            ctx.fillText(_formatBpLabel(val), margin.left - 6, py + 3);
+        }
+
+        // Axis titles
+        ctx.fillStyle = "#374151";
+        ctx.font = "bold 9px -apple-system, sans-serif";
+        // X-axis title
+        ctx.textAlign = "center";
+        const xTitle = _truncLabel(xLabel, 40);
+        ctx.fillText(xTitle, margin.left + plotW / 2, totalH - 2);
+        // Y-axis title (rotated)
+        ctx.save();
+        ctx.translate(10, margin.top + plotH / 2);
+        ctx.rotate(-Math.PI / 2);
+        ctx.textAlign = "center";
+        const yTitle = _truncLabel(yLabel, 40);
+        ctx.fillText(yTitle, 0, 0);
+        ctx.restore();
+    }
+
+    function _formatBpLabel(bp) {
+        if (bp >= 1000000) return (bp / 1000000).toFixed(1) + "M";
+        if (bp >= 1000) return (bp / 1000).toFixed(1) + "k";
+        return String(bp);
+    }
+
+    function _truncLabel(s, maxLen) {
+        if (!s) return "";
+        return s.length > maxLen ? s.slice(0, maxLen - 1) + "…" : s;
+    }
+
+    function renderDotPlots(result) {
+        const html = [];
+        html.push('<div class="dotplot-grid">');
+
+        const comparisons = [
+            { key: "hap1_vs_ref",  title: "Hap1 vs Reference",    xLabel: result.labels.ref,  yLabel: result.labels.hap1 },
+            { key: "hap2_vs_ref",  title: "Hap2 vs Reference",    xLabel: result.labels.ref,  yLabel: result.labels.hap2 },
+            { key: "hap1_vs_hap2", title: "Hap1 vs Hap2",         xLabel: result.labels.hap1, yLabel: result.labels.hap2 },
+        ];
+
+        for (const c of comparisons) {
+            const d = result[c.key];
+            const total = (d.forward?.length || 0) + (d.reverse?.length || 0) + (d.palindrome?.length || 0);
+            const trunc = d.truncated ? ' <span style="color:#dc2626">(truncated)</span>' : "";
+            html.push(`<div class="dotplot-cell">
+                <h3>${escapeHtml(c.title)}</h3>
+                <canvas id="dp_${c.key}" width="320" height="320"></canvas>
+                <div class="dotplot-info">
+                    ${_formatBpLabel(d.seq1_len)} × ${_formatBpLabel(d.seq2_len)} &nbsp;|&nbsp;
+                    ${total.toLocaleString()} matches (k=${result.k})${trunc}
+                </div>
+            </div>`);
+        }
+
+        html.push("</div>");
+        // Legend
+        html.push(`<div class="dotplot-legend">
+            <div class="dotplot-legend-item">
+                <div class="dotplot-legend-swatch" style="background:${DOTPLOT_COLORS.forward}"></div>
+                Forward match
+            </div>
+            <div class="dotplot-legend-item">
+                <div class="dotplot-legend-swatch" style="background:${DOTPLOT_COLORS.reverse}"></div>
+                Reverse complement
+            </div>
+            <div class="dotplot-legend-item">
+                <div class="dotplot-legend-swatch" style="background:${DOTPLOT_COLORS.palindrome}"></div>
+                Palindrome
+            </div>
+        </div>`);
+        // Citation
+        html.push(`<div class="dotplot-citation">
+            Dot plot algorithm based on
+            <a href="https://github.com/fedarko/wotplot" target="_blank" rel="noopener">wotplot</a>
+            (Fedarko, 2023.
+            <a href="https://doi.org/10.21105/joss.06012" target="_blank" rel="noopener">JOSS 8(92), 6012</a>).
+        </div>`);
+
+        dotPlotBody.innerHTML = html.join("\n");
+
+        // Render canvases after DOM insertion
+        for (const c of comparisons) {
+            const canvas = document.getElementById("dp_" + c.key);
+            if (canvas) renderDotPlotCanvas(canvas, result[c.key], c.xLabel, c.yLabel);
+        }
+    }
+
+    async function runDotPlot() {
+        if (!currentSample) {
+            dotPlotBody.innerHTML = "<p>No sample loaded.</p>";
+            return;
+        }
+
+        const refLocus = getBrowserLocus(refBrowser);
+        const hap1Locus = getBrowserLocus(hap1Browser);
+        const hap2Locus = getBrowserLocus(hap2Browser);
+
+        if (!refLocus && !hap1Locus && !hap2Locus) {
+            dotPlotBody.innerHTML = "<p>Navigate to a region first.</p>";
+            return;
+        }
+
+        const k = parseInt(dotPlotKInput.value, 10) || 31;
+        dotPlotStatus.textContent = "Computing…";
+        dotPlotRunBtn.disabled = true;
+
+        try {
+            const params = new URLSearchParams({
+                sample: currentSample.sample_id,
+                k: String(k),
+            });
+            if (refLocus) params.set("ref", refLocus);
+            if (hap1Locus) params.set("hap1", hap1Locus);
+            if (hap2Locus) params.set("hap2", hap2Locus);
+
+            const resp = await fetch("/api/dotplot?" + params.toString());
+            const result = await resp.json();
+
+            if (result.error) {
+                dotPlotBody.innerHTML = `<p>Error: ${escapeHtml(result.error)}</p>`;
+                dotPlotStatus.textContent = "Error";
+            } else {
+                renderDotPlots(result);
+                dotPlotStatus.textContent = "Done";
+            }
+        } catch (err) {
+            dotPlotBody.innerHTML = `<p>Error: ${escapeHtml(err.message)}</p>`;
+            dotPlotStatus.textContent = "Error";
+            console.error("[LRV] Dot plot error:", err);
+        } finally {
+            dotPlotRunBtn.disabled = false;
+        }
+    }
+
+    dotPlotBtn.addEventListener("click", () => {
+        dotPlotModal.classList.remove("hidden");
+    });
+
+    dotPlotRunBtn.addEventListener("click", runDotPlot);
+
+    dotPlotClose.addEventListener("click", () => {
+        dotPlotModal.classList.add("hidden");
+    });
+    dotPlotModal.addEventListener("click", (e) => {
+        if (e.target === dotPlotModal) dotPlotModal.classList.add("hidden");
+    });
+
     // Keyboard shortcuts
     document.addEventListener("keydown", (e) => {
-        // Close modal on Escape
-        if (e.key === "Escape" && !readCompareModal.classList.contains("hidden")) {
-            readCompareModal.classList.add("hidden");
-            return;
+        // Close modals on Escape
+        if (e.key === "Escape") {
+            if (!readCompareModal.classList.contains("hidden")) {
+                readCompareModal.classList.add("hidden");
+                return;
+            }
+            if (!dotPlotModal.classList.contains("hidden")) {
+                dotPlotModal.classList.add("hidden");
+                return;
+            }
         }
         if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
         if (e.key === "ArrowLeft" || e.key === "[") {

@@ -35,10 +35,11 @@ from http import HTTPStatus
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 
-# Allow importing coordinate_mapper from the sibling src/ directory.
+# Allow importing coordinate_mapper and dot_plot from the sibling src/ directory.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT / "src"))
 import coordinate_mapper  # noqa: E402
+import dot_plot  # noqa: E402
 
 # ── Logging setup ───────────────────────────────────────────────────────────
 
@@ -440,6 +441,8 @@ class IGVHandler(SimpleHTTPRequestHandler):
         if path.startswith("/api/regions/"):
             sid = path[len("/api/regions/"):]
             return self._json_response(self._api_regions(sid))
+        if path == "/api/dotplot":
+            return self._json_response(self._api_dotplot(query))
 
         # Data files (BAM, FASTA, etc.) — served with byte-range support
         if path.startswith("/data/"):
@@ -574,6 +577,57 @@ class IGVHandler(SimpleHTTPRequestHandler):
         regions = load_regions(sample.get("regions", ""))
         self.regions_cache[sample_id] = regions
         return regions
+
+    def _api_dotplot(self, query):
+        """Compute k-mer dot plots for the three pairwise comparisons.
+
+        Query parameters:
+            sample   – sample ID
+            ref      – reference region (e.g. ``chr1:1000-2000``)
+            hap1     – haplotype-1 region
+            hap2     – haplotype-2 region
+            k        – k-mer size (default 31)
+        """
+        sample_id = query.get("sample", [""])[0]
+        ref_region = query.get("ref", [""])[0]
+        hap1_region = query.get("hap1", [""])[0]
+        hap2_region = query.get("hap2", [""])[0]
+        try:
+            k = int(query.get("k", [31])[0])
+        except (ValueError, IndexError):
+            k = 31
+        k = max(1, min(k, 101))  # clamp k to [1, 101]
+
+        sample = self._find_sample(sample_id)
+        if sample is None:
+            return {"error": f"Sample '{sample_id}' not found"}
+
+        # Resolve FASTA paths
+        ref_fasta = sample.get("reference", "")
+        hap1_fasta = sample.get("hap1_assembly", "")
+        hap2_fasta = sample.get("hap2_assembly", "")
+
+        # Extract sequences
+        ref_seq = dot_plot.extract_sequence(ref_fasta, ref_region) if ref_fasta and ref_region else ""
+        hap1_seq = dot_plot.extract_sequence(hap1_fasta, hap1_region) if hap1_fasta and hap1_region else ""
+        hap2_seq = dot_plot.extract_sequence(hap2_fasta, hap2_region) if hap2_fasta and hap2_region else ""
+
+        logger.info("Dot plot: ref=%d bp, hap1=%d bp, hap2=%d bp, k=%d",
+                     len(ref_seq), len(hap1_seq), len(hap2_seq), k)
+
+        # Compute three pairwise dot plots
+        result = {
+            "hap1_vs_ref": dot_plot.compute_dotplot(ref_seq, hap1_seq, k),
+            "hap2_vs_ref": dot_plot.compute_dotplot(ref_seq, hap2_seq, k),
+            "hap1_vs_hap2": dot_plot.compute_dotplot(hap1_seq, hap2_seq, k),
+            "labels": {
+                "ref": ref_region or "(no region)",
+                "hap1": hap1_region or "(no region)",
+                "hap2": hap2_region or "(no region)",
+            },
+            "k": k,
+        }
+        return result
 
     # ── File serving ────────────────────────────────────────────────────────
 
