@@ -31,7 +31,7 @@ import urllib.parse
 import urllib.request
 from functools import lru_cache
 from http import HTTPStatus
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 
 # Allow importing coordinate_mapper from the sibling src/ directory.
@@ -1026,7 +1026,7 @@ def main():
     IGVHandler.static_dir = static_dir
 
     # Start server
-    server = HTTPServer((args.host, args.port), IGVHandler)
+    server = ThreadingHTTPServer((args.host, args.port), IGVHandler)
     url = f"http://{'localhost' if args.host == '0.0.0.0' else args.host}:{args.port}"
     logger.info("Server running at %s", url)
     logger.info("Serving %d sample(s)", len(samples))
