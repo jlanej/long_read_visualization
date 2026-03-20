@@ -374,5 +374,78 @@ class TestRealVcf(unittest.TestCase):
         self.assertGreater(len(chroms), 1)
 
 
+class TestRemapSaTag(unittest.TestCase):
+    """Tests for _remap_sa_tag SA supplementary-alignment tag remapping."""
+
+    def test_basic_remap(self):
+        """Remaps SA entry to the correct toy contig."""
+        region_map = {"chr1": [("chr1:1000-2000", 1000, 2000)]}
+        result = generate_toy_dataset._remap_sa_tag(
+            "SA:Z:chr1,1500,+,50M,60,0;", region_map
+        )
+        self.assertEqual(result, "SA:Z:chr1:1000-2000,501,+,50M,60,0;")
+
+    def test_multiple_entries(self):
+        """Remaps multiple SA entries in a single tag."""
+        region_map = {
+            "chr1": [("chr1:1000-2000", 1000, 2000)],
+            "chr2": [("chr2:5000-6000", 5000, 6000)],
+        }
+        result = generate_toy_dataset._remap_sa_tag(
+            "SA:Z:chr1,1200,+,30M,50,1;chr2,5500,-,40M,55,2;",
+            region_map,
+        )
+        self.assertIn("chr1:1000-2000,201,+,30M,50,1", result)
+        self.assertIn("chr2:5000-6000,501,-,40M,55,2", result)
+
+    def test_drops_unknown_chromosome(self):
+        """Drops SA entries on chromosomes not in the toy reference."""
+        region_map = {"chr1": [("chr1:1000-2000", 1000, 2000)]}
+        result = generate_toy_dataset._remap_sa_tag(
+            "SA:Z:chr1,1500,+,50M,60,0;chrX,100,+,20M,30,0;",
+            region_map,
+        )
+        # chrX entry should be dropped
+        self.assertNotIn("chrX", result)
+        self.assertIn("chr1:1000-2000,501,+,50M,60,0", result)
+
+    def test_drops_out_of_range_position(self):
+        """Drops SA entries whose position is outside any toy contig."""
+        region_map = {"chr1": [("chr1:1000-2000", 1000, 2000)]}
+        result = generate_toy_dataset._remap_sa_tag(
+            "SA:Z:chr1,9999,+,50M,60,0;", region_map
+        )
+        # Position 9999 is outside chr1:1000-2000 — should be dropped
+        self.assertEqual(result, "SA:Z:*")
+
+    def test_clamp_position_to_1(self):
+        """Positions at the very start of the region clamp to 1."""
+        region_map = {"chr1": [("chr1:1000-2000", 1000, 2000)]}
+        result = generate_toy_dataset._remap_sa_tag(
+            "SA:Z:chr1,1000,+,50M,60,0;", region_map
+        )
+        self.assertIn("chr1:1000-2000,1,+,50M,60,0", result)
+
+    def test_not_sa_tag(self):
+        """Returns non-SA fields unchanged."""
+        result = generate_toy_dataset._remap_sa_tag(
+            "XY:Z:something", {"chr1": [("chr1:1000-2000", 1000, 2000)]}
+        )
+        self.assertEqual(result, "XY:Z:something")
+
+    def test_multiple_regions_same_chrom(self):
+        """Correctly picks the right toy contig when multiple exist."""
+        region_map = {
+            "chr1": [
+                ("chr1:1000-2000", 1000, 2000),
+                ("chr1:5000-6000", 5000, 6000),
+            ]
+        }
+        result = generate_toy_dataset._remap_sa_tag(
+            "SA:Z:chr1,5500,+,50M,60,0;", region_map
+        )
+        self.assertIn("chr1:5000-6000,501,+,50M,60,0", result)
+
+
 if __name__ == "__main__":
     unittest.main()

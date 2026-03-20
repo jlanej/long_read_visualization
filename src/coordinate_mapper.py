@@ -110,8 +110,47 @@ def parse_cigar(cigar_str):
     ]
 
 
+def _build_cigar_index(cigar_ops):
+    """Pre-compute cumulative reference and assembly offsets for a CIGAR.
+
+    This enables :func:`project_cigar` to binary-search directly to the
+    CIGAR operation containing a given reference offset, turning the
+    initial linear scan from *O(n)* to *O(log n)* where *n* is the
+    number of CIGAR operations.
+
+    Returns a dict with two lists of length ``len(cigar_ops) + 1``:
+
+    * ``ref_cumul[i]`` – cumulative reference bases consumed by
+      operations ``0 .. i-1``.
+    * ``asm_cumul[i]`` – cumulative assembly bases consumed by
+      operations ``0 .. i-1``.
+    """
+    REF_CONSUMING = frozenset("MDNX=")
+    ASM_CONSUMING = frozenset("MISX=")
+
+    ref_cumul = [0]
+    asm_cumul = [0]
+    ref_cur = 0
+    asm_cur = 0
+
+    for length, op in cigar_ops:
+        if op in REF_CONSUMING:
+            ref_cur += length
+        if op in ASM_CONSUMING:
+            asm_cur += length
+        ref_cumul.append(ref_cur)
+        asm_cumul.append(asm_cur)
+
+    return {"ref_cumul": ref_cumul, "asm_cumul": asm_cumul}
+
+
+# Threshold for building a binary-search index on a block's CIGAR.
+# Blocks with fewer operations are fast enough with a linear scan.
+_CIGAR_INDEX_THRESHOLD = 64
+
+
 def project_cigar(cigar_ops, ref_offset_start, ref_offset_end, strand,
-                  asm_block_start, asm_block_end):
+                  asm_block_start, asm_block_end, cigar_index=None):
     """Walk a CIGAR string to project a reference sub-interval to assembly space.
 
     Gives precise base-level coordinate translation that correctly handles
@@ -134,6 +173,10 @@ def project_cigar(cigar_ops, ref_offset_start, ref_offset_end, strand,
     maps to the start of the inserted assembly sequence, so queries
     that straddle an insertion boundary include the full inserted range.
 
+    When *cigar_index* (produced by :func:`_build_cigar_index`) is
+    provided, a binary search locates the starting CIGAR operation in
+    *O(log n)* instead of scanning linearly from the first operation.
+
     Args:
         cigar_ops:        List of ``(length, op)`` tuples from
                           :func:`parse_cigar`.
@@ -145,6 +188,9 @@ def project_cigar(cigar_ops, ref_offset_start, ref_offset_end, strand,
                           (0-based, inclusive).
         asm_block_end:    Assembly end coordinate of the alignment block
                           (0-based, exclusive).
+        cigar_index:      Optional pre-computed index from
+                          :func:`_build_cigar_index`.  Enables fast
+                          *O(log n)* lookup for long CIGARs.
 
     Returns:
         ``(asm_start, asm_end)`` – absolute assembly coordinates
@@ -154,13 +200,26 @@ def project_cigar(cigar_ops, ref_offset_start, ref_offset_end, strand,
     REF_CONSUMING = frozenset("MDNX=")
     ASM_CONSUMING = frozenset("MISX=")
 
+    # ── Fast path: jump to the vicinity of ref_offset_start via
+    # pre-computed cumulative offsets instead of a linear scan.
+    start_op = 0
     ref_cur = 0  # position relative to block ref_start
     asm_cur = 0  # position relative to the start of asm traversal
+
+    if cigar_index is not None and ref_offset_start > 0:
+        ref_cumul = cigar_index["ref_cumul"]
+        asm_cumul = cigar_index["asm_cumul"]
+        idx = bisect.bisect_right(ref_cumul, ref_offset_start) - 1
+        idx = max(0, min(idx, len(cigar_ops) - 1))
+        start_op = idx
+        ref_cur = ref_cumul[idx]
+        asm_cur = asm_cumul[idx]
 
     asm_q_start = None
     asm_q_end = None
 
-    for length, op in cigar_ops:
+    for i in range(start_op, len(cigar_ops)):
+        length, op = cigar_ops[i]
         consumes_ref = op in REF_CONSUMING
         consumes_asm = op in ASM_CONSUMING
 
@@ -360,6 +419,12 @@ def load_index(index_path):
       search, skipping all blocks that end too far to the left to
       overlap the query region.
 
+    Blocks that contain a ``cg`` CIGAR string are pre-parsed once here
+    (rather than on every call to :func:`query`).  For CIGARs with more
+    than :data:`_CIGAR_INDEX_THRESHOLD` operations a cumulative-offset
+    index is also built so that :func:`project_cigar` can binary-search
+    into the CIGAR.
+
     Returns:
         Dict keyed by chromosome name.  Each value is a dict with keys
         ``'blocks'``, ``'starts'``, ``'ends'``, and ``'max_block_len'``.
@@ -372,6 +437,16 @@ def load_index(index_path):
         starts = [b["rs"] for b in raw_blocks]
         ends = [b["re"] for b in raw_blocks]
         max_block_len = max((e - s for s, e in zip(starts, ends)), default=0)
+
+        # Pre-parse CIGARs and optionally build cumulative-offset indices.
+        for block in raw_blocks:
+            cg = block.get("cg")
+            if cg:
+                ops = parse_cigar(cg)
+                block["_cg_ops"] = ops
+                if len(ops) >= _CIGAR_INDEX_THRESHOLD:
+                    block["_cg_idx"] = _build_cigar_index(ops)
+
         index[chrom] = {
             "blocks": raw_blocks,
             "starts": starts,
@@ -507,8 +582,13 @@ def query(index, chrom, start, end, min_mapq=0):
         ref_offset_end = overlap_end - block["rs"]
 
         # Prefer CIGAR-based projection; fall back to linear interpolation.
-        if block.get("cg"):
+        # Use pre-parsed ops and cumulative index when available
+        # (populated by load_index).
+        cigar_ops = block.get("_cg_ops")
+        if cigar_ops is None and block.get("cg"):
             cigar_ops = parse_cigar(block["cg"])
+        if cigar_ops:
+            cigar_idx = block.get("_cg_idx")
             asm_start, asm_end = project_cigar(
                 cigar_ops,
                 ref_offset_start,
@@ -516,6 +596,7 @@ def query(index, chrom, start, end, min_mapq=0):
                 block["st"],
                 block["as"],
                 block["ae"],
+                cigar_index=cigar_idx,
             )
         else:
             if block["st"] == "+":

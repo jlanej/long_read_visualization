@@ -19,6 +19,7 @@ Usage
 """
 
 import argparse
+import collections
 import gzip
 import json
 import logging
@@ -321,10 +322,20 @@ def _format_size(bp):
 # ── Coordinate translation ──────────────────────────────────────────────────
 
 class CoordinateTranslator:
-    """Manages coordinate mapping indices for all samples."""
+    """Manages coordinate mapping indices for all samples.
 
-    def __init__(self):
+    An LRU translation cache avoids redundant CIGAR-based coordinate
+    projection when the same region is queried repeatedly (e.g. during
+    rapid user panning where the debounced request lands on the same
+    coordinates multiple times).
+    """
+
+    DEFAULT_CACHE_SIZE = 256
+
+    def __init__(self, cache_size=None):
         self._indices = {}  # (sample_id, haplotype) → loaded index
+        self._cache_size = cache_size or self.DEFAULT_CACHE_SIZE
+        self._cache = collections.OrderedDict()
 
     def load_sample(self, sample):
         """Load mapping indices for a sample."""
@@ -339,8 +350,17 @@ class CoordinateTranslator:
     def translate(self, sample_id, chrom, start, end, min_mapq=0):
         """Translate a reference region to assembly coordinates.
 
+        Results are cached (LRU, up to *cache_size* entries) so that
+        repeated identical queries are free.
+
         Returns a dict with hap1 and hap2 assembly region lists.
         """
+        cache_key = (sample_id, chrom, start, end, min_mapq)
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            self._cache.move_to_end(cache_key)
+            return cached
+
         result = {"hap1": [], "hap2": []}
         for hap in ("hap1", "hap2"):
             idx = self._indices.get((sample_id, hap))
@@ -364,6 +384,12 @@ class CoordinateTranslator:
                 })
             # Merge overlapping regions per contig
             result[hap] = _merge_regions(asm_regions)
+
+        # LRU cache insertion (OrderedDict provides O(1) eviction)
+        self._cache[cache_key] = result
+        if len(self._cache) > self._cache_size:
+            self._cache.popitem(last=False)
+
         return result
 
 

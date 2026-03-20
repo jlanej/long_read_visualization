@@ -593,5 +593,40 @@ class TestCoordinateTranslator(unittest.TestCase):
         self.assertEqual(result["hap2"], [])
 
 
+class TestTranslatorCache(unittest.TestCase):
+    """Verify the CoordinateTranslator LRU cache."""
+
+    def test_cache_returns_same_result(self):
+        """Repeated identical queries return cached results."""
+        translator = server_app.CoordinateTranslator()
+        # No indices loaded — every translate returns empty lists.
+        r1 = translator.translate("s", "chr1", 100, 200)
+        r2 = translator.translate("s", "chr1", 100, 200)
+        self.assertEqual(r1, r2)
+        # Both should be the *same object* (cache hit).
+        self.assertIs(r1, r2)
+
+    def test_different_params_miss_cache(self):
+        """Different coordinates are separate cache entries."""
+        translator = server_app.CoordinateTranslator()
+        r1 = translator.translate("s", "chr1", 100, 200)
+        r2 = translator.translate("s", "chr1", 200, 300)
+        self.assertIsNot(r1, r2)
+
+    def test_cache_eviction(self):
+        """Cache evicts oldest entries when full."""
+        translator = server_app.CoordinateTranslator(cache_size=3)
+
+        # Fill the cache
+        translator.translate("s", "chr1", 0, 100)
+        translator.translate("s", "chr1", 100, 200)
+        translator.translate("s", "chr1", 200, 300)
+        self.assertEqual(len(translator._cache), 3)
+
+        # One more should evict the oldest
+        translator.translate("s", "chr1", 300, 400)
+        self.assertEqual(len(translator._cache), 3)
+
+
 if __name__ == "__main__":
     unittest.main()
