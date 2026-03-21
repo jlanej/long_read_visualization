@@ -332,6 +332,7 @@ class CoordinateTranslator:
     """
 
     DEFAULT_CACHE_SIZE = 256
+    MAX_TRANSLATE_SPAN_BP = 2_000_000
 
     def __init__(self, cache_size=None):
         self._indices = {}  # (sample_id, haplotype) → loaded index
@@ -564,10 +565,27 @@ class IGVHandler(SimpleHTTPRequestHandler):
             end = int(query.get("end", [0])[0])
         except (ValueError, IndexError):
             return {"error": "Invalid start/end coordinates"}
-        min_mapq = int(query.get("min_mapq", [0])[0])
+        try:
+            min_mapq = int(query.get("min_mapq", [0])[0])
+        except (ValueError, IndexError):
+            return {"error": "Invalid min_mapq parameter"}
 
         if not sample_id or not chrom:
             return {"error": "Missing sample or chrom parameter"}
+        if start < 0 or end < 0 or end < start:
+            return {"error": "Invalid coordinate range"}
+
+        span = end - start + 1
+        if span > self.translator.MAX_TRANSLATE_SPAN_BP:
+            logger.warning(
+                "Skipping oversized translate request sample=%s chrom=%s start=%d end=%d span=%d",
+                sample_id, chrom, start, end, span
+            )
+            return {
+                "hap1": [],
+                "hap2": [],
+                "warning": "Requested window is too large for safe translation; zoom in to translate.",
+            }
 
         result = self.translator.translate(sample_id, chrom, start, end,
                                            min_mapq=min_mapq)
