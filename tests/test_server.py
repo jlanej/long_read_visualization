@@ -155,6 +155,10 @@ class TestDiscoverPipelineFiles(unittest.TestCase):
             "_ref_to_hap1.bam.bai",
             "_ref_to_hap2.bam",
             "_ref_to_hap2.bam.bai",
+            "_hap2_to_hap1.bam",
+            "_hap2_to_hap1.bam.bai",
+            "_hap1_to_hap2.bam",
+            "_hap1_to_hap2.bam.bai",
             "_hap1_to_ref.mapping.json.gz",
             "_hap2_to_ref.mapping.json.gz",
         ]
@@ -176,6 +180,8 @@ class TestDiscoverPipelineFiles(unittest.TestCase):
         self.assertIn("reads_to_hap2_bam", sample)
         self.assertIn("ref_to_hap1_bam", sample)
         self.assertIn("ref_to_hap2_bam", sample)
+        self.assertIn("hap2_to_hap1_bam", sample)
+        self.assertIn("hap1_to_hap2_bam", sample)
         self.assertIn("hap1_mapping_index", sample)
         self.assertIn("hap2_mapping_index", sample)
 
@@ -1194,6 +1200,76 @@ class TestApiSampleCramRef(unittest.TestCase):
             self.assertIsNone(result["cram_ref_gzi"])
 
 
+class TestApiSampleCrossHaplotypeTracks(unittest.TestCase):
+    """Tests for cross-haplotype BAM URLs returned by _api_sample."""
+
+    def _make_handler(self, samples):
+        class _Translator:
+            def has_index(self, _sample_id):
+                return False
+
+        handler = type("FakeHandler", (), {})()
+        handler.samples = samples
+        handler.translator = _Translator()
+        handler.file_registry = {}
+        handler._find_sample = lambda sid: next(
+            (s for s in samples if s["sample_id"] == sid), None
+        )
+        import types
+        handler._api_sample = types.MethodType(
+            server_app.IGVHandler._api_sample, handler
+        )
+        return handler
+
+    def test_cross_haplotype_bams_in_tracks(self):
+        """Cross-haplotype BAM URLs are included when files exist."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ref = os.path.join(tmpdir, "ref.fa")
+            h1 = os.path.join(tmpdir, "h1.fa")
+            h2 = os.path.join(tmpdir, "h2.fa")
+            hap2_to_hap1 = os.path.join(tmpdir, "hap2_to_hap1.bam")
+            hap1_to_hap2 = os.path.join(tmpdir, "hap1_to_hap2.bam")
+            for p in (ref, h1, h2, hap2_to_hap1, hap1_to_hap2):
+                Path(p).touch()
+
+            samples = [{
+                "sample_id": "S1",
+                "reference": ref,
+                "hap1_assembly": h1,
+                "hap2_assembly": h2,
+                "hap2_to_hap1_bam": hap2_to_hap1,
+                "hap1_to_hap2_bam": hap1_to_hap2,
+            }]
+            handler = self._make_handler(samples)
+            result = handler._api_sample("S1")
+            self.assertIn("hap2_to_hap1_bam", result["tracks"])
+            self.assertIn("hap1_to_hap2_bam", result["tracks"])
+            self.assertIsNotNone(result["tracks"]["hap2_to_hap1_bam"])
+            self.assertIsNotNone(result["tracks"]["hap1_to_hap2_bam"])
+
+    def test_cross_haplotype_bams_absent_gracefully(self):
+        """When cross-haplotype BAMs don't exist, tracks are None."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ref = os.path.join(tmpdir, "ref.fa")
+            h1 = os.path.join(tmpdir, "h1.fa")
+            h2 = os.path.join(tmpdir, "h2.fa")
+            for p in (ref, h1, h2):
+                Path(p).touch()
+
+            samples = [{
+                "sample_id": "S1",
+                "reference": ref,
+                "hap1_assembly": h1,
+                "hap2_assembly": h2,
+            }]
+            handler = self._make_handler(samples)
+            result = handler._api_sample("S1")
+            self.assertIn("hap2_to_hap1_bam", result["tracks"])
+            self.assertIn("hap1_to_hap2_bam", result["tracks"])
+            self.assertIsNone(result["tracks"]["hap2_to_hap1_bam"])
+            self.assertIsNone(result["tracks"]["hap1_to_hap2_bam"])
+
+
 class TestFrontendMemoryGuards(unittest.TestCase):
     """Tests for memory-safety guards in the region navigation frontend."""
 
@@ -1219,6 +1295,18 @@ class TestFrontendMemoryGuards(unittest.TestCase):
         self.assertIn("selectBestRegion(result.hap2)", html)
         self.assertIn("selectBestLocus(region.hap1_regions)", html)
         self.assertIn("selectBestLocus(region.hap2_regions)", html)
+
+    def test_frontend_has_cross_haplotype_tracks(self):
+        """Frontend includes cross-haplotype track definitions."""
+        index_path = os.path.join(_REPO_ROOT, "server", "static", "index.html")
+        with open(index_path, encoding="utf-8") as fh:
+            html = fh.read()
+        # Hap2 → Hap1 track in hap1 panel
+        self.assertIn("Hap2 → Hap1", html)
+        self.assertIn("config.tracks.hap2_to_hap1_bam", html)
+        # Hap1 → Hap2 track in hap2 panel
+        self.assertIn("Hap1 → Hap2", html)
+        self.assertIn("config.tracks.hap1_to_hap2_bam", html)
 
 
 if __name__ == "__main__":

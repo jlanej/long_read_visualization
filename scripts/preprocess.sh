@@ -326,6 +326,34 @@ log "Step 6: Aligning reference to hap1 and hap2 (assembly-space cross-check BAM
 align_ref_to_asm "${HAP1}" "hap1"
 align_ref_to_asm "${HAP2}" "hap2"
 
+# ── Step 7: Align hap2 to hap1 and hap1 to hap2 (cross-haplotype BAMs) ────
+#
+# These BAMs show one haplotype aligned to the other in the target's
+# coordinate space.  They let the user see directly how the two
+# haplotypes relate without going through the reference.
+#
+# Preset: asm5  (≥99% identity — both assemblies come from the same
+#               individual so most loci are nearly identical)
+# Flag:   --eqx  extended CIGAR (=/X)
+align_hap_to_hap() {
+    local query_asm="$1" query_label="$2"
+    local target_asm="$3" target_label="$4"
+    local bam="${OUTPUT_DIR}/${SAMPLE_NAME}_${query_label}_to_${target_label}.bam"
+    if [[ -f "${bam}" && -f "${bam}.bai" ]]; then
+        log "  ${bam} + index exist, skipping"
+    else
+        log "  Aligning ${query_label} to ${target_label} → ${bam}"
+        log "CMD: minimap2 -a --eqx -x asm5 -t ${THREADS} ${target_asm} ${query_asm} | samtools sort -@ ${THREADS} -o ${bam}"
+        minimap2 -a --eqx -x asm5 -t "${THREADS}" "${target_asm}" "${query_asm}" \
+            | samtools sort -@ "${THREADS}" -o "${bam}"
+        run samtools index -@ "${THREADS}" "${bam}"
+    fi
+}
+
+log "Step 7: Aligning hap2 to hap1 and hap1 to hap2 (cross-haplotype BAMs)"
+align_hap_to_hap "${HAP2}" "hap2" "${HAP1}" "hap1"
+align_hap_to_hap "${HAP1}" "hap1" "${HAP2}" "hap2"
+
 # ── Done ────────────────────────────────────────────────────────────────────
 log "Pipeline complete. Outputs in ${OUTPUT_DIR}/"
 echo ""
