@@ -387,7 +387,7 @@ class CoordinateTranslator:
                 asm_end = hit.get("asm_end")
                 if not asm_chrom:
                     continue
-                if not isinstance(asm_start, int) or not isinstance(asm_end, int):
+                if type(asm_start) is not int or type(asm_end) is not int:
                     continue
                 if asm_end <= asm_start:
                     continue
@@ -458,7 +458,7 @@ def _select_dotplot_region(regions):
         end = r.get("end")
         if not chrom:
             continue
-        if not isinstance(start, int) or not isinstance(end, int):
+        if type(start) is not int or type(end) is not int:
             continue
         if end <= start:
             continue

@@ -955,6 +955,7 @@ class TestSelectDotplotRegion(unittest.TestCase):
         regions = [
             {"chrom": "ctgA", "start": 100, "end": 200, "strand": "+"},
             {"chrom": "ctgA", "start": "x", "end": 300, "strand": "+"},
+            {"chrom": "ctgA", "start": False, "end": 300, "strand": "+"},
             {"chrom": "", "start": 0, "end": 100, "strand": "+"},
             {"chrom": "ctgA", "start": 500, "end": 500, "strand": "+"},
         ]
@@ -990,6 +991,8 @@ class TestTranslatorSelectionRobustness(unittest.TestCase):
                     {"event_type": "alignment", "asm_chrom": "", "asm_start": 10, "asm_end": 20, "strand": "+"},
                     {"event_type": "alignment", "asm_chrom": "ctgA", "asm_start": "100", "asm_end": 200, "strand": "+"},
                     {"event_type": "alignment", "asm_chrom": "ctgA", "asm_start": 220, "asm_end": "260", "strand": "+"},
+                    {"event_type": "alignment", "asm_chrom": "ctgA", "asm_start": False, "asm_end": 260, "strand": "+"},
+                    {"event_type": "alignment", "asm_chrom": "ctgA", "asm_start": 260, "asm_end": True, "strand": "+"},
                     {"event_type": "alignment", "asm_chrom": "ctgA", "asm_start": 300, "asm_end": 300, "strand": "+"},
                     {"event_type": "deletion", "asm_chrom": "ctgA", "asm_start": 500, "asm_end": 600, "strand": "+"},
                 ]
@@ -1209,8 +1212,9 @@ class TestFrontendMemoryGuards(unittest.TestCase):
         with open(index_path, encoding="utf-8") as fh:
             html = fh.read()
 
-        self.assertIn("function selectBestRegion(regions)", html)
+        self.assertIn("function selectBestRegion(regions, coordType = \"half-open\")", html)
         self.assertIn("function selectBestLocus(loci)", html)
+        self.assertIn("selectBestRegion(regions, \"inclusive\")", html)
         self.assertIn("selectBestRegion(result.hap1)", html)
         self.assertIn("selectBestRegion(result.hap2)", html)
         self.assertIn("selectBestLocus(region.hap1_regions)", html)

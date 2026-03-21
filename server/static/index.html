@@ -689,16 +689,21 @@
 
     // Select a stable region from potentially disjoint translated intervals.
     // Groups by contig, merges overlaps, and chooses the group with the
-    // greatest covered span (tie-break: largest envelope).
-    function selectBestRegion(regions) {
+    // greatest covered span (tie-break: tighter envelope).
+    // coordType:
+    //   - "half-open": [start, end), used by translated API regions.
+    //   - "inclusive": [start, end], used by precomputed locus strings.
+    function selectBestRegion(regions, coordType = "half-open") {
         if (!Array.isArray(regions) || regions.length === 0) return null;
+        const inclusive = coordType === "inclusive";
 
         const grouped = new Map(); // key => [{start,end}]
         for (const r of regions) {
             if (!r || !r.chrom) continue;
             const start = parseInt(r.start, 10);
             const end = parseInt(r.end, 10);
-            if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) continue;
+            if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+            if (inclusive ? end < start : end <= start) continue;
             const strand = r.strand || "+";
             const key = `${r.chrom}\u0000${strand}`;
             if (!grouped.has(key)) grouped.set(key, []);
@@ -710,7 +715,11 @@
             intervals.sort((a, b) => a.start - b.start);
             const merged = [];
             for (const iv of intervals) {
-                if (merged.length === 0 || iv.start > (merged[merged.length - 1].end + 1)) {
+                const prevEnd = merged.length === 0 ? null : merged[merged.length - 1].end;
+                const separated = merged.length === 0 || (
+                    inclusive ? iv.start > (prevEnd + 1) : iv.start > prevEnd
+                );
+                if (separated) {
                     merged.push({ start: iv.start, end: iv.end });
                 } else {
                     merged[merged.length - 1].end = Math.max(
@@ -720,10 +729,15 @@
             }
             if (merged.length === 0) continue;
 
-            const covered = merged.reduce((acc, iv) => acc + (iv.end - iv.start + 1), 0);
+            const covered = merged.reduce(
+                (acc, iv) => acc + (inclusive ? (iv.end - iv.start + 1) : (iv.end - iv.start)),
+                0
+            );
             const envelopeStart = merged[0].start;
             const envelopeEnd = merged[merged.length - 1].end;
-            const envelope = envelopeEnd - envelopeStart + 1;
+            const envelope = inclusive
+                ? (envelopeEnd - envelopeStart + 1)
+                : (envelopeEnd - envelopeStart);
             const [chrom, strand] = key.split("\u0000");
 
             if (!best || covered > best.covered || (covered === best.covered && envelope < best.envelope)) {
@@ -754,7 +768,7 @@
                 });
             }
         }
-        const best = selectBestRegion(regions);
+        const best = selectBestRegion(regions, "inclusive");
         return best ? `${best.chrom}:${best.start}-${best.end}` : null;
     }
 
