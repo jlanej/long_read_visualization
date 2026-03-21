@@ -451,11 +451,21 @@ def _select_dotplot_region(regions):
 
     best = None
     for (chrom, strand), group in grouped.items():
-        starts = [r["start"] for r in group]
-        ends = [r["end"] for r in group]
-        covered_bp = sum(max(0, e - s) for s, e in zip(starts, ends))
-        envelope_start = min(starts)
-        envelope_end = max(ends)
+        intervals = sorted((r["start"], r["end"]) for r in group)
+        merged_intervals = []
+        for s, e in intervals:
+            if e <= s:
+                continue
+            if not merged_intervals or s > merged_intervals[-1][1]:
+                merged_intervals.append([s, e])
+            else:
+                merged_intervals[-1][1] = max(merged_intervals[-1][1], e)
+        if not merged_intervals:
+            continue
+
+        covered_bp = sum(e - s for s, e in merged_intervals)
+        envelope_start = merged_intervals[0][0]
+        envelope_end = merged_intervals[-1][1]
         # Prefer larger covered sequence; break ties with larger envelope.
         score = (covered_bp, envelope_end - envelope_start)
         if best is None or score > best["score"]:

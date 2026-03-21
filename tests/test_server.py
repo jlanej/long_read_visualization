@@ -939,6 +939,18 @@ class TestSelectDotplotRegion(unittest.TestCase):
         self.assertEqual(best["start"], 1000)
         self.assertEqual(best["end"], 1200)
 
+    def test_returns_group_envelope_for_disjoint_intervals(self):
+        regions = [
+            {"chrom": "ctgA", "start": 100, "end": 200, "strand": "+"},
+            {"chrom": "ctgA", "start": 500, "end": 800, "strand": "+"},
+            {"chrom": "ctgB", "start": 50, "end": 120, "strand": "+"},
+        ]
+        best = server_app._select_dotplot_region(regions)
+        self.assertIsNotNone(best)
+        self.assertEqual(best["chrom"], "ctgA")
+        self.assertEqual(best["start"], 100)
+        self.assertEqual(best["end"], 800)
+
 
 class TestApiTranslate(unittest.TestCase):
     """Tests for the _api_translate handler logic."""
