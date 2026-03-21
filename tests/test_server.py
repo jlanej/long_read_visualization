@@ -627,6 +627,79 @@ class TestTranslatorCache(unittest.TestCase):
         translator.translate("s", "chr1", 300, 400)
         self.assertEqual(len(translator._cache), 3)
 
+    def test_has_index_no_indices(self):
+        """has_index returns False when no mapping indices are loaded."""
+        translator = server_app.CoordinateTranslator()
+        self.assertFalse(translator.has_index("s"))
+
+    def test_has_index_with_loaded_sample(self):
+        """has_index returns True after loading a sample with indices."""
+        translator = server_app.CoordinateTranslator()
+        # Simulate: only register in _indices dict directly
+        translator._indices[("s", "hap1")] = {"chr1": {"blocks": []}}
+        self.assertTrue(translator.has_index("s"))
+        # Different sample should still be False
+        self.assertFalse(translator.has_index("other"))
+
+
+class TestApiDotplot(unittest.TestCase):
+    """Tests for the _api_dotplot handler logic."""
+
+    def _make_handler_class(self, samples):
+        """Create a handler class with the given samples list."""
+        # We don't instantiate IGVHandler directly (it needs socket args),
+        # so we test the method by constructing a minimal wrapper.
+        handler = type("FakeHandler", (), {
+            "samples": samples,
+            "_find_sample": lambda self, sid: next(
+                (s for s in self.samples if s["sample_id"] == sid), None
+            ),
+        })()
+        # Bind the unbound _api_dotplot method from IGVHandler
+        import types
+        handler._api_dotplot = types.MethodType(
+            server_app.IGVHandler._api_dotplot, handler
+        )
+        return handler
+
+    def test_missing_sample(self):
+        """Unknown sample_id returns an error."""
+        handler = self._make_handler_class([])
+        result = handler._api_dotplot({"sample": ["no_such"]})
+        self.assertIn("error", result)
+
+    def test_empty_regions(self):
+        """No regions produces empty dot plot results."""
+        handler = self._make_handler_class([{
+            "sample_id": "S1",
+            "reference": "",
+            "hap1_assembly": "",
+            "hap2_assembly": "",
+        }])
+        result = handler._api_dotplot({"sample": ["S1"]})
+        # Should succeed (no error) even without regions.
+        self.assertNotIn("error", result)
+        self.assertIn("hap1_vs_ref", result)
+        self.assertIn("hap2_vs_ref", result)
+        self.assertIn("hap1_vs_hap2", result)
+        # All dot plots empty because no sequences
+        self.assertEqual(len(result["hap1_vs_ref"]["forward"]), 0)
+
+    def test_k_clamped(self):
+        """K parameter is clamped to valid range."""
+        handler = self._make_handler_class([{
+            "sample_id": "S1",
+            "reference": "",
+            "hap1_assembly": "",
+            "hap2_assembly": "",
+        }])
+        # k=200 should be clamped to 101
+        result = handler._api_dotplot({"sample": ["S1"], "k": ["200"]})
+        self.assertEqual(result["k"], 101)
+        # k=-5 should be clamped to 1
+        result = handler._api_dotplot({"sample": ["S1"], "k": ["-5"]})
+        self.assertEqual(result["k"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
