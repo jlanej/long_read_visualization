@@ -1110,6 +1110,10 @@
         const refHap1Track = makeAssemblyTrack("Ref → Hap1", config.tracks.ref_to_hap1_bam, "#2196F3");
         if (refHap1Track) hap1Opts.tracks.push(refHap1Track);
 
+        // Hap2 → Hap1
+        const hap2Hap1Track = makeAssemblyTrack("Hap2 → Hap1", config.tracks.hap2_to_hap1_bam, "#FF9800");
+        if (hap2Hap1Track) hap1Opts.tracks.push(hap2Hap1Track);
+
         // ── Hap2 panel ───────────────────────────────────────────────────
         const hap2Opts = {
             showNavigation: false,
@@ -1136,6 +1140,10 @@
         // Ref → Hap2
         const refHap2Track = makeAssemblyTrack("Ref → Hap2", config.tracks.ref_to_hap2_bam, "#2196F3");
         if (refHap2Track) hap2Opts.tracks.push(refHap2Track);
+
+        // Hap1 → Hap2
+        const hap1Hap2Track = makeAssemblyTrack("Hap1 → Hap2", config.tracks.hap1_to_hap2_bam, "#4CAF50");
+        if (hap1Hap2Track) hap2Opts.tracks.push(hap1Hap2Track);
 
         // Pre-set initial loci and visibilityWindow from the first region so
         // browsers load the correct data immediately instead of the default

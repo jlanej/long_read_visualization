@@ -60,6 +60,8 @@ filename (everything before the first `.`): `NA21110.t2t.cram` → `NA21110`.
 | `*_hap{1,2}_to_ref.mapping.json.gz` | JSON coordinate map for programmatic use |
 | `*_reads_to_hap{1,2}.bam(.bai)` | Reads aligned to each haplotype assembly |
 | `*_ref_to_hap{1,2}.bam(.bai)` | Reference genome aligned to each haplotype assembly (assembly-coordinate BAM, for cross-checking and assembly-panel display) |
+| `*_hap2_to_hap1.bam(.bai)` | Hap2 aligned to hap1 (hap1-coordinate BAM, for cross-haplotype comparison in hap1 panel) |
+| `*_hap1_to_hap2.bam(.bai)` | Hap1 aligned to hap2 (hap2-coordinate BAM, for cross-haplotype comparison in hap2 panel) |
 
 ---
 
@@ -229,17 +231,44 @@ existing files:
 
 ### Loading in IGV.js
 
-To display the reference-on-assembly track alongside reads:
+To display the reference-on-assembly and cross-haplotype tracks alongside reads:
 
 ```json
 {
   "reference": { "fastaURL": "hap1.fa", "indexURL": "hap1.fa.fai" },
   "tracks": [
     { "name": "Reads → Hap1",     "url": "sample_reads_to_hap1.bam",  "type": "alignment" },
-    { "name": "Reference → Hap1", "url": "sample_ref_to_hap1.bam",    "type": "alignment" }
+    { "name": "Reference → Hap1", "url": "sample_ref_to_hap1.bam",    "type": "alignment" },
+    { "name": "Hap2 → Hap1",      "url": "sample_hap2_to_hap1.bam",   "type": "alignment" }
   ]
 }
 ```
+
+---
+
+## Cross-haplotype BAMs (Step 7)
+
+### What they are
+
+The pipeline also generates **cross-haplotype** BAMs (Step 7):
+
+```
+*_hap2_to_hap1.bam(.bai)
+*_hap1_to_hap2.bam(.bai)
+```
+
+These BAMs align one haplotype assembly directly against the other, sorted
+in the **target haplotype's** coordinate space.  `*_hap2_to_hap1.bam` has
+hap2 as query and hap1 as target (sorted in hap1 coordinates), while
+`*_hap1_to_hap2.bam` has hap1 as query and hap2 as target (sorted in hap2
+coordinates).
+
+### Why they are useful
+
+| Use case | Detail |
+|---|---|
+| **Direct haplotype comparison** | Load `*_hap2_to_hap1.bam` in the hap1 panel to see how hap2 sequence aligns in hap1 coordinate space, revealing heterozygous variants and structural differences between haplotypes without going through the reference. |
+| **Phasing validation** | Viewing both haplotypes in each other's coordinate space helps confirm that phased variants are correctly assigned to each haplotype. |
 
 ---
 

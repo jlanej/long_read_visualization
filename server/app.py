@@ -148,6 +148,8 @@ def discover_pipeline_files(sample):
         "reads_to_hap2_bam": f"{prefix}_reads_to_hap2.bam",
         "ref_to_hap1_bam": f"{prefix}_ref_to_hap1.bam",
         "ref_to_hap2_bam": f"{prefix}_ref_to_hap2.bam",
+        "hap2_to_hap1_bam": f"{prefix}_hap2_to_hap1.bam",
+        "hap1_to_hap2_bam": f"{prefix}_hap1_to_hap2.bam",
         "hap1_mapping_index": f"{prefix}_hap1_to_ref.mapping.json.gz",
         "hap2_mapping_index": f"{prefix}_hap2_to_ref.mapping.json.gz",
     }
@@ -627,6 +629,8 @@ class IGVHandler(SimpleHTTPRequestHandler):
                 "reads_to_hap2_bam": data_url("reads_to_hap2_bam"),
                 "ref_to_hap1_bam": data_url("ref_to_hap1_bam"),
                 "ref_to_hap2_bam": data_url("ref_to_hap2_bam"),
+                "hap2_to_hap1_bam": data_url("hap2_to_hap1_bam"),
+                "hap1_to_hap2_bam": data_url("hap1_to_hap2_bam"),
                 "reads_bam": data_url("reads_bam"),
                 "reads_cram": data_url("reads_cram"),
                 "reads_to_hap1_cram": data_url("reads_to_hap1_cram"),

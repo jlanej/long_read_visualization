@@ -520,6 +520,8 @@ footer a:hover {{ color: var(--text); }}
           <tr><td>*_hap{{1,2}}_to_ref.mapping.bed.gz(.tbi)</td><td>Tabix-indexed BED coordinate map</td></tr>
           <tr><td>*_reads_to_hap{{1,2}}.bam(.bai)</td><td>Reads aligned to each haplotype assembly</td></tr>
           <tr><td>*_ref_to_hap{{1,2}}.bam(.bai)</td><td>Reference aligned to each haplotype — assembly-coordinate BAM</td></tr>
+          <tr><td>*_hap2_to_hap1.bam(.bai)</td><td>Hap2 aligned to hap1 — cross-haplotype comparison track in hap1 panel</td></tr>
+          <tr><td>*_hap1_to_hap2.bam(.bai)</td><td>Hap1 aligned to hap2 — cross-haplotype comparison track in hap2 panel</td></tr>
         </tbody>
       </table>
     </div>
