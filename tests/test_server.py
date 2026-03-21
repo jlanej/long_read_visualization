@@ -1150,6 +1150,18 @@ class TestFrontendMemoryGuards(unittest.TestCase):
         self.assertIn("const buffer = Math.min(rawBuffer, MAX_REGION_BUFFER);", html)
         self.assertIn("width = Math.min(width, MAX_VISIBILITY_WINDOW);", html)
 
+    def test_frontend_uses_stable_region_selection(self):
+        index_path = os.path.join(_REPO_ROOT, "server", "static", "index.html")
+        with open(index_path, encoding="utf-8") as fh:
+            html = fh.read()
+
+        self.assertIn("function selectBestRegion(regions)", html)
+        self.assertIn("function selectBestLocus(loci)", html)
+        self.assertIn("selectBestRegion(result.hap1)", html)
+        self.assertIn("selectBestRegion(result.hap2)", html)
+        self.assertIn("selectBestLocus(region.hap1_regions)", html)
+        self.assertIn("selectBestLocus(region.hap2_regions)", html)
+
 
 if __name__ == "__main__":
     unittest.main()
