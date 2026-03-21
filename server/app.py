@@ -382,9 +382,15 @@ class CoordinateTranslator:
             for hit in hits:
                 if hit.get("event_type") != "alignment":
                     continue
-                asm_chrom = hit["asm_chrom"]
-                asm_start = hit["asm_start"]
-                asm_end = hit["asm_end"]
+                asm_chrom = hit.get("asm_chrom")
+                asm_start = hit.get("asm_start")
+                asm_end = hit.get("asm_end")
+                if not asm_chrom:
+                    continue
+                if not isinstance(asm_start, int) or not isinstance(asm_end, int):
+                    continue
+                if asm_end <= asm_start:
+                    continue
                 asm_regions.append({
                     "chrom": asm_chrom,
                     "start": asm_start,
@@ -396,7 +402,7 @@ class CoordinateTranslator:
             if len(merged) > 1:
                 logger.debug(
                     "translate %s %s:%d-%d → %s returned %d disjoint "
-                    "region(s); client will use the first",
+                    "region(s); downstream selection will choose the dominant locus",
                     sample_id, chrom, start, end, hap, len(merged),
                 )
             result[hap] = merged
@@ -447,15 +453,25 @@ def _select_dotplot_region(regions):
 
     grouped = collections.defaultdict(list)
     for r in regions:
-        grouped[(r["chrom"], r.get("strand", "+"))].append(r)
+        chrom = r.get("chrom")
+        start = r.get("start")
+        end = r.get("end")
+        if not chrom:
+            continue
+        if not isinstance(start, int) or not isinstance(end, int):
+            continue
+        if end <= start:
+            continue
+        grouped[(chrom, r.get("strand", "+"))].append({
+            "start": start,
+            "end": end,
+        })
 
     best = None
     for (chrom, strand), group in grouped.items():
         intervals = sorted((r["start"], r["end"]) for r in group)
         merged_intervals = []
         for s, e in intervals:
-            if e <= s:
-                continue
             if not merged_intervals or s > merged_intervals[-1][1]:
                 merged_intervals.append([s, e])
             else:
@@ -466,8 +482,8 @@ def _select_dotplot_region(regions):
         covered_bp = sum(e - s for s, e in merged_intervals)
         envelope_start = merged_intervals[0][0]
         envelope_end = merged_intervals[-1][1]
-        # Prefer larger covered sequence; break ties with larger envelope.
-        score = (covered_bp, envelope_end - envelope_start)
+        # Prefer larger covered sequence; break ties with a tighter envelope.
+        score = (covered_bp, -(envelope_end - envelope_start))
         if best is None or score > best["score"]:
             best = {
                 "chrom": chrom,

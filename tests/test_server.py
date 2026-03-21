@@ -951,6 +951,60 @@ class TestSelectDotplotRegion(unittest.TestCase):
         self.assertEqual(best["start"], 100)
         self.assertEqual(best["end"], 800)
 
+    def test_ignores_invalid_interval_records(self):
+        regions = [
+            {"chrom": "ctgA", "start": 100, "end": 200, "strand": "+"},
+            {"chrom": "ctgA", "start": "x", "end": 300, "strand": "+"},
+            {"chrom": "", "start": 0, "end": 100, "strand": "+"},
+            {"chrom": "ctgA", "start": 500, "end": 500, "strand": "+"},
+        ]
+        best = server_app._select_dotplot_region(regions)
+        self.assertIsNotNone(best)
+        self.assertEqual(best["chrom"], "ctgA")
+        self.assertEqual(best["start"], 100)
+        self.assertEqual(best["end"], 200)
+
+    def test_tie_prefers_tighter_envelope(self):
+        regions = [
+            {"chrom": "ctgA", "start": 0, "end": 100, "strand": "+"},
+            {"chrom": "ctgA", "start": 200, "end": 300, "strand": "+"},
+            {"chrom": "ctgB", "start": 0, "end": 100, "strand": "+"},
+            {"chrom": "ctgB", "start": 100, "end": 200, "strand": "+"},
+        ]
+        best = server_app._select_dotplot_region(regions)
+        self.assertIsNotNone(best)
+        self.assertEqual(best["chrom"], "ctgB")
+        self.assertEqual(best["start"], 0)
+        self.assertEqual(best["end"], 200)
+
+
+class TestTranslatorSelectionRobustness(unittest.TestCase):
+    """Tests for robust translation hit filtering in CoordinateTranslator."""
+
+    def test_translate_ignores_invalid_alignment_hits(self):
+        class _StubCM:
+            @staticmethod
+            def query(idx, chrom, start, end, min_mapq=0):
+                return [
+                    {"event_type": "alignment", "asm_chrom": "ctgA", "asm_start": 100, "asm_end": 150, "strand": "+"},
+                    {"event_type": "alignment", "asm_chrom": "", "asm_start": 10, "asm_end": 20, "strand": "+"},
+                    {"event_type": "alignment", "asm_chrom": "ctgA", "asm_start": "100", "asm_end": 200, "strand": "+"},
+                    {"event_type": "alignment", "asm_chrom": "ctgA", "asm_start": 220, "asm_end": "260", "strand": "+"},
+                    {"event_type": "alignment", "asm_chrom": "ctgA", "asm_start": 300, "asm_end": 300, "strand": "+"},
+                    {"event_type": "deletion", "asm_chrom": "ctgA", "asm_start": 500, "asm_end": 600, "strand": "+"},
+                ]
+
+        translator = server_app.CoordinateTranslator()
+        translator._indices[("S1", "hap1")] = {"dummy": True}
+        translator._indices[("S1", "hap2")] = {"dummy": True}
+
+        from unittest.mock import patch
+        with patch.object(server_app, "coordinate_mapper", _StubCM):
+            result = translator.translate("S1", "chr1", 0, 1000)
+
+        self.assertEqual(result["hap1"], [{"chrom": "ctgA", "start": 100, "end": 150, "strand": "+"}])
+        self.assertEqual(result["hap2"], [{"chrom": "ctgA", "start": 100, "end": 150, "strand": "+"}])
+
 
 class TestApiTranslate(unittest.TestCase):
     """Tests for the _api_translate handler logic."""
