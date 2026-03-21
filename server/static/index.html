@@ -563,6 +563,7 @@
     let displaySquished = true;          // default: squished (compact)
     let hideSmallIndels = true;          // default: hide spurious indels (long-read mode)
     let opGeneration = 0;               // increments on sample/region change to invalidate stale ops
+    let hasMappingIndex = false;         // true when server has loaded PAF-based coordinate indices
 
     // Anchor loci: the known-good region placements set during navigateToRegion.
     // Used as a proportional fallback when coordinate-mapping indices are
@@ -571,6 +572,7 @@
     let anchorRef  = null;
     let anchorHap1 = null;
     let anchorHap2 = null;
+    let lastVisibilityWindow = 0;       // tracks the current window to avoid redundant updates
     const REGION_BUFFER_MULTIPLIER = 5;   // buffer = 5 × SV event size on each side (~4.2 kb for an 834 bp SV)
     const MIN_REGION_BUFFER = 1000;       // minimum buffer so tiny regions still show context
     const SPLITTER_HEIGHT = 6;
@@ -672,6 +674,7 @@
 
     async function fetchJSON(url) {
         const resp = await fetch(url);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
         return resp.json();
     }
 
@@ -776,7 +779,9 @@
             return;
         }
         currentSample = config;
+        hasMappingIndex = !!config.has_mapping_index;
         console.log("[LRV] Sample config:", JSON.stringify({
+            has_mapping_index: hasMappingIndex,
             cram_ref: config.cram_ref || "(not set)",
             reads_cram: config.tracks.reads_cram || null,
             reads_to_hap1_cram: config.tracks.reads_to_hap1_cram || null,
@@ -1032,6 +1037,13 @@
     let translateTimeout = null;
     let activeTranslateCtrl = null;   // AbortController for in-flight translate fetch
 
+    // Sync debounce:
+    //  - 150ms when using client-side proportional mapping (no network)
+    //  - 350ms when making server round-trips for index-based translation
+    function _syncDebounceMs() {
+        return hasMappingIndex ? 350 : 150;
+    }
+
     function onRefLocusChange(referenceFrameList) {
         if (!syncEnabled || translating) return;
 
@@ -1047,7 +1059,10 @@
             activeTranslateCtrl = null;
         }
         if (translateTimeout) clearTimeout(translateTimeout);
-        translateTimeout = setTimeout(() => translateAndSync(referenceFrameList), 500);
+        translateTimeout = setTimeout(
+            () => translateAndSync(referenceFrameList),
+            _syncDebounceMs()
+        );
     }
 
     async function translateAndSync(referenceFrameList) {
@@ -1056,18 +1071,39 @@
         // Capture generation so we can detect stale results.
         const gen = opGeneration;
 
-        // Abort any previous in-flight request (safety net for back-to-back calls).
-        if (activeTranslateCtrl) activeTranslateCtrl.abort();
-        activeTranslateCtrl = new AbortController();
-        const thisCtrl = activeTranslateCtrl;
-        const { signal } = thisCtrl;
-
         const frame = referenceFrameList[0];
         if (!frame) return;
 
         const chrom = frame.chr;
         const start = Math.round(frame.start);
         const end = Math.round(frame.end);
+
+        // ── Fast path: purely client-side proportional mapping ──────────
+        // When no PAF-based mapping index exists on the server (indicated
+        // by has_mapping_index=false in the sample config), skip the
+        // network round-trip entirely.  The proportional mapping uses the
+        // anchor loci recorded during navigateToRegion to translate ref
+        // viewport positions to hap coordinate space — correctly accounting
+        // for length differences caused by real structural variation.
+        // This eliminates the main source of browser tab crashes: a storm
+        // of fetch→abort→fetch cycles on every zoom/pan event that
+        // overwhelms the browser's networking layer with full-scale data.
+        if (!hasMappingIndex) {
+            const hap1Locus = (anchorRef && anchorHap1)
+                ? computeProportionalLocus(anchorHap1, anchorRef, start, end)
+                : null;
+            const hap2Locus = (anchorRef && anchorHap2)
+                ? computeProportionalLocus(anchorHap2, anchorRef, start, end)
+                : null;
+            return _applySyncLoci(hap1Locus, hap2Locus, start, end, gen);
+        }
+
+        // ── Network path: index-based translation with proportional fallback ─
+        // Abort any previous in-flight request (safety net for back-to-back calls).
+        if (activeTranslateCtrl) activeTranslateCtrl.abort();
+        activeTranslateCtrl = new AbortController();
+        const thisCtrl = activeTranslateCtrl;
+        const { signal } = thisCtrl;
 
         try {
             const resp = await fetch(
@@ -1085,12 +1121,7 @@
 
             // Determine hap loci: prefer index-based translation, fall back to
             // proportional mapping from the anchor relationship established
-            // during navigateToRegion.  This ensures zoom/pan sync works even
-            // when coordinate-mapping indices are absent or return empty results
-            // (e.g. the user zooms into a sub-region that has no direct
-            // alignment in the PAF).  The proportional fallback correctly
-            // accounts for length differences between reference and haplotype
-            // sequences caused by real structural variation.
+            // during navigateToRegion.
             let hap1Locus = null;
             let hap2Locus = null;
 
@@ -1108,8 +1139,26 @@
                 hap2Locus = computeProportionalLocus(anchorHap2, anchorRef, start, end);
             }
 
+            await _applySyncLoci(hap1Locus, hap2Locus, start, end, gen);
+        } catch (err) {
+            translating = false;
+            if (err.name !== "AbortError") {
+                console.warn("Translation error:", err);
+            }
+        } finally {
+            // Only clear activeTranslateCtrl if this call is still the active
+            // one; a newer call may have already replaced it.
+            if (activeTranslateCtrl === thisCtrl) {
+                activeTranslateCtrl = null;
+            }
+        }
+    }
+
+    // Shared logic: apply translated loci to hap panels and update visibility.
+    async function _applySyncLoci(hap1Locus, hap2Locus, refStart, refEnd, gen) {
+        try {
             // Compute visibility window from all available spans
-            const refSpan = computeInclusiveSpan(start, end) || 1;
+            const refSpan = computeInclusiveSpan(refStart, refEnd) || 1;
             const translatedWidths = [refSpan];
             if (hap1Locus) {
                 const h1Span = parseLocusSpan(hap1Locus);
@@ -1123,10 +1172,6 @@
 
             // Set the flag *before* driving the hap browsers so that any
             // locuschange fired by their search() calls is ignored.
-            // NOTE: we intentionally do NOT set translating=true before the
-            // fetch above, because onRefLocusChange needs translating=false
-            // to abort this request and queue an updated position if the user
-            // keeps panning during the network round-trip.
             translating = true;
 
             // Navigate hap1 panel
@@ -1142,19 +1187,8 @@
                 if (gen !== opGeneration) return;
                 document.getElementById("hap2Locus").textContent = hap2Locus;
             }
-
-            translating = false;
-        } catch (err) {
-            translating = false;
-            if (err.name !== "AbortError") {
-                console.warn("Translation error:", err);
-            }
         } finally {
-            // Only clear activeTranslateCtrl if this call is still the active
-            // one; a newer call may have already replaced it.
-            if (activeTranslateCtrl === thisCtrl) {
-                activeTranslateCtrl = null;
-            }
+            translating = false;
         }
     }
 
@@ -1225,7 +1259,11 @@
 
     // Update visibilityWindow on every track in every panel to match the
     // current displayed region, so tracks load exactly what is shown.
+    // Skips the update when the width is unchanged (within 1 bp) to avoid
+    // redundant IGV.js data reloads during rapid zoom/pan.
     function setVisibilityWindow(width) {
+        if (Math.abs(width - lastVisibilityWindow) < 1) return;
+        lastVisibilityWindow = width;
         for (const browser of [refBrowser, hap1Browser, hap2Browser]) {
             if (!browser) continue;
             for (const tv of (browser.trackViews || [])) {

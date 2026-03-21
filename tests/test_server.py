@@ -627,6 +627,20 @@ class TestTranslatorCache(unittest.TestCase):
         translator.translate("s", "chr1", 300, 400)
         self.assertEqual(len(translator._cache), 3)
 
+    def test_has_index_no_indices(self):
+        """has_index returns False when no mapping indices are loaded."""
+        translator = server_app.CoordinateTranslator()
+        self.assertFalse(translator.has_index("s"))
+
+    def test_has_index_with_loaded_sample(self):
+        """has_index returns True after loading a sample with indices."""
+        translator = server_app.CoordinateTranslator()
+        # Simulate: only register in _indices dict directly
+        translator._indices[("s", "hap1")] = {"chr1": {"blocks": []}}
+        self.assertTrue(translator.has_index("s"))
+        # Different sample should still be False
+        self.assertFalse(translator.has_index("other"))
+
 
 class TestApiDotplot(unittest.TestCase):
     """Tests for the _api_dotplot handler logic."""

@@ -348,6 +348,13 @@ class CoordinateTranslator:
                 idx = coordinate_mapper.load_index(path)
                 self._indices[(sid, hap)] = idx
 
+    def has_index(self, sample_id):
+        """Return True if at least one haplotype mapping index is loaded."""
+        return (
+            (sample_id, "hap1") in self._indices
+            or (sample_id, "hap2") in self._indices
+        )
+
     def translate(self, sample_id, chrom, start, end, min_mapq=0):
         """Translate a reference region to assembly coordinates.
 
@@ -522,6 +529,7 @@ class IGVHandler(SimpleHTTPRequestHandler):
 
         config = {
             "sample_id": sample_id,
+            "has_mapping_index": self.translator.has_index(sample_id),
             "reference": {
                 "fastaURL": data_url("reference"),
             },
