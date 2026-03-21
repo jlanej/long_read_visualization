@@ -837,7 +837,10 @@
         // compressed index and attempt to download the entire bgzipped
         // reference into memory — the most likely cause of tab crashes.
         const cramRefUrl = config.cram_ref ? (baseUrl + config.cram_ref) : null;
-        const cramRefIdxUrl = cramRefUrl ? (cramRefUrl + ".fai") : null;
+        const cramRefIdxUrl = cramRefUrl ? (baseUrl + config.cram_ref + ".fai") : null;
+        const cramRefCompressedIdxUrl = config.cram_ref_gzi
+            ? (baseUrl + config.cram_ref_gzi)
+            : null;
         if (cramRefUrl) {
             console.log("[LRV] Using explicit cram_ref for CRAM decoding:", cramRefUrl);
         }
@@ -875,6 +878,9 @@
                 if (cramRefUrl) {
                     track.sequenceURL = cramRefUrl;
                     track.sequenceIndexURL = cramRefIdxUrl;
+                    if (cramRefCompressedIdxUrl) {
+                        track.sequenceCompressedIndexURL = cramRefCompressedIdxUrl;
+                    }
                     console.log(`[LRV] CRAM track "${name}": using explicit cram_ref`);
                 } else {
                     console.log(`[LRV] CRAM track "${name}": using panel genome reference for decoding`);

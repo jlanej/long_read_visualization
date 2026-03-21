@@ -515,6 +515,10 @@ class IGVHandler(SimpleHTTPRequestHandler):
 
         # Build cram_ref URL if the sample provides one
         cram_ref_url = data_url("cram_ref")
+        cram_ref_gzi_url = None
+        cram_ref_path = sample.get("cram_ref")
+        if cram_ref_url and cram_ref_path and os.path.isfile(cram_ref_path + ".gzi"):
+            cram_ref_gzi_url = cram_ref_url + ".gzi"
         if cram_ref_url:
             logger.info("Sample %s: using explicit cram_ref=%s",
                          sample_id, sample.get("cram_ref"))
@@ -553,6 +557,7 @@ class IGVHandler(SimpleHTTPRequestHandler):
                 "reads_to_hap2_cram": data_url("reads_to_hap2_cram"),
             },
             "cram_ref": cram_ref_url,
+            "cram_ref_gzi": cram_ref_gzi_url,
         }
         return config
 

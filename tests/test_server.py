@@ -776,5 +776,72 @@ class TestApiTranslate(unittest.TestCase):
         )
 
 
+class TestApiSampleCramRef(unittest.TestCase):
+    """Tests for explicit cram_ref URLs returned by _api_sample."""
+
+    def _make_handler(self, samples):
+        class _Translator:
+            def has_index(self, _sample_id):
+                return False
+
+        handler = type("FakeHandler", (), {})()
+        handler.samples = samples
+        handler.translator = _Translator()
+        handler.file_registry = {}
+        handler._find_sample = lambda sid: next(
+            (s for s in samples if s["sample_id"] == sid), None
+        )
+        import types
+        handler._api_sample = types.MethodType(
+            server_app.IGVHandler._api_sample, handler
+        )
+        return handler
+
+    def test_cram_ref_gzi_url_included_when_present(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ref = os.path.join(tmpdir, "ref.fa.gz")
+            h1 = os.path.join(tmpdir, "h1.fa.gz")
+            h2 = os.path.join(tmpdir, "h2.fa.gz")
+            cram_ref = os.path.join(tmpdir, "cram_ref.fa.gz")
+            for p in (ref, h1, h2, cram_ref):
+                open(p, "w").close()
+                open(p + ".fai", "w").close()
+                open(p + ".gzi", "w").close()
+
+            samples = [{
+                "sample_id": "S1",
+                "reference": ref,
+                "hap1_assembly": h1,
+                "hap2_assembly": h2,
+                "cram_ref": cram_ref,
+            }]
+            handler = self._make_handler(samples)
+            result = handler._api_sample("S1")
+            self.assertEqual(result["cram_ref"], "/data/S1/cram_ref.fa.gz")
+            self.assertEqual(result["cram_ref_gzi"], "/data/S1/cram_ref.fa.gz.gzi")
+
+    def test_cram_ref_gzi_url_none_when_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ref = os.path.join(tmpdir, "ref.fa")
+            h1 = os.path.join(tmpdir, "h1.fa")
+            h2 = os.path.join(tmpdir, "h2.fa")
+            cram_ref = os.path.join(tmpdir, "cram_ref.fa.gz")
+            for p in (ref, h1, h2, cram_ref):
+                open(p, "w").close()
+                open(p + ".fai", "w").close()
+
+            samples = [{
+                "sample_id": "S1",
+                "reference": ref,
+                "hap1_assembly": h1,
+                "hap2_assembly": h2,
+                "cram_ref": cram_ref,
+            }]
+            handler = self._make_handler(samples)
+            result = handler._api_sample("S1")
+            self.assertEqual(result["cram_ref"], "/data/S1/cram_ref.fa.gz")
+            self.assertIsNone(result["cram_ref_gzi"])
+
+
 if __name__ == "__main__":
     unittest.main()
