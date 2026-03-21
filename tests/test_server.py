@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 # Allow importing from server/ and src/ directories
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -699,6 +700,148 @@ class TestApiDotplot(unittest.TestCase):
         # k=-5 should be clamped to 1
         result = handler._api_dotplot({"sample": ["S1"], "k": ["-5"]})
         self.assertEqual(result["k"], 1)
+
+
+class TestApiTranslate(unittest.TestCase):
+    """Tests for the _api_translate handler logic."""
+
+    def _make_handler(self):
+        class _Translator:
+            MAX_TRANSLATE_SPAN_BP = 2_000_000
+
+            def __init__(self):
+                self.calls = []
+
+            def translate(self, sample_id, chrom, start, end, **kwargs):
+                self.calls.append((
+                    sample_id, chrom, start, end, kwargs.get("min_mapq", 0)
+                ))
+                return {"hap1": [], "hap2": []}
+
+        handler = type("FakeHandler", (), {})()
+        handler.translator = _Translator()
+        import types
+        handler._api_translate = types.MethodType(
+            server_app.IGVHandler._api_translate, handler
+        )
+        return handler
+
+    def test_invalid_min_mapq_returns_error(self):
+        handler = self._make_handler()
+        result = handler._api_translate({
+            "sample": ["S1"],
+            "chrom": ["chr1"],
+            "start": ["10"],
+            "end": ["20"],
+            "min_mapq": ["abc"],
+        })
+        self.assertIn("error", result)
+        self.assertIn("min_mapq", result["error"])
+
+    def test_invalid_coordinate_range_returns_error(self):
+        handler = self._make_handler()
+        result = handler._api_translate({
+            "sample": ["S1"],
+            "chrom": ["chr1"],
+            "start": ["50"],
+            "end": ["10"],
+        })
+        self.assertEqual(result, {"error": "Invalid coordinate range"})
+
+    def test_oversized_translate_is_guarded(self):
+        handler = self._make_handler()
+        result = handler._api_translate({
+            "sample": ["S1"],
+            "chrom": ["chr1"],
+            "start": ["0"],
+            "end": ["3000000"],
+        })
+        self.assertEqual(result["hap1"], [])
+        self.assertEqual(result["hap2"], [])
+        self.assertIn("warning", result)
+        self.assertEqual(handler.translator.calls, [])
+
+    def test_valid_translate_calls_translator(self):
+        handler = self._make_handler()
+        result = handler._api_translate({
+            "sample": ["S1"],
+            "chrom": ["chr1"],
+            "start": ["100"],
+            "end": ["200"],
+            "min_mapq": ["5"],
+        })
+        self.assertEqual(result, {"hap1": [], "hap2": []})
+        self.assertEqual(
+            handler.translator.calls,
+            [("S1", "chr1", 100, 200, 5)]
+        )
+
+
+class TestApiSampleCramRef(unittest.TestCase):
+    """Tests for explicit cram_ref URLs returned by _api_sample."""
+
+    def _make_handler(self, samples):
+        class _Translator:
+            def has_index(self, _sample_id):
+                return False
+
+        handler = type("FakeHandler", (), {})()
+        handler.samples = samples
+        handler.translator = _Translator()
+        handler.file_registry = {}
+        handler._find_sample = lambda sid: next(
+            (s for s in samples if s["sample_id"] == sid), None
+        )
+        import types
+        handler._api_sample = types.MethodType(
+            server_app.IGVHandler._api_sample, handler
+        )
+        return handler
+
+    def test_cram_ref_gzi_url_included_when_present(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ref = os.path.join(tmpdir, "ref.fa.gz")
+            h1 = os.path.join(tmpdir, "h1.fa.gz")
+            h2 = os.path.join(tmpdir, "h2.fa.gz")
+            cram_ref = os.path.join(tmpdir, "cram_ref.fa.gz")
+            for p in (ref, h1, h2, cram_ref):
+                Path(p).touch()
+                Path(p + ".fai").touch()
+                Path(p + ".gzi").touch()
+
+            samples = [{
+                "sample_id": "S1",
+                "reference": ref,
+                "hap1_assembly": h1,
+                "hap2_assembly": h2,
+                "cram_ref": cram_ref,
+            }]
+            handler = self._make_handler(samples)
+            result = handler._api_sample("S1")
+            self.assertEqual(result["cram_ref"], "/data/S1/cram_ref.fa.gz")
+            self.assertEqual(result["cram_ref_gzi"], "/data/S1/cram_ref.fa.gz.gzi")
+
+    def test_cram_ref_gzi_url_none_when_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ref = os.path.join(tmpdir, "ref.fa")
+            h1 = os.path.join(tmpdir, "h1.fa")
+            h2 = os.path.join(tmpdir, "h2.fa")
+            cram_ref = os.path.join(tmpdir, "cram_ref.fa.gz")
+            for p in (ref, h1, h2, cram_ref):
+                Path(p).touch()
+                Path(p + ".fai").touch()
+
+            samples = [{
+                "sample_id": "S1",
+                "reference": ref,
+                "hap1_assembly": h1,
+                "hap2_assembly": h2,
+                "cram_ref": cram_ref,
+            }]
+            handler = self._make_handler(samples)
+            result = handler._api_sample("S1")
+            self.assertEqual(result["cram_ref"], "/data/S1/cram_ref.fa.gz")
+            self.assertIsNone(result["cram_ref_gzi"])
 
 
 if __name__ == "__main__":
