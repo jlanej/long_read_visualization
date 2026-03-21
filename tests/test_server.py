@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 # Allow importing from server/ and src/ directories
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -804,9 +805,9 @@ class TestApiSampleCramRef(unittest.TestCase):
             h2 = os.path.join(tmpdir, "h2.fa.gz")
             cram_ref = os.path.join(tmpdir, "cram_ref.fa.gz")
             for p in (ref, h1, h2, cram_ref):
-                open(p, "w").close()
-                open(p + ".fai", "w").close()
-                open(p + ".gzi", "w").close()
+                Path(p).touch()
+                Path(p + ".fai").touch()
+                Path(p + ".gzi").touch()
 
             samples = [{
                 "sample_id": "S1",
@@ -827,8 +828,8 @@ class TestApiSampleCramRef(unittest.TestCase):
             h2 = os.path.join(tmpdir, "h2.fa")
             cram_ref = os.path.join(tmpdir, "cram_ref.fa.gz")
             for p in (ref, h1, h2, cram_ref):
-                open(p, "w").close()
-                open(p + ".fai", "w").close()
+                Path(p).touch()
+                Path(p + ".fai").touch()
 
             samples = [{
                 "sample_id": "S1",

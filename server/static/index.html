@@ -837,7 +837,7 @@
         // compressed index and attempt to download the entire bgzipped
         // reference into memory — the most likely cause of tab crashes.
         const cramRefUrl = config.cram_ref ? (baseUrl + config.cram_ref) : null;
-        const cramRefIdxUrl = cramRefUrl ? (baseUrl + config.cram_ref + ".fai") : null;
+        const cramRefIdxUrl = cramRefUrl ? (cramRefUrl + ".fai") : null;
         const cramRefCompressedIdxUrl = config.cram_ref_gzi
             ? (baseUrl + config.cram_ref_gzi)
             : null;
