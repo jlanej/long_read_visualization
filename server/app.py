@@ -391,8 +391,15 @@ class CoordinateTranslator:
                     "end": asm_end,
                     "strand": hit.get("strand", "+"),
                 })
-            # Merge overlapping regions per contig
-            result[hap] = _merge_regions(asm_regions)
+            # Merge overlapping regions per contig and strand
+            merged = _merge_regions(asm_regions)
+            if len(merged) > 1:
+                logger.debug(
+                    "translate %s %s:%d-%d → %s returned %d disjoint "
+                    "region(s); client will use the first",
+                    sample_id, chrom, start, end, hap, len(merged),
+                )
+            result[hap] = merged
 
         # LRU cache insertion (OrderedDict provides O(1) eviction)
         self._cache[cache_key] = result
@@ -403,12 +410,19 @@ class CoordinateTranslator:
 
 
 def _merge_regions(regions):
-    """Merge overlapping assembly regions, grouped by contig."""
-    by_contig = {}
+    """Merge overlapping assembly regions, grouped by contig *and* strand.
+
+    Intervals on opposite strands of the same contig are never merged
+    because they represent different alignment orientations (e.g. an
+    inversion boundary) and collapsing them would produce incorrect
+    assembly coordinates in the browser panel.
+    """
+    by_key = {}
     for r in regions:
-        by_contig.setdefault(r["chrom"], []).append(r)
+        key = (r["chrom"], r.get("strand", "+"))
+        by_key.setdefault(key, []).append(r)
     merged = []
-    for contig, intervals in sorted(by_contig.items()):
+    for (contig, strand), intervals in sorted(by_key.items()):
         intervals.sort(key=lambda x: x["start"])
         cur = intervals[0].copy()
         for nxt in intervals[1:]:
@@ -579,9 +593,11 @@ class IGVHandler(SimpleHTTPRequestHandler):
             return {"error": "Missing sample or chrom parameter"}
         if start < 0 or end < 0 or end < start:
             return {"error": "Invalid coordinate range"}
+        if end == start:
+            return {"error": "Empty coordinate range (start == end)"}
 
-        # Inclusive coordinates: [start, end]
-        span = end - start + 1
+        # Half-open coordinates: [start, end)
+        span = end - start
         if span > self.translator.MAX_TRANSLATE_SPAN_BP:
             logger.warning(
                 "Skipping oversized translate request sample=%s chrom=%s start=%d end=%d span=%d",

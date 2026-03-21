@@ -398,6 +398,46 @@ class TestMergeRegions(unittest.TestCase):
         merged = server_app._merge_regions(regions)
         self.assertEqual(len(merged), 1)
 
+    def test_different_strands_not_merged(self):
+        """Regions on opposite strands of the same contig are NOT merged.
+
+        This is critical for inversions: a + and - strand alignment on the
+        same contig represent opposite orientations and merging them would
+        produce an incorrect, inflated assembly region.
+        """
+        regions = [
+            {"chrom": "chr1", "start": 0, "end": 150, "strand": "+"},
+            {"chrom": "chr1", "start": 100, "end": 300, "strand": "-"},
+        ]
+        merged = server_app._merge_regions(regions)
+        self.assertEqual(len(merged), 2)
+        strands = sorted(r["strand"] for r in merged)
+        self.assertEqual(strands, ["+", "-"])
+
+    def test_same_strand_merged_across_intervals(self):
+        """Multiple overlapping + strand regions on the same contig merge."""
+        regions = [
+            {"chrom": "chr1", "start": 0, "end": 100, "strand": "+"},
+            {"chrom": "chr1", "start": 50, "end": 200, "strand": "+"},
+            {"chrom": "chr1", "start": 180, "end": 350, "strand": "+"},
+        ]
+        merged = server_app._merge_regions(regions)
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["start"], 0)
+        self.assertEqual(merged[0]["end"], 350)
+
+    def test_mixed_contigs_and_strands(self):
+        """Merge groups correctly by (contig, strand) tuple."""
+        regions = [
+            {"chrom": "chr1", "start": 0, "end": 100, "strand": "+"},
+            {"chrom": "chr1", "start": 50, "end": 200, "strand": "+"},
+            {"chrom": "chr1", "start": 0, "end": 100, "strand": "-"},
+            {"chrom": "chr2", "start": 0, "end": 100, "strand": "+"},
+        ]
+        merged = server_app._merge_regions(regions)
+        # chr1/+ → merged to 1, chr1/- → 1, chr2/+ → 1 = total 3
+        self.assertEqual(len(merged), 3)
+
 
 class TestFormatSize(unittest.TestCase):
     """Tests for human-readable size formatting."""
@@ -775,6 +815,49 @@ class TestApiTranslate(unittest.TestCase):
             handler.translator.calls,
             [("S1", "chr1", 100, 200, 5)]
         )
+
+    def test_zero_width_query_returns_error(self):
+        """start == end is an empty half-open interval and should return an error."""
+        handler = self._make_handler()
+        result = handler._api_translate({
+            "sample": ["S1"],
+            "chrom": ["chr1"],
+            "start": ["1000"],
+            "end": ["1000"],
+        })
+        self.assertIn("error", result)
+        self.assertIn("Empty", result["error"])
+        # Translator must NOT be called for empty intervals
+        self.assertEqual(handler.translator.calls, [])
+
+    def test_span_guard_uses_half_open_convention(self):
+        """The span guard uses half-open math (end - start), not inclusive (end - start + 1).
+
+        With MAX_TRANSLATE_SPAN_BP = 2_000_000:
+        - span = 2_000_000 - 0 = 2_000_000 (exactly at limit) → should pass through
+        - span = 2_000_001 - 0 = 2_000_001 → should be guarded
+        """
+        handler = self._make_handler()
+        # Exactly at limit: should call translator
+        result = handler._api_translate({
+            "sample": ["S1"],
+            "chrom": ["chr1"],
+            "start": ["0"],
+            "end": ["2000000"],
+        })
+        self.assertNotIn("warning", result)
+        self.assertEqual(len(handler.translator.calls), 1)
+
+        # One past the limit: should be guarded
+        handler.translator.calls.clear()
+        result = handler._api_translate({
+            "sample": ["S1"],
+            "chrom": ["chr1"],
+            "start": ["0"],
+            "end": ["2000001"],
+        })
+        self.assertIn("warning", result)
+        self.assertEqual(handler.translator.calls, [])
 
 
 class TestApiSampleCramRef(unittest.TestCase):

@@ -61,6 +61,10 @@ def parse_paf(paf_file):
                 if len(parts) == 3:
                     tag_dict[parts[0]] = parts[2]
 
+            # PAF format: fields[0]=query (assembly), fields[5]=target (reference)
+            # When running ``minimap2 ref.fa asm.fa``, the reference is the
+            # target and the assembly is the query — so fields[5] is ref_chrom
+            # and fields[0] is asm_chrom.
             blocks.append(
                 {
                     "ref_chrom": fields[5],

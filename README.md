@@ -276,7 +276,7 @@ The mapper detects these gaps and classifies them:
 |---|---|---|
 | `alignment` | within an alignment block | Reference bases have direct assembly equivalents |
 | `deletion` | same contig, same strand; assembly gap < reference gap | Assembly deleted sequence relative to reference |
-| `insertion` | same contig, same strand; assembly gap > reference gap | Assembly has novel sequence not in reference |
+| `insertion` | same contig, same strand; assembly gap ≥ reference gap | Assembly has novel sequence not in reference |
 | `inversion` | same contig, opposite strands at junction | Orientation flip — likely an inversion breakpoint |
 | `translocation` | different assembly contigs at junction | Inter-contig event |
 | `complex` | same contig, same strand; assembly gap is negative (overlap) | Duplication or other complex rearrangement |
