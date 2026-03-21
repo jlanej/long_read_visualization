@@ -710,7 +710,7 @@
             intervals.sort((a, b) => a.start - b.start);
             const merged = [];
             for (const iv of intervals) {
-                if (merged.length === 0 || iv.start > merged[merged.length - 1].end) {
+                if (merged.length === 0 || iv.start > (merged[merged.length - 1].end + 1)) {
                     merged.push({ start: iv.start, end: iv.end });
                 } else {
                     merged[merged.length - 1].end = Math.max(
@@ -726,7 +726,7 @@
             const envelope = envelopeEnd - envelopeStart + 1;
             const [chrom, strand] = key.split("\u0000");
 
-            if (!best || covered > best.covered || (covered === best.covered && envelope > best.envelope)) {
+            if (!best || covered > best.covered || (covered === best.covered && envelope < best.envelope)) {
                 best = {
                     chrom,
                     strand,
