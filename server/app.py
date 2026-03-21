@@ -575,6 +575,7 @@ class IGVHandler(SimpleHTTPRequestHandler):
         if start < 0 or end < 0 or end < start:
             return {"error": "Invalid coordinate range"}
 
+        # Inclusive coordinates: [start, end]
         span = end - start + 1
         if span > self.translator.MAX_TRANSLATE_SPAN_BP:
             logger.warning(

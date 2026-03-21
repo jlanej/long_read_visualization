@@ -711,8 +711,10 @@ class TestApiTranslate(unittest.TestCase):
             def __init__(self):
                 self.calls = []
 
-            def translate(self, sample_id, chrom, start, end, min_mapq=0):
-                self.calls.append((sample_id, chrom, start, end, min_mapq))
+            def translate(self, sample_id, chrom, start, end, **kwargs):
+                self.calls.append((
+                    sample_id, chrom, start, end, kwargs.get("min_mapq", 0)
+                ))
                 return {"hap1": [], "hap2": []}
 
         handler = type("FakeHandler", (), {})()
