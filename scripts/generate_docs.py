@@ -710,7 +710,11 @@ apptainer exec \\
           sequences with ≥ 99% identity — the expected divergence between HPRC
           assemblies and a population reference. The <code>--eqx</code> flag
           enables per-base <code>=</code>/<code>X</code> encoding for precise
-          mismatch visualization in IGV.js.
+          mismatch visualization in IGV.js. For difficult repeat-rich loci and
+          complex SV interpretation, best practice is to keep this reciprocal
+          minimap2 workflow as the baseline and add orthogonal confirmation
+          (for example repeat-aware mapping, a second assembly aligner, or
+          graph/pangenome analysis) for high-impact calls.
         </p>
       </div>
       <div class="method-card">

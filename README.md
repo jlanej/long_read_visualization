@@ -215,6 +215,26 @@ reference sequence is `hap1.fa`).
 | `--eqx` | Extended CIGAR (`=` / `X`) | Explicit match/mismatch encoding; enables per-base mismatch visualisation in IGV.js and simplifies downstream CIGAR parsing. |
 | `samtools sort` | By coordinate | BAM is coordinate-sorted in assembly space so that any assembly-coordinate range can be fetched with a standard random-access query. |
 
+### State-of-the-art guidance (SV and complex events)
+
+Our default (`minimap2 -x asm5 --eqx` in both hap→ref and ref→hap directions)
+remains a strong best-practice baseline for high-identity human
+assembly/reference comparisons. To better capture difficult structural variation
+in segmental duplications and other repeat-rich loci, current best practice is
+to treat minimap2 as the primary aligner and add orthogonal confirmation passes
+for critical regions:
+
+| Scenario | Recommended approach |
+|---|---|
+| Routine haplotype assembly vs reference mapping | Keep the current reciprocal minimap2 workflow (`asm5`, `--eqx`) as primary evidence |
+| Repeat-dense / low-complexity loci | Add a repeat-aware long-read remapping pass (for example Winnowmap2) and require concordance at key breakpoints |
+| Complex SV interpretation (nested events, ambiguous breakpoints) | Cross-check with a second assembly aligner (for example LRA) before final biological interpretation |
+| Population-diverse analyses with strong reference-bias concerns | Add a pangenome/graph-based analysis pass as complementary evidence where available |
+
+In this repository, the reciprocal hap→ref and ref→hap BAM design is retained
+as the core QC mechanism: events supported from both directions are typically
+more robust, while one-sided mappings are flagged for deeper review.
+
 ### Idempotency
 
 Step 6 checks for the existence of both the BAM file **and** its index
