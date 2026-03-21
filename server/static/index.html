@@ -1314,6 +1314,8 @@
         // Use the SV event size (displayed in the region navigator) as the
         // basis for the buffer, falling back to the ref-region span.
         // The per-side buffer is capped to keep repeated browsing memory-safe.
+        // Clamp to ≥1 bp so malformed/zero sizes cannot produce degenerate
+        // buffering math while still preserving normal behavior for valid SVs.
         const svSize = Math.max(1, region.size || (refEnd - refStart));
         const rawBuffer = Math.max(svSize * REGION_BUFFER_MULTIPLIER, MIN_REGION_BUFFER);
         const buffer = Math.min(rawBuffer, MAX_REGION_BUFFER);
