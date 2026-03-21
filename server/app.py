@@ -382,9 +382,15 @@ class CoordinateTranslator:
             for hit in hits:
                 if hit.get("event_type") != "alignment":
                     continue
-                asm_chrom = hit["asm_chrom"]
-                asm_start = hit["asm_start"]
-                asm_end = hit["asm_end"]
+                asm_chrom = hit.get("asm_chrom")
+                asm_start = hit.get("asm_start")
+                asm_end = hit.get("asm_end")
+                if not asm_chrom:
+                    continue
+                if type(asm_start) is not int or type(asm_end) is not int:
+                    continue
+                if asm_end <= asm_start:
+                    continue
                 asm_regions.append({
                     "chrom": asm_chrom,
                     "start": asm_start,
@@ -396,7 +402,7 @@ class CoordinateTranslator:
             if len(merged) > 1:
                 logger.debug(
                     "translate %s %s:%d-%d → %s returned %d disjoint "
-                    "region(s); client will use the first",
+                    "region(s); downstream selection will choose the dominant locus",
                     sample_id, chrom, start, end, hap, len(merged),
                 )
             result[hap] = merged
@@ -433,6 +439,62 @@ def _merge_regions(regions):
                 cur = nxt.copy()
         merged.append(cur)
     return merged
+
+
+def _select_dotplot_region(regions):
+    """Select a stable assembly region for dot-plot sequence extraction.
+
+    Translation can yield multiple disjoint intervals. For dot plots we need a
+    single contiguous region string, so we pick the strongest contig/strand
+    group (highest covered bp) and return its full envelope.
+    """
+    if not regions:
+        return None
+
+    grouped = collections.defaultdict(list)
+    for r in regions:
+        chrom = r.get("chrom")
+        start = r.get("start")
+        end = r.get("end")
+        if not chrom:
+            continue
+        if type(start) is not int or type(end) is not int:
+            continue
+        if end <= start:
+            continue
+        grouped[(chrom, r.get("strand", "+"))].append({
+            "start": start,
+            "end": end,
+        })
+
+    best = None
+    for (chrom, strand), group in grouped.items():
+        intervals = sorted((r["start"], r["end"]) for r in group)
+        merged_intervals = []
+        for s, e in intervals:
+            if not merged_intervals or s > merged_intervals[-1][1]:
+                merged_intervals.append([s, e])
+            else:
+                merged_intervals[-1][1] = max(merged_intervals[-1][1], e)
+        if not merged_intervals:
+            continue
+
+        covered_bp = sum(e - s for s, e in merged_intervals)
+        envelope_start = merged_intervals[0][0]
+        envelope_end = merged_intervals[-1][1]
+        # Prefer larger covered sequence; break ties with a tighter envelope.
+        score = (covered_bp, -(envelope_end - envelope_start))
+        if best is None or score > best["score"]:
+            best = {
+                "chrom": chrom,
+                "start": envelope_start,
+                "end": envelope_end,
+                "strand": strand,
+                "score": score,
+                "pieces": len(group),
+            }
+
+    return best
 
 
 # ── HTTP Request Handler ────────────────────────────────────────────────────
@@ -732,12 +794,22 @@ class IGVHandler(SimpleHTTPRequestHandler):
             tr = self.translator.translate(
                 sample_id, ref_chrom, buf_ref_start, buf_ref_end
             )
-            if tr.get("hap1") and len(tr["hap1"]) > 0:
-                r = tr["hap1"][0]
-                hap1_region = f"{r['chrom']}:{r['start']}-{r['end']}"
-            if tr.get("hap2") and len(tr["hap2"]) > 0:
-                r = tr["hap2"][0]
-                hap2_region = f"{r['chrom']}:{r['start']}-{r['end']}"
+            r1 = _select_dotplot_region(tr.get("hap1", []))
+            if r1 is not None:
+                hap1_region = f"{r1['chrom']}:{r1['start']}-{r1['end']}"
+                if r1["pieces"] > 1:
+                    logger.debug(
+                        "Dot plot hap1 merged %d translated intervals into %s",
+                        r1["pieces"], hap1_region
+                    )
+            r2 = _select_dotplot_region(tr.get("hap2", []))
+            if r2 is not None:
+                hap2_region = f"{r2['chrom']}:{r2['start']}-{r2['end']}"
+                if r2["pieces"] > 1:
+                    logger.debug(
+                        "Dot plot hap2 merged %d translated intervals into %s",
+                        r2["pieces"], hap2_region
+                    )
 
         # Resolve FASTA paths
         ref_fasta = sample.get("reference", "")

@@ -888,6 +888,126 @@ class TestApiDotplot(unittest.TestCase):
         actual_span = int(m.group(2)) - int(m.group(1))
         self.assertLessEqual(actual_span, 500_000)
 
+    def test_translator_disjoint_regions_use_envelope(self):
+        """Disjoint translated hits on same contig are merged for extraction."""
+        class _FakeTranslator:
+            def has_index(self, sid):
+                return sid == "S1"
+
+            def translate(self, sid, chrom, start, end, **kw):
+                return {
+                    "hap1": [
+                        {"chrom": "asm1", "start": 100, "end": 200, "strand": "+"},
+                        {"chrom": "asm1", "start": 500, "end": 800, "strand": "+"},
+                    ],
+                    "hap2": [
+                        {"chrom": "asm2", "start": 1000, "end": 1100, "strand": "+"},
+                    ],
+                }
+
+        tr = _FakeTranslator()
+        handler = self._make_handler_class([{
+            "sample_id": "S1",
+            "reference": "",
+            "hap1_assembly": "",
+            "hap2_assembly": "",
+        }], translator=tr)
+        result = handler._api_dotplot({
+            "sample": ["S1"],
+            "ref": ["chr1:10000-20000"],
+            "buffer": ["0"],
+        })
+        self.assertEqual(result["labels"]["hap1"], "asm1:100-800")
+        self.assertEqual(result["labels"]["hap2"], "asm2:1000-1100")
+
+
+class TestSelectDotplotRegion(unittest.TestCase):
+    """Unit tests for dot-plot region selection helper."""
+
+    def test_empty(self):
+        self.assertIsNone(server_app._select_dotplot_region([]))
+
+    def test_prefers_most_covered_bp_group(self):
+        regions = [
+            {"chrom": "ctgA", "start": 100, "end": 150, "strand": "+"},   # 50 bp
+            {"chrom": "ctgA", "start": 300, "end": 350, "strand": "+"},   # 50 bp
+            {"chrom": "ctgB", "start": 1000, "end": 1200, "strand": "+"},  # 200 bp
+        ]
+        best = server_app._select_dotplot_region(regions)
+        self.assertIsNotNone(best)
+        self.assertEqual(best["chrom"], "ctgB")
+        self.assertEqual(best["start"], 1000)
+        self.assertEqual(best["end"], 1200)
+
+    def test_returns_group_envelope_for_disjoint_intervals(self):
+        regions = [
+            {"chrom": "ctgA", "start": 100, "end": 200, "strand": "+"},
+            {"chrom": "ctgA", "start": 500, "end": 800, "strand": "+"},
+            {"chrom": "ctgB", "start": 50, "end": 120, "strand": "+"},
+        ]
+        best = server_app._select_dotplot_region(regions)
+        self.assertIsNotNone(best)
+        self.assertEqual(best["chrom"], "ctgA")
+        self.assertEqual(best["start"], 100)
+        self.assertEqual(best["end"], 800)
+
+    def test_ignores_invalid_interval_records(self):
+        regions = [
+            {"chrom": "ctgA", "start": 100, "end": 200, "strand": "+"},
+            {"chrom": "ctgA", "start": "x", "end": 300, "strand": "+"},
+            {"chrom": "ctgA", "start": False, "end": 300, "strand": "+"},
+            {"chrom": "", "start": 0, "end": 100, "strand": "+"},
+            {"chrom": "ctgA", "start": 500, "end": 500, "strand": "+"},
+        ]
+        best = server_app._select_dotplot_region(regions)
+        self.assertIsNotNone(best)
+        self.assertEqual(best["chrom"], "ctgA")
+        self.assertEqual(best["start"], 100)
+        self.assertEqual(best["end"], 200)
+
+    def test_tie_prefers_tighter_envelope(self):
+        regions = [
+            {"chrom": "ctgA", "start": 0, "end": 100, "strand": "+"},
+            {"chrom": "ctgA", "start": 200, "end": 300, "strand": "+"},
+            {"chrom": "ctgB", "start": 0, "end": 100, "strand": "+"},
+            {"chrom": "ctgB", "start": 100, "end": 200, "strand": "+"},
+        ]
+        best = server_app._select_dotplot_region(regions)
+        self.assertIsNotNone(best)
+        self.assertEqual(best["chrom"], "ctgB")
+        self.assertEqual(best["start"], 0)
+        self.assertEqual(best["end"], 200)
+
+
+class TestTranslatorSelectionRobustness(unittest.TestCase):
+    """Tests for robust translation hit filtering in CoordinateTranslator."""
+
+    def test_translate_ignores_invalid_alignment_hits(self):
+        class _StubCM:
+            @staticmethod
+            def query(idx, chrom, start, end, min_mapq=0):
+                return [
+                    {"event_type": "alignment", "asm_chrom": "ctgA", "asm_start": 100, "asm_end": 150, "strand": "+"},
+                    {"event_type": "alignment", "asm_chrom": "", "asm_start": 10, "asm_end": 20, "strand": "+"},
+                    {"event_type": "alignment", "asm_chrom": "ctgA", "asm_start": "100", "asm_end": 200, "strand": "+"},
+                    {"event_type": "alignment", "asm_chrom": "ctgA", "asm_start": 220, "asm_end": "260", "strand": "+"},
+                    {"event_type": "alignment", "asm_chrom": "ctgA", "asm_start": False, "asm_end": 260, "strand": "+"},
+                    {"event_type": "alignment", "asm_chrom": "ctgA", "asm_start": 260, "asm_end": True, "strand": "+"},
+                    {"event_type": "alignment", "asm_chrom": "ctgA", "asm_start": 300, "asm_end": 300, "strand": "+"},
+                    {"event_type": "deletion", "asm_chrom": "ctgA", "asm_start": 500, "asm_end": 600, "strand": "+"},
+                ]
+
+        translator = server_app.CoordinateTranslator()
+        translator._indices[("S1", "hap1")] = {"dummy": True}
+        translator._indices[("S1", "hap2")] = {"dummy": True}
+
+        from unittest.mock import patch
+        with patch.object(server_app, "coordinate_mapper", _StubCM):
+            result = translator.translate("S1", "chr1", 0, 1000)
+
+        self.assertEqual(result["hap1"], [{"chrom": "ctgA", "start": 100, "end": 150, "strand": "+"}])
+        self.assertEqual(result["hap2"], [{"chrom": "ctgA", "start": 100, "end": 150, "strand": "+"}])
+
 
 class TestApiTranslate(unittest.TestCase):
     """Tests for the _api_translate handler logic."""
@@ -1086,6 +1206,19 @@ class TestFrontendMemoryGuards(unittest.TestCase):
         self.assertIn("const MAX_VISIBILITY_WINDOW = 500000;", html)
         self.assertIn("const buffer = Math.min(rawBuffer, MAX_REGION_BUFFER);", html)
         self.assertIn("width = Math.min(width, MAX_VISIBILITY_WINDOW);", html)
+
+    def test_frontend_uses_stable_region_selection(self):
+        index_path = os.path.join(_REPO_ROOT, "server", "static", "index.html")
+        with open(index_path, encoding="utf-8") as fh:
+            html = fh.read()
+
+        self.assertIn("function selectBestRegion(regions, coordType = \"half-open\")", html)
+        self.assertIn("function selectBestLocus(loci)", html)
+        self.assertIn("selectBestRegion(regions, \"inclusive\")", html)
+        self.assertIn("selectBestRegion(result.hap1)", html)
+        self.assertIn("selectBestRegion(result.hap2)", html)
+        self.assertIn("selectBestLocus(region.hap1_regions)", html)
+        self.assertIn("selectBestLocus(region.hap2_regions)", html)
 
 
 if __name__ == "__main__":

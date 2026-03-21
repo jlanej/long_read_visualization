@@ -687,6 +687,91 @@
         return end - start + 1;
     }
 
+    // Select a stable region from potentially disjoint translated intervals.
+    // Groups by contig, merges overlaps, and chooses the group with the
+    // greatest covered span (tie-break: tighter envelope).
+    // coordType:
+    //   - "half-open": [start, end), used by translated API regions.
+    //   - "inclusive": [start, end], used by precomputed locus strings.
+    function selectBestRegion(regions, coordType = "half-open") {
+        if (!Array.isArray(regions) || regions.length === 0) return null;
+        const inclusive = coordType === "inclusive";
+
+        const grouped = new Map(); // key => [{start,end}]
+        for (const r of regions) {
+            if (!r || !r.chrom) continue;
+            const start = parseInt(r.start, 10);
+            const end = parseInt(r.end, 10);
+            if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+            if (inclusive ? end < start : end <= start) continue;
+            const strand = r.strand || "+";
+            const key = `${r.chrom}\u0000${strand}`;
+            if (!grouped.has(key)) grouped.set(key, []);
+            grouped.get(key).push({ start, end });
+        }
+
+        let best = null;
+        for (const [key, intervals] of grouped.entries()) {
+            intervals.sort((a, b) => a.start - b.start);
+            const merged = [];
+            for (const iv of intervals) {
+                const prevEnd = merged.length === 0 ? null : merged[merged.length - 1].end;
+                const separated = merged.length === 0 || (
+                    inclusive ? iv.start > (prevEnd + 1) : iv.start > prevEnd
+                );
+                if (separated) {
+                    merged.push({ start: iv.start, end: iv.end });
+                } else {
+                    merged[merged.length - 1].end = Math.max(
+                        merged[merged.length - 1].end, iv.end
+                    );
+                }
+            }
+            if (merged.length === 0) continue;
+
+            const covered = merged.reduce(
+                (acc, iv) => acc + (inclusive ? (iv.end - iv.start + 1) : (iv.end - iv.start)),
+                0
+            );
+            const envelopeStart = merged[0].start;
+            const envelopeEnd = merged[merged.length - 1].end;
+            const envelope = inclusive
+                ? (envelopeEnd - envelopeStart + 1)
+                : (envelopeEnd - envelopeStart);
+            const [chrom, strand] = key.split("\u0000");
+
+            if (!best || covered > best.covered || (covered === best.covered && envelope < best.envelope)) {
+                best = {
+                    chrom,
+                    strand,
+                    start: envelopeStart,
+                    end: envelopeEnd,
+                    covered,
+                    envelope,
+                };
+            }
+        }
+        return best;
+    }
+
+    function selectBestLocus(loci) {
+        if (!Array.isArray(loci) || loci.length === 0) return null;
+        const regions = [];
+        for (const locus of loci) {
+            const parsed = parseLocus(locus);
+            if (parsed) {
+                regions.push({
+                    chrom: parsed.chr,
+                    start: parsed.start,
+                    end: parsed.end,
+                    strand: "+",
+                });
+            }
+        }
+        const best = selectBestRegion(regions, "inclusive");
+        return best ? `${best.chrom}:${best.start}-${best.end}` : null;
+    }
+
     // Parse a locus string "chr:start-end" into { chr, start, end }.
     function parseLocus(locus) {
         if (!locus) return null;
@@ -1061,9 +1146,9 @@
             const { locus: r0Locus, viewWidth: r0Width } = computeBufferedLocus(r0);
             refOpts.locus = r0Locus;
             if (r0.hap1_regions && r0.hap1_regions.length > 0)
-                hap1Opts.locus = r0.hap1_regions[0];
+                hap1Opts.locus = selectBestLocus(r0.hap1_regions) || r0.hap1_regions[0];
             if (r0.hap2_regions && r0.hap2_regions.length > 0)
-                hap2Opts.locus = r0.hap2_regions[0];
+                hap2Opts.locus = selectBestLocus(r0.hap2_regions) || r0.hap2_regions[0];
             const widths = [r0Width];
             const hap1Width = parseLocusSpan(hap1Opts.locus);
             const hap2Width = parseLocusSpan(hap2Opts.locus);
@@ -1192,15 +1277,15 @@
             let hap2Locus = null;
 
             if (result.hap1 && result.hap1.length > 0) {
-                const r = result.hap1[0];
-                hap1Locus = `${r.chrom}:${r.start}-${r.end}`;
+                const r = selectBestRegion(result.hap1);
+                if (r) hap1Locus = `${r.chrom}:${r.start}-${r.end}`;
             } else if (anchorRef && anchorHap1) {
                 hap1Locus = computeProportionalLocus(anchorHap1, anchorRef, start, end);
             }
 
             if (result.hap2 && result.hap2.length > 0) {
-                const r = result.hap2[0];
-                hap2Locus = `${r.chrom}:${r.start}-${r.end}`;
+                const r = selectBestRegion(result.hap2);
+                if (r) hap2Locus = `${r.chrom}:${r.start}-${r.end}`;
             } else if (anchorRef && anchorHap2) {
                 hap2Locus = computeProportionalLocus(anchorHap2, anchorRef, start, end);
             }
@@ -1380,10 +1465,14 @@
             // loads exactly what is displayed, no more.
             const { locus: refLocus, viewWidth } = computeBufferedLocus(region);
             const windowWidths = [viewWidth];
-            const h1Window = region.hap1_regions && region.hap1_regions[0]
-                ? parseLocusSpan(region.hap1_regions[0]) : null;
-            const h2Window = region.hap2_regions && region.hap2_regions[0]
-                ? parseLocusSpan(region.hap2_regions[0]) : null;
+            const h1Selected = region.hap1_regions
+                ? (selectBestLocus(region.hap1_regions) || region.hap1_regions[0])
+                : null;
+            const h2Selected = region.hap2_regions
+                ? (selectBestLocus(region.hap2_regions) || region.hap2_regions[0])
+                : null;
+            const h1Window = h1Selected ? parseLocusSpan(h1Selected) : null;
+            const h2Window = h2Selected ? parseLocusSpan(h2Selected) : null;
             if (h1Window) windowWidths.push(h1Window);
             if (h2Window) windowWidths.push(h2Window);
             let effectiveWindow = Math.max(...windowWidths);
@@ -1399,13 +1488,13 @@
             const hasHap2 = region.hap2_regions && region.hap2_regions.length > 0;
 
             if (hasHap1 && hap1Browser) {
-                const h1 = region.hap1_regions[0];
+                const h1 = h1Selected || region.hap1_regions[0];
                 await hap1Browser.search(h1);
                 if (gen !== opGeneration) return;
                 document.getElementById("hap1Locus").textContent = h1;
             }
             if (hasHap2 && hap2Browser) {
-                const h2 = region.hap2_regions[0];
+                const h2 = h2Selected || region.hap2_regions[0];
                 await hap2Browser.search(h2);
                 if (gen !== opGeneration) return;
                 document.getElementById("hap2Locus").textContent = h2;
@@ -1422,20 +1511,24 @@
                     if (gen !== opGeneration) return;
                     const translatedWidths = [effectiveWindow];
                     if (!hasHap1 && result.hap1 && result.hap1.length > 0 && hap1Browser) {
-                        const r = result.hap1[0];
-                        const locus = `${r.chrom}:${r.start}-${r.end}`;
-                        translatedWidths.push(computeInclusiveSpan(r.start, r.end) || 1);
-                        await hap1Browser.search(locus);
-                        if (gen !== opGeneration) return;
-                        document.getElementById("hap1Locus").textContent = locus;
+                        const r = selectBestRegion(result.hap1);
+                        if (r) {
+                            const locus = `${r.chrom}:${r.start}-${r.end}`;
+                            translatedWidths.push(computeInclusiveSpan(r.start, r.end) || 1);
+                            await hap1Browser.search(locus);
+                            if (gen !== opGeneration) return;
+                            document.getElementById("hap1Locus").textContent = locus;
+                        }
                     }
                     if (!hasHap2 && result.hap2 && result.hap2.length > 0 && hap2Browser) {
-                        const r = result.hap2[0];
-                        const locus = `${r.chrom}:${r.start}-${r.end}`;
-                        translatedWidths.push(computeInclusiveSpan(r.start, r.end) || 1);
-                        await hap2Browser.search(locus);
-                        if (gen !== opGeneration) return;
-                        document.getElementById("hap2Locus").textContent = locus;
+                        const r = selectBestRegion(result.hap2);
+                        if (r) {
+                            const locus = `${r.chrom}:${r.start}-${r.end}`;
+                            translatedWidths.push(computeInclusiveSpan(r.start, r.end) || 1);
+                            await hap2Browser.search(locus);
+                            if (gen !== opGeneration) return;
+                            document.getElementById("hap2Locus").textContent = locus;
+                        }
                     }
                     const translatedWindow = Math.max(...translatedWidths);
                     if (translatedWindow > effectiveWindow) {
