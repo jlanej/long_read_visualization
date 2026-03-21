@@ -686,16 +686,24 @@ class TestTranslatorCache(unittest.TestCase):
 class TestApiDotplot(unittest.TestCase):
     """Tests for the _api_dotplot handler logic."""
 
-    def _make_handler_class(self, samples):
+    def _make_handler_class(self, samples, translator=None):
         """Create a handler class with the given samples list."""
         # We don't instantiate IGVHandler directly (it needs socket args),
         # so we test the method by constructing a minimal wrapper.
+        if translator is None:
+            translator = type("_NoopTranslator", (), {
+                "has_index": lambda self, sid: False,
+                "translate": lambda self, sid, c, s, e, **kw: {"hap1": [], "hap2": []},
+            })()
+
         handler = type("FakeHandler", (), {
             "samples": samples,
+            "MAX_DOTPLOT_REGION_BP": server_app.IGVHandler.MAX_DOTPLOT_REGION_BP,
             "_find_sample": lambda self, sid: next(
                 (s for s in self.samples if s["sample_id"] == sid), None
             ),
         })()
+        handler.translator = translator
         # Bind the unbound _api_dotplot method from IGVHandler
         import types
         handler._api_dotplot = types.MethodType(
@@ -740,6 +748,145 @@ class TestApiDotplot(unittest.TestCase):
         # k=-5 should be clamped to 1
         result = handler._api_dotplot({"sample": ["S1"], "k": ["-5"]})
         self.assertEqual(result["k"], 1)
+
+    def test_buffer_parameter_expands_ref_region(self):
+        """The buffer parameter expands the reference region symmetrically."""
+        handler = self._make_handler_class([{
+            "sample_id": "S1",
+            "reference": "",
+            "hap1_assembly": "",
+            "hap2_assembly": "",
+        }])
+        # Viewport is chr1:10000-20000 (10 kb), buffer=1.0 → chr1:0-30000
+        result = handler._api_dotplot({
+            "sample": ["S1"],
+            "ref": ["chr1:10000-20000"],
+            "buffer": ["1.0"],
+        })
+        self.assertEqual(result["buffered_ref_region"], "chr1:0-30000")
+
+    def test_buffer_zero_no_expansion(self):
+        """buffer=0 uses the exact viewport region."""
+        handler = self._make_handler_class([{
+            "sample_id": "S1",
+            "reference": "",
+            "hap1_assembly": "",
+            "hap2_assembly": "",
+        }])
+        result = handler._api_dotplot({
+            "sample": ["S1"],
+            "ref": ["chr1:10000-20000"],
+            "buffer": ["0"],
+        })
+        self.assertEqual(result["buffered_ref_region"], "chr1:10000-20000")
+
+    def test_buffer_clamped_to_max(self):
+        """Buffer multiplier is clamped to [0, 5]."""
+        handler = self._make_handler_class([{
+            "sample_id": "S1",
+            "reference": "",
+            "hap1_assembly": "",
+            "hap2_assembly": "",
+        }])
+        # buffer=10 → clamped to 5; viewport 10 kb, 5× on each side → 110 kb total
+        result = handler._api_dotplot({
+            "sample": ["S1"],
+            "ref": ["chr1:100000-110000"],
+            "buffer": ["10"],
+        })
+        self.assertEqual(result["buffered_ref_region"], "chr1:50000-160000")
+
+    def test_event_highlight_offsets(self):
+        """Event start/end produce correct offsets relative to buffered region."""
+        handler = self._make_handler_class([{
+            "sample_id": "S1",
+            "reference": "",
+            "hap1_assembly": "",
+            "hap2_assembly": "",
+        }])
+        # Viewport chr1:10000-20000, buffer=1.0 → buffered chr1:0-30000
+        # Event at chr1:12000-15000 → offsets 12000, 15000
+        result = handler._api_dotplot({
+            "sample": ["S1"],
+            "ref": ["chr1:10000-20000"],
+            "buffer": ["1.0"],
+            "event_start": ["12000"],
+            "event_end": ["15000"],
+        })
+        hl = result["event_highlight"]
+        self.assertIsNotNone(hl)
+        self.assertEqual(hl["start_offset"], 12000)
+        self.assertEqual(hl["end_offset"], 15000)
+
+    def test_event_highlight_absent_when_no_event(self):
+        """event_highlight is None when no event_start/event_end provided."""
+        handler = self._make_handler_class([{
+            "sample_id": "S1",
+            "reference": "",
+            "hap1_assembly": "",
+            "hap2_assembly": "",
+        }])
+        result = handler._api_dotplot({
+            "sample": ["S1"],
+            "ref": ["chr1:10000-20000"],
+        })
+        self.assertIsNone(result["event_highlight"])
+
+    def test_translator_used_when_available(self):
+        """When a mapping index exists, translator.translate() is called
+        to derive hap regions from the buffered reference region."""
+        class _FakeTranslator:
+            def __init__(self):
+                self.calls = []
+
+            def has_index(self, sid):
+                return sid == "S1"
+
+            def translate(self, sid, chrom, start, end, **kw):
+                self.calls.append((sid, chrom, start, end))
+                return {
+                    "hap1": [{"chrom": "asm1", "start": 500, "end": 1500, "strand": "+"}],
+                    "hap2": [{"chrom": "asm2", "start": 600, "end": 1600, "strand": "+"}],
+                }
+
+        tr = _FakeTranslator()
+        handler = self._make_handler_class([{
+            "sample_id": "S1",
+            "reference": "",
+            "hap1_assembly": "",
+            "hap2_assembly": "",
+        }], translator=tr)
+        result = handler._api_dotplot({
+            "sample": ["S1"],
+            "ref": ["chr1:10000-20000"],
+            "buffer": ["0"],
+        })
+        # Translator should have been called with the (un-buffered) region
+        self.assertEqual(len(tr.calls), 1)
+        self.assertEqual(tr.calls[0], ("S1", "chr1", 10000, 20000))
+        # Labels should reflect the translated hap regions
+        self.assertEqual(result["labels"]["hap1"], "asm1:500-1500")
+        self.assertEqual(result["labels"]["hap2"], "asm2:600-1600")
+
+    def test_max_dotplot_region_cap(self):
+        """Regions exceeding MAX_DOTPLOT_REGION_BP are clamped."""
+        handler = self._make_handler_class([{
+            "sample_id": "S1",
+            "reference": "",
+            "hap1_assembly": "",
+            "hap2_assembly": "",
+        }])
+        # Viewport 200 kb, buffer=2.0 → would be 1 Mb total → exceeds 500 kb cap
+        result = handler._api_dotplot({
+            "sample": ["S1"],
+            "ref": ["chr1:100000-300000"],
+            "buffer": ["2.0"],
+        })
+        # The buffered region should be clamped to ~500 kb
+        m = __import__("re").match(r"chr1:(\d+)-(\d+)", result["buffered_ref_region"])
+        self.assertIsNotNone(m)
+        actual_span = int(m.group(2)) - int(m.group(1))
+        self.assertLessEqual(actual_span, 500_000)
 
 
 class TestApiTranslate(unittest.TestCase):

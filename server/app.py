@@ -626,15 +626,44 @@ class IGVHandler(SimpleHTTPRequestHandler):
         self.regions_cache[sample_id] = regions
         return regions
 
+    # Maximum total reference region (bp) allowed for dot plot computation.
+    # Prevents runaway memory/CPU usage on very large regions.
+    MAX_DOTPLOT_REGION_BP = 500_000
+
     def _api_dotplot(self, query):
         """Compute k-mer dot plots for the three pairwise comparisons.
 
-        Query parameters:
-            sample   – sample ID
-            ref      – reference region (e.g. ``chr1:1000-2000``)
-            hap1     – haplotype-1 region
-            hap2     – haplotype-2 region
-            k        – k-mer size (default 31)
+        The reference region is the single source of truth.  A ``buffer``
+        multiplier (default 1.0) expands it on each side so the dot plot
+        shows flanking context — e.g. buffer=1.0 with a 10 kb viewport
+        extracts 30 kb total (10 kb + 10 kb + 10 kb).
+
+        Haplotype regions are derived from the (buffered) reference region
+        via the coordinate-mapping index when one is available, ensuring
+        that ref, hap1 and hap2 sequences are always in perfect sync.
+        Explicit ``hap1``/``hap2`` parameters are used only as a fallback
+        when no mapping index exists.
+
+        Query parameters
+        ----------------
+        sample : str
+            Sample ID.
+        ref : str
+            Reference viewport region (e.g. ``chr1:1000-2000``).
+        hap1 : str, optional
+            Fallback haplotype-1 region (used when no mapping index).
+        hap2 : str, optional
+            Fallback haplotype-2 region (used when no mapping index).
+        k : int, optional
+            K-mer size (default 31, clamped to [1, 101]).
+        buffer : float, optional
+            Buffer multiplier — each side is expanded by this fraction of
+            the viewport width.  Default 1.0 (1× on each side = 3× total).
+        event_start : int, optional
+            Start coordinate of the SV event in reference space (for
+            highlight overlay).
+        event_end : int, optional
+            End coordinate of the SV event in reference space.
         """
         sample_id = query.get("sample", [""])[0]
         ref_region = query.get("ref", [""])[0]
@@ -646,22 +675,109 @@ class IGVHandler(SimpleHTTPRequestHandler):
             k = 31
         k = max(1, min(k, 101))  # clamp k to [1, 101]
 
+        try:
+            buffer_mult = float(query.get("buffer", [1.0])[0])
+        except (ValueError, IndexError):
+            buffer_mult = 1.0
+        buffer_mult = max(0.0, min(buffer_mult, 5.0))  # clamp [0, 5]
+
+        # Optional SV event coordinates for reference-axis highlight
+        try:
+            event_start = int(query["event_start"][0]) if "event_start" in query else None
+            event_end = int(query["event_end"][0]) if "event_end" in query else None
+        except (ValueError, IndexError):
+            event_start = event_end = None
+
         sample = self._find_sample(sample_id)
         if sample is None:
             return {"error": f"Sample '{sample_id}' not found"}
+
+        # ── Expand reference region by buffer ────────────────────────────
+        ref_chrom, ref_start, ref_end = None, None, None
+        if ref_region:
+            m = re.match(r"^(.+):(\d+)-(\d+)$", ref_region)
+            if m:
+                ref_chrom = m.group(1)
+                ref_start = int(m.group(2))
+                ref_end = int(m.group(3))
+
+        if ref_chrom is not None:
+            viewport_span = ref_end - ref_start
+            buf_bp = int(viewport_span * buffer_mult)
+            buf_ref_start = max(0, ref_start - buf_bp)
+            buf_ref_end = ref_end + buf_bp
+            total_span = buf_ref_end - buf_ref_start
+            if total_span > self.MAX_DOTPLOT_REGION_BP:
+                logger.warning(
+                    "Dot plot region %s:%d-%d (%d bp) exceeds cap %d; "
+                    "clamping buffer",
+                    ref_chrom, buf_ref_start, buf_ref_end, total_span,
+                    self.MAX_DOTPLOT_REGION_BP,
+                )
+                # Shrink buffer symmetrically to fit under the cap
+                excess = total_span - self.MAX_DOTPLOT_REGION_BP
+                trim = excess // 2
+                buf_ref_start += trim
+                buf_ref_end -= (excess - trim)
+            buffered_ref_region = f"{ref_chrom}:{buf_ref_start}-{buf_ref_end}"
+        else:
+            buffered_ref_region = ref_region
+            buf_ref_start = buf_ref_end = 0
+
+        # ── Derive haplotype regions from buffered reference ─────────────
+        # When a coordinate-mapping index exists the server translates the
+        # buffered reference region to assembly space so that all three
+        # sequences are guaranteed to correspond to the same genomic locus.
+        if ref_chrom is not None and self.translator.has_index(sample_id):
+            tr = self.translator.translate(
+                sample_id, ref_chrom, buf_ref_start, buf_ref_end
+            )
+            if tr.get("hap1") and len(tr["hap1"]) > 0:
+                r = tr["hap1"][0]
+                hap1_region = f"{r['chrom']}:{r['start']}-{r['end']}"
+            if tr.get("hap2") and len(tr["hap2"]) > 0:
+                r = tr["hap2"][0]
+                hap2_region = f"{r['chrom']}:{r['start']}-{r['end']}"
 
         # Resolve FASTA paths
         ref_fasta = sample.get("reference", "")
         hap1_fasta = sample.get("hap1_assembly", "")
         hap2_fasta = sample.get("hap2_assembly", "")
 
-        # Extract sequences
-        ref_seq = dot_plot.extract_sequence(ref_fasta, ref_region) if ref_fasta and ref_region else ""
-        hap1_seq = dot_plot.extract_sequence(hap1_fasta, hap1_region) if hap1_fasta and hap1_region else ""
-        hap2_seq = dot_plot.extract_sequence(hap2_fasta, hap2_region) if hap2_fasta and hap2_region else ""
+        # Extract sequences using the buffered reference region
+        ref_seq = (dot_plot.extract_sequence(ref_fasta, buffered_ref_region)
+                   if ref_fasta and buffered_ref_region else "")
+        hap1_seq = (dot_plot.extract_sequence(hap1_fasta, hap1_region)
+                    if hap1_fasta and hap1_region else "")
+        hap2_seq = (dot_plot.extract_sequence(hap2_fasta, hap2_region)
+                    if hap2_fasta and hap2_region else "")
 
-        logger.info("Dot plot: ref=%d bp, hap1=%d bp, hap2=%d bp, k=%d",
-                     len(ref_seq), len(hap1_seq), len(hap2_seq), k)
+        logger.info(
+            "Dot plot: ref=%d bp (%s), hap1=%d bp (%s), hap2=%d bp (%s), k=%d, buffer=%.1f",
+            len(ref_seq), buffered_ref_region,
+            len(hap1_seq), hap1_region,
+            len(hap2_seq), hap2_region,
+            k, buffer_mult,
+        )
+
+        # ── Compute event highlight offsets ──────────────────────────────
+        # Offsets are relative to the buffered reference region so the
+        # client can draw a highlight rectangle on the x-axis.  When the
+        # actual extracted sequence is shorter than the coordinate span
+        # (e.g. near chromosome boundaries) the client will clamp during
+        # rendering.
+        event_highlight = None
+        if (event_start is not None and event_end is not None
+                and ref_chrom is not None):
+            buf_span = buf_ref_end - buf_ref_start
+            seq_len = len(ref_seq) if ref_seq else buf_span
+            ev_off_start = max(0, event_start - buf_ref_start)
+            ev_off_end = min(seq_len, event_end - buf_ref_start)
+            if ev_off_start < ev_off_end:
+                event_highlight = {
+                    "start_offset": ev_off_start,
+                    "end_offset": ev_off_end,
+                }
 
         # Compute three pairwise dot plots
         result = {
@@ -669,11 +785,13 @@ class IGVHandler(SimpleHTTPRequestHandler):
             "hap2_vs_ref": dot_plot.compute_dotplot(ref_seq, hap2_seq, k),
             "hap1_vs_hap2": dot_plot.compute_dotplot(hap1_seq, hap2_seq, k),
             "labels": {
-                "ref": ref_region or "(no region)",
+                "ref": buffered_ref_region or "(no region)",
                 "hap1": hap1_region or "(no region)",
                 "hap2": hap2_region or "(no region)",
             },
             "k": k,
+            "event_highlight": event_highlight,
+            "buffered_ref_region": buffered_ref_region,
         }
         return result
 

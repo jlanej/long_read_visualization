@@ -142,6 +142,7 @@
         padding: 0;
         height: calc(100vh - 44px);
         overflow: hidden;
+        overflow-y: auto;
         background: var(--bg);
     }
     .panel {
@@ -419,6 +420,40 @@
     }
     .dotplot-citation a:hover { text-decoration: underline; }
 
+    /* ── Inline dot plot panel ─────────────────────────────────────────── */
+    .inline-dotplot-panel {
+        background: var(--surface);
+        border-top: 1px solid var(--border);
+        padding: 8px 12px;
+        overflow-x: auto;
+        flex: 0 0 auto;
+    }
+    .inline-dotplot-panel.hidden { display: none; }
+    .inline-dotplot-panel .dotplot-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 8px;
+    }
+    @media (max-width: 900px) {
+        .inline-dotplot-panel .dotplot-grid { grid-template-columns: 1fr; }
+    }
+    .inline-dotplot-panel .dotplot-cell canvas {
+        max-width: 100%;
+        width: 100%;
+        height: auto;
+    }
+    .inline-dotplot-panel .inline-dp-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 6px;
+        font-size: 11px;
+        color: var(--text-muted);
+    }
+    .inline-dotplot-panel .inline-dp-header .dp-status {
+        font-style: italic;
+    }
+
     /* ── Loading overlay ─────────────────────────────────────────────────── */
     .loading {
         position: fixed;
@@ -485,6 +520,9 @@
         <button id="dotPlotBtn" class="toolbar-btn" title="Generate k-mer dot plots comparing sequences across panels">
             <span class="btn-icon">🔵</span> Dot Plots
         </button>
+        <button id="inlineDotPlotToggle" class="toolbar-btn" title="Show auto-refreshing dot plots below IGV panels">
+            <span class="btn-icon">📈</span> Inline Dots
+        </button>
     </div>
 </div>
 
@@ -512,6 +550,14 @@
             <span class="locus" id="hap2Locus"></span>
         </div>
         <div class="panel-body"><div id="igv-hap2"></div></div>
+    </div>
+    <!-- Inline dot plot panel (toggled via toolbar) -->
+    <div class="inline-dotplot-panel hidden" id="inlineDotPlotPanel">
+        <div class="inline-dp-header">
+            <strong>📈 Inline Dot Plots</strong>
+            <span class="dp-status" id="inlineDpStatus">Waiting for region…</span>
+        </div>
+        <div id="inlineDotPlotBody"></div>
     </div>
 </div>
 
@@ -564,6 +610,9 @@
     let hideSmallIndels = true;          // default: hide spurious indels (long-read mode)
     let opGeneration = 0;               // increments on sample/region change to invalidate stale ops
     let hasMappingIndex = false;         // true when server has loaded PAF-based coordinate indices
+    let inlineDotPlotsEnabled = false;   // toggle for inline dot plots below IGV panels
+    let inlineDpTimeout = null;          // debounce timer for inline dot plot auto-refresh
+    let inlineDpGeneration = 0;          // invalidation counter for stale inline dot plot requests
 
     // Anchor loci: the known-good region placements set during navigateToRegion.
     // Used as a proportional fallback when coordinate-mapping indices are
@@ -609,6 +658,10 @@
     const dotPlotKInput = document.getElementById("dotPlotK");
     const dotPlotRunBtn = document.getElementById("dotPlotRun");
     const dotPlotStatus = document.getElementById("dotPlotStatus");
+    const inlineDotPlotToggle = document.getElementById("inlineDotPlotToggle");
+    const inlineDotPlotPanel = document.getElementById("inlineDotPlotPanel");
+    const inlineDotPlotBody = document.getElementById("inlineDotPlotBody");
+    const inlineDpStatus = document.getElementById("inlineDpStatus");
 
     // ── Helpers ─────────────────────────────────────────────────────────────
     function setStatus(msg) { statusBar.textContent = msg; }
@@ -761,6 +814,11 @@
             clearTimeout(translateTimeout);
             translateTimeout = null;
         }
+        if (inlineDpTimeout) {
+            clearTimeout(inlineDpTimeout);
+            inlineDpTimeout = null;
+        }
+        inlineDpGeneration++;
     }
 
     async function loadSample(sampleId) {
@@ -1195,6 +1253,8 @@
             }
         } finally {
             translating = false;
+            // Trigger inline dot plot refresh when panels have settled
+            scheduleInlineDotPlotRefresh();
         }
     }
 
@@ -1390,6 +1450,8 @@
             anchorHap2 = _readBrowserAnchor(hap2Browser);
         } finally {
             translating = false;
+            // Trigger inline dot plot refresh for the new region
+            scheduleInlineDotPlotRefresh();
         }
     }
 
@@ -1651,6 +1713,10 @@
         palindrome: "#7c3aed",    // violet-600
     };
 
+    // SV event highlight colour (translucent orange)
+    const EVENT_HIGHLIGHT_COLOR = "rgba(255, 152, 0, 0.25)";
+    const EVENT_HIGHLIGHT_BORDER = "rgba(255, 152, 0, 0.7)";
+
     // Canvas rendering size (CSS pixels).  Actual backing pixels use
     // devicePixelRatio for crispness on high-DPI displays.
     const DOTPLOT_CANVAS_SIZE = 320;
@@ -1666,22 +1732,17 @@
         return `${chr}:${start}-${end}`;
     }
 
-    function renderDotPlotCanvas(canvas, data, xLabel, yLabel) {
-        /**
-         * Render a single dot plot onto an HTML5 Canvas element.
-         *
-         * Layout:
-         *   ┌──────────────────────────────────────┐
-         *   │  margin-top (axis label space)        │
-         *   │   ┌─────────────────────────────┐     │
-         *   │   │       dot plot area          │     │
-         *   │   │                              │     │
-         *   │   │                              │     │
-         *   │   │                              │     │
-         *   │   └─────────────────────────────┘     │
-         *   │  margin-bottom (x-axis ticks)         │
-         *   └──────────────────────────────────────┘
-         */
+    /**
+     * Render a single dot plot onto an HTML5 Canvas element.
+     *
+     * @param {HTMLCanvasElement} canvas - Target canvas.
+     * @param {Object} data - Dot plot result from server (forward, reverse, palindrome arrays).
+     * @param {string} xLabel - Axis label for horizontal (seq1).
+     * @param {string} yLabel - Axis label for vertical (seq2).
+     * @param {Object|null} eventHighlight - Optional {start_offset, end_offset} for SV highlight
+     *        on the x-axis (reference).  Only drawn when present and the x-axis represents the ref.
+     */
+    function renderDotPlotCanvas(canvas, data, xLabel, yLabel, eventHighlight) {
         const dpr = window.devicePixelRatio || 1;
         const cssSize = DOTPLOT_CANVAS_SIZE;
         const margin = { top: 6, right: 6, bottom: 42, left: 50 };
@@ -1712,6 +1773,39 @@
             ctx.textAlign = "center";
             ctx.fillText("No sequence data", totalW / 2, totalH / 2);
             return;
+        }
+
+        // ── SV event highlight on x-axis (reference) ────────────────────
+        if (eventHighlight && s1Len > 0) {
+            const xScale_ = plotW / s1Len;
+            const hlX1 = margin.left + eventHighlight.start_offset * xScale_;
+            const hlX2 = margin.left + eventHighlight.end_offset * xScale_;
+            const hlW = hlX2 - hlX1;
+            if (hlW > 0) {
+                // Translucent fill across full plot height
+                ctx.fillStyle = EVENT_HIGHLIGHT_COLOR;
+                ctx.fillRect(hlX1, margin.top, hlW, plotH);
+                // Left and right border lines
+                ctx.strokeStyle = EVENT_HIGHLIGHT_BORDER;
+                ctx.lineWidth = 1.5;
+                ctx.setLineDash([4, 3]);
+                ctx.beginPath();
+                ctx.moveTo(hlX1, margin.top);
+                ctx.lineTo(hlX1, margin.top + plotH);
+                ctx.moveTo(hlX2, margin.top);
+                ctx.lineTo(hlX2, margin.top + plotH);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                // Label at top
+                ctx.fillStyle = EVENT_HIGHLIGHT_BORDER;
+                ctx.font = "bold 8px -apple-system, sans-serif";
+                ctx.textAlign = "center";
+                const evLabel = _formatBpLabel(eventHighlight.end_offset - eventHighlight.start_offset) + " event";
+                const labelX = hlX1 + hlW / 2;
+                if (hlW > 30) {
+                    ctx.fillText(evLabel, labelX, margin.top + 10);
+                }
+            }
         }
 
         // Scale factors: x-axis is seq1 (horizontal), y-axis is seq2 (vertical, top-to-bottom)
@@ -1844,14 +1938,26 @@
         return s.length > maxLen ? s.slice(0, maxLen - 1) + "…" : s;
     }
 
-    function renderDotPlots(result) {
+    /**
+     * Render dot plot results into a target DOM element.
+     *
+     * @param {Object} result - Server response from /api/dotplot.
+     * @param {HTMLElement} targetEl - Container element for the HTML.
+     * @param {string} idPrefix - Prefix for canvas IDs (avoids collisions
+     *        between modal and inline instances).
+     */
+    function renderDotPlots(result, targetEl, idPrefix) {
+        idPrefix = idPrefix || "dp_";
+        targetEl = targetEl || dotPlotBody;
+
+        const eventHighlight = result.event_highlight || null;
         const html = [];
         html.push('<div class="dotplot-grid">');
 
         const comparisons = [
-            { key: "hap1_vs_ref",  title: "Hap1 vs Reference",    xLabel: result.labels.ref,  yLabel: result.labels.hap1 },
-            { key: "hap2_vs_ref",  title: "Hap2 vs Reference",    xLabel: result.labels.ref,  yLabel: result.labels.hap2 },
-            { key: "hap1_vs_hap2", title: "Hap1 vs Hap2",         xLabel: result.labels.hap1, yLabel: result.labels.hap2 },
+            { key: "hap1_vs_ref",  title: "Hap1 vs Reference",    xLabel: result.labels.ref,  yLabel: result.labels.hap1, hasRefOnX: true },
+            { key: "hap2_vs_ref",  title: "Hap2 vs Reference",    xLabel: result.labels.ref,  yLabel: result.labels.hap2, hasRefOnX: true },
+            { key: "hap1_vs_hap2", title: "Hap1 vs Hap2",         xLabel: result.labels.hap1, yLabel: result.labels.hap2, hasRefOnX: false },
         ];
 
         for (const c of comparisons) {
@@ -1860,7 +1966,7 @@
             const trunc = d.truncated ? ' <span style="color:#dc2626">(truncated)</span>' : "";
             html.push(`<div class="dotplot-cell">
                 <h3>${escapeHtml(c.title)}</h3>
-                <canvas id="dp_${c.key}" width="320" height="320"></canvas>
+                <canvas id="${idPrefix}${c.key}" width="320" height="320"></canvas>
                 <div class="dotplot-info">
                     ${_formatBpLabel(d.seq1_len)} × ${_formatBpLabel(d.seq2_len)} &nbsp;|&nbsp;
                     ${total.toLocaleString()} matches (k=${result.k})${trunc}
@@ -1883,6 +1989,10 @@
                 <div class="dotplot-legend-swatch" style="background:${DOTPLOT_COLORS.palindrome}"></div>
                 Palindrome
             </div>
+            ${eventHighlight ? `<div class="dotplot-legend-item">
+                <div class="dotplot-legend-swatch" style="background:${EVENT_HIGHLIGHT_COLOR};border-color:${EVENT_HIGHLIGHT_BORDER}"></div>
+                SV event region
+            </div>` : ""}
         </div>`);
         // Citation
         html.push(`<div class="dotplot-citation">
@@ -1892,60 +2002,122 @@
             <a href="https://doi.org/10.21105/joss.06012" target="_blank" rel="noopener">JOSS 8(92), 6012</a>).
         </div>`);
 
-        dotPlotBody.innerHTML = html.join("\n");
+        targetEl.innerHTML = html.join("\n");
 
         // Render canvases after DOM insertion
         for (const c of comparisons) {
-            const canvas = document.getElementById("dp_" + c.key);
-            if (canvas) renderDotPlotCanvas(canvas, result[c.key], c.xLabel, c.yLabel);
+            const canvas = document.getElementById(idPrefix + c.key);
+            if (canvas) {
+                // Only pass event highlight for plots where the x-axis is the reference
+                const hl = c.hasRefOnX ? eventHighlight : null;
+                renderDotPlotCanvas(canvas, result[c.key], c.xLabel, c.yLabel, hl);
+            }
         }
     }
 
-    async function runDotPlot() {
+    /**
+     * Build the URLSearchParams for a dot plot request.
+     *
+     * The reference viewport is the single source of truth.  The server
+     * expands it by the buffer multiplier, translates to hap coordinates
+     * using the mapping index, and extracts all three sequences from the
+     * correct FASTA files.  When no mapping index is available we fall back
+     * to sending the raw hap browser loci.
+     *
+     * @param {Object} opts - { k, buffer }
+     */
+    function buildDotPlotParams(opts) {
+        const k = opts.k || 31;
+        const bufferMult = opts.buffer != null ? opts.buffer : 1.0;
+
+        const params = new URLSearchParams({
+            sample: currentSample.sample_id,
+            k: String(k),
+            buffer: String(bufferMult),
+        });
+
+        const refLocus = getBrowserLocus(refBrowser);
+        if (refLocus) params.set("ref", refLocus);
+
+        // When no mapping index exists, pass fallback hap loci so the
+        // server can still extract hap sequences from the raw FASTA.
+        if (!hasMappingIndex) {
+            const hap1Locus = getBrowserLocus(hap1Browser);
+            const hap2Locus = getBrowserLocus(hap2Browser);
+            if (hap1Locus) params.set("hap1", hap1Locus);
+            if (hap2Locus) params.set("hap2", hap2Locus);
+        }
+
+        // Send SV event coordinates for the reference-axis highlight
+        if (currentRegionIdx >= 0 && currentRegionIdx < regions.length) {
+            const r = regions[currentRegionIdx];
+            if (r.start != null && r.end != null) {
+                params.set("event_start", String(r.start));
+                params.set("event_end", String(r.end));
+            }
+        }
+
+        return params;
+    }
+
+    /**
+     * Run a dot plot and render into the specified target.
+     *
+     * @param {Object} opts - { targetEl, idPrefix, statusEl, disableBtn, k, buffer }
+     */
+    async function runDotPlotTo(opts) {
+        const targetEl = opts.targetEl || dotPlotBody;
+        const statusEl = opts.statusEl || dotPlotStatus;
+        const disableBtn = opts.disableBtn || null;
+        const idPrefix = opts.idPrefix || "dp_";
+
         if (!currentSample) {
-            dotPlotBody.innerHTML = "<p>No sample loaded.</p>";
+            targetEl.innerHTML = "<p>No sample loaded.</p>";
             return;
         }
 
         const refLocus = getBrowserLocus(refBrowser);
-        const hap1Locus = getBrowserLocus(hap1Browser);
-        const hap2Locus = getBrowserLocus(hap2Browser);
-
-        if (!refLocus && !hap1Locus && !hap2Locus) {
-            dotPlotBody.innerHTML = "<p>Navigate to a region first.</p>";
+        if (!refLocus) {
+            targetEl.innerHTML = "<p>Navigate to a region first.</p>";
             return;
         }
 
-        const k = parseInt(dotPlotKInput.value, 10) || 31;
-        dotPlotStatus.textContent = "Computing…";
-        dotPlotRunBtn.disabled = true;
+        if (statusEl) statusEl.textContent = "Computing…";
+        if (disableBtn) disableBtn.disabled = true;
 
         try {
-            const params = new URLSearchParams({
-                sample: currentSample.sample_id,
-                k: String(k),
+            const params = buildDotPlotParams({
+                k: opts.k || parseInt(dotPlotKInput.value, 10) || 31,
+                buffer: opts.buffer != null ? opts.buffer : 1.0,
             });
-            if (refLocus) params.set("ref", refLocus);
-            if (hap1Locus) params.set("hap1", hap1Locus);
-            if (hap2Locus) params.set("hap2", hap2Locus);
 
             const resp = await fetch("/api/dotplot?" + params.toString());
             const result = await resp.json();
 
             if (result.error) {
-                dotPlotBody.innerHTML = `<p>Error: ${escapeHtml(result.error)}</p>`;
-                dotPlotStatus.textContent = "Error";
+                targetEl.innerHTML = `<p>Error: ${escapeHtml(result.error)}</p>`;
+                if (statusEl) statusEl.textContent = "Error";
             } else {
-                renderDotPlots(result);
-                dotPlotStatus.textContent = "Done";
+                renderDotPlots(result, targetEl, idPrefix);
+                if (statusEl) statusEl.textContent = "Done";
             }
         } catch (err) {
-            dotPlotBody.innerHTML = `<p>Error: ${escapeHtml(err.message)}</p>`;
-            dotPlotStatus.textContent = "Error";
+            targetEl.innerHTML = `<p>Error: ${escapeHtml(err.message)}</p>`;
+            if (statusEl) statusEl.textContent = "Error";
             console.error("[LRV] Dot plot error:", err);
         } finally {
-            dotPlotRunBtn.disabled = false;
+            if (disableBtn) disableBtn.disabled = false;
         }
+    }
+
+    // ── Modal dot plot ──────────────────────────────────────────────────
+    async function runDotPlot() {
+        await runDotPlotTo({
+            targetEl: dotPlotBody,
+            statusEl: dotPlotStatus,
+            disableBtn: dotPlotRunBtn,
+            idPrefix: "dp_",
+        });
     }
 
     dotPlotBtn.addEventListener("click", () => {
@@ -1960,6 +2132,41 @@
     dotPlotModal.addEventListener("click", (e) => {
         if (e.target === dotPlotModal) dotPlotModal.classList.add("hidden");
     });
+
+    // ── Inline dot plot toggle & auto-refresh ───────────────────────────
+    inlineDotPlotToggle.addEventListener("click", () => {
+        inlineDotPlotsEnabled = !inlineDotPlotsEnabled;
+        inlineDotPlotToggle.classList.toggle("active", inlineDotPlotsEnabled);
+        inlineDotPlotPanel.classList.toggle("hidden", !inlineDotPlotsEnabled);
+        if (inlineDotPlotsEnabled) {
+            // Generate immediately for the current view
+            scheduleInlineDotPlotRefresh();
+        } else {
+            // Clear debounce
+            if (inlineDpTimeout) { clearTimeout(inlineDpTimeout); inlineDpTimeout = null; }
+        }
+    });
+
+    /**
+     * Schedule an inline dot plot refresh after a debounce delay.
+     * Called from _applySyncLoci and navigateToRegion when inline mode
+     * is active.
+     */
+    function scheduleInlineDotPlotRefresh() {
+        if (!inlineDotPlotsEnabled) return;
+        if (inlineDpTimeout) clearTimeout(inlineDpTimeout);
+        inlineDpGeneration++;
+        const gen = inlineDpGeneration;
+        inlineDpTimeout = setTimeout(async () => {
+            if (gen !== inlineDpGeneration) return;  // stale
+            await runDotPlotTo({
+                targetEl: inlineDotPlotBody,
+                statusEl: inlineDpStatus,
+                idPrefix: "idp_",
+                buffer: 1.0,
+            });
+        }, 600);
+    }
 
     // Keyboard shortcuts
     document.addEventListener("keydown", (e) => {
