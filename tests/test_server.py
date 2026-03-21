@@ -888,6 +888,57 @@ class TestApiDotplot(unittest.TestCase):
         actual_span = int(m.group(2)) - int(m.group(1))
         self.assertLessEqual(actual_span, 500_000)
 
+    def test_translator_disjoint_regions_use_envelope(self):
+        """Disjoint translated hits on same contig are merged for extraction."""
+        class _FakeTranslator:
+            def has_index(self, sid):
+                return sid == "S1"
+
+            def translate(self, sid, chrom, start, end, **kw):
+                return {
+                    "hap1": [
+                        {"chrom": "asm1", "start": 100, "end": 200, "strand": "+"},
+                        {"chrom": "asm1", "start": 500, "end": 800, "strand": "+"},
+                    ],
+                    "hap2": [
+                        {"chrom": "asm2", "start": 1000, "end": 1100, "strand": "+"},
+                    ],
+                }
+
+        tr = _FakeTranslator()
+        handler = self._make_handler_class([{
+            "sample_id": "S1",
+            "reference": "",
+            "hap1_assembly": "",
+            "hap2_assembly": "",
+        }], translator=tr)
+        result = handler._api_dotplot({
+            "sample": ["S1"],
+            "ref": ["chr1:10000-20000"],
+            "buffer": ["0"],
+        })
+        self.assertEqual(result["labels"]["hap1"], "asm1:100-800")
+        self.assertEqual(result["labels"]["hap2"], "asm2:1000-1100")
+
+
+class TestSelectDotplotRegion(unittest.TestCase):
+    """Unit tests for dot-plot region selection helper."""
+
+    def test_empty(self):
+        self.assertIsNone(server_app._select_dotplot_region([]))
+
+    def test_prefers_most_covered_bp_group(self):
+        regions = [
+            {"chrom": "ctgA", "start": 100, "end": 150, "strand": "+"},   # 50 bp
+            {"chrom": "ctgA", "start": 300, "end": 350, "strand": "+"},   # 50 bp
+            {"chrom": "ctgB", "start": 1000, "end": 1200, "strand": "+"},  # 200 bp
+        ]
+        best = server_app._select_dotplot_region(regions)
+        self.assertIsNotNone(best)
+        self.assertEqual(best["chrom"], "ctgB")
+        self.assertEqual(best["start"], 1000)
+        self.assertEqual(best["end"], 1200)
+
 
 class TestApiTranslate(unittest.TestCase):
     """Tests for the _api_translate handler logic."""
