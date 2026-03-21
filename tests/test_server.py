@@ -1074,5 +1074,19 @@ class TestApiSampleCramRef(unittest.TestCase):
             self.assertIsNone(result["cram_ref_gzi"])
 
 
+class TestFrontendMemoryGuards(unittest.TestCase):
+    """Tests for memory-safety guards in the region navigation frontend."""
+
+    def test_buffer_and_visibility_window_caps_present(self):
+        index_path = os.path.join(_REPO_ROOT, "server", "static", "index.html")
+        with open(index_path, encoding="utf-8") as fh:
+            html = fh.read()
+
+        self.assertIn("const MAX_REGION_BUFFER = 250000;", html)
+        self.assertIn("const MAX_VISIBILITY_WINDOW = 500000;", html)
+        self.assertIn("const buffer = Math.min(rawBuffer, MAX_REGION_BUFFER);", html)
+        self.assertIn("width = Math.min(width, MAX_VISIBILITY_WINDOW);", html)
+
+
 if __name__ == "__main__":
     unittest.main()

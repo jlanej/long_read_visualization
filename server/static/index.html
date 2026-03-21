@@ -624,11 +624,13 @@
     let lastVisibilityWindow = 0;       // tracks the current window to avoid redundant updates
     const REGION_BUFFER_MULTIPLIER = 5;   // buffer = 5 × SV event size on each side (~4.2 kb for an 834 bp SV)
     const MIN_REGION_BUFFER = 1000;       // minimum buffer so tiny regions still show context
+    const MAX_REGION_BUFFER = 250000;     // cap per-side buffer to prevent unbounded track loading/memory growth
+    const MAX_VISIBILITY_WINDOW = 500000; // cap loaded bp per track to avoid memory spikes while browsing many regions
     const SPLITTER_HEIGHT = 6;
     const MIN_PANEL_HEIGHT = 120;
     const MIN_TOTAL_PANEL_HEIGHT = 300;
     const REF_PANEL_HEIGHT_RATIO = 0.44;  // keeps reference panel slightly larger by default
-    // No MAX_REGION_BUFFER — buffer is fully dynamic, proportional to the SV event size.
+    // Buffer remains proportional to event size but is capped for memory safety.
 
     // ── DOM refs ────────────────────────────────────────────────────────────
     const sampleSelect = document.getElementById("sampleSelect");
@@ -1268,7 +1270,7 @@
 
     // Compute a buffered reference-panel locus for a region.
     // The buffer is proportional to the SV event size (region.size) so that
-    // the view widens with larger events — no static maximum cap.
+    // the view widens with larger events, with an upper cap for memory safety.
     //
     // When region.fasta_region is set the ref_region is a padded subregion
     // FASTA sequence name (toy-dataset style, e.g. "chr1:9319383-9349426").
@@ -1311,10 +1313,10 @@
         }
         // Use the SV event size (displayed in the region navigator) as the
         // basis for the buffer, falling back to the ref-region span.
-        // No maximum cap — the view intentionally scales with the event so
-        // that reads spanning both breakpoints remain visible for any SV size.
-        const svSize = region.size || (refEnd - refStart);
-        const buffer = Math.max(svSize * REGION_BUFFER_MULTIPLIER, MIN_REGION_BUFFER);
+        // The per-side buffer is capped to keep repeated browsing memory-safe.
+        const svSize = Math.max(1, region.size || (refEnd - refStart));
+        const rawBuffer = Math.max(svSize * REGION_BUFFER_MULTIPLIER, MIN_REGION_BUFFER);
+        const buffer = Math.min(rawBuffer, MAX_REGION_BUFFER);
         const bufferedStart = Math.max(0, refStart - buffer);
         const bufferedEnd = refEnd + buffer;
         return {
@@ -1328,6 +1330,7 @@
     // Skips the update when the width is unchanged (within 1 bp) to avoid
     // redundant IGV.js data reloads during rapid zoom/pan.
     function setVisibilityWindow(width) {
+        width = Math.min(width, MAX_VISIBILITY_WINDOW);
         if (Math.abs(width - lastVisibilityWindow) < 1) return;
         lastVisibilityWindow = width;
         for (const browser of [refBrowser, hap1Browser, hap2Browser]) {
