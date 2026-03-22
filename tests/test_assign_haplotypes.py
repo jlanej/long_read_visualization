@@ -19,6 +19,35 @@ if HAS_PYSAM:
     import assign_haplotypes  # noqa: E402
 
 
+class TestPreprocessScriptReferencePropagation(unittest.TestCase):
+    """Smoke checks for preprocess.sh CRAM-reference propagation."""
+
+    def setUp(self):
+        self.repo_root = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..")
+        )
+        self.script = os.path.join(self.repo_root, "scripts", "preprocess.sh")
+
+    def _extract_step_5b_body(self):
+        start = '# ── Step 5b: Assign haplotype tags (HP) via competitive alignment scoring ──'
+        end = '# ── Step 6: Align reference to assemblies (ref-on-asm cross-check BAMs) ────'
+        with open(self.script, "r", encoding="utf-8") as fh:
+            text = fh.read()
+        start_idx = text.index(start)
+        end_idx = text.index(end)
+        return text[start_idx:end_idx]
+
+    def test_remap_path_uses_hp_ref_for_cram_creation_and_tagging(self):
+        """Remap/in-place HP flow should consistently use HP_REF, not REFERENCE."""
+        step_5b = self._extract_step_5b_body()
+        self.assertIn(
+            'run samtools view -@ "${THREADS}" -T "${HP_REF}" -C -o "${READS_HP_CRAM}" "${CRAM}"',
+            step_5b,
+        )
+        self.assertIn('--reference     "${HP_REF}"', step_5b)
+        self.assertNotIn('--reference     "${REFERENCE}"', step_5b)
+
+
 def _make_bam(path, reads, contigs=None):
     """Create a minimal BAM with the given reads.
 

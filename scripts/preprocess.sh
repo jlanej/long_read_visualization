@@ -348,17 +348,17 @@ if [[ "${REMAP_CRAM_TO_REFERENCE}" -eq 1 ]]; then
     if [[ -f "${READS_HP_CRAM}" && -f "${READS_HP_CRAM}.crai" ]]; then
         log "  Remapped HP-tagged CRAM exists, skipping"
     else
-        log "  Remapping input CRAM to selected reference: ${READS_HP_CRAM}"
-        run samtools view -@ "${THREADS}" -T "${REFERENCE}" -C -o "${READS_HP_CRAM}" "${CRAM}"
+        log "  Preparing HP-tagging CRAM from input: ${READS_HP_CRAM}"
+        run samtools view -@ "${THREADS}" -T "${HP_REF}" -C -o "${READS_HP_CRAM}" "${CRAM}"
 
         # shellcheck disable=SC2086
-        log "CMD: python3 ${SRC_DIR}/assign_haplotypes.py --hap1-bam ${HAP1_BAM} --hap2-bam ${HAP2_BAM} --reads-in ${READS_HP_CRAM} --reads-in-place --reference ${REFERENCE}"
+        log "CMD: python3 ${SRC_DIR}/assign_haplotypes.py --hap1-bam ${HAP1_BAM} --hap2-bam ${HAP2_BAM} --reads-in ${READS_HP_CRAM} --reads-in-place --reference ${HP_REF}"
         run python3 "${SRC_DIR}/assign_haplotypes.py" \
             --hap1-bam      "${HAP1_BAM}" \
             --hap2-bam      "${HAP2_BAM}" \
             --reads-in      "${READS_HP_CRAM}" \
             --reads-in-place \
-            --reference     "${REFERENCE}"
+            --reference     "${HP_REF}"
     fi
 elif [[ -f "${READS_HP_CRAM}" && -f "${READS_HP_CRAM}.crai" ]]; then
     log "  HP-tagged CRAM exists, skipping"
