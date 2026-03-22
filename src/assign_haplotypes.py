@@ -15,9 +15,10 @@ The script performs two operations:
    files (haplotype-space BAMs used in the assembly panels).  The original
    ``--cram`` input supplied by the user is *never* modified.
 
-2. **New HP-tagged reads file** (``--reads-out``) derived from the original
-   ``--reads-in`` CRAM/BAM.  This new file is in reference coordinate space
-   and is used as the reads track in the reference panel IGV browser.
+2. **HP-tagged reads file for reference panel**:
+   either write a new file (``--reads-out``) derived from ``--reads-in``,
+   or tag ``--reads-in`` in place with ``--reads-in-place``.  This file is
+   used as the reads track in the reference panel IGV browser.
 
 IGV natively understands the ``HP`` tag and can sort, group, and colour
 reads by haplotype phase.
@@ -31,7 +32,7 @@ Usage
         --hap1-bam  sample_reads_to_hap1.bam \\
         --hap2-bam  sample_reads_to_hap2.bam \\
         --reads-in  sample.cram \\
-        --reads-out sample_reads.hp.cram \\
+        [--reads-out sample_reads.hp.cram | --reads-in-place] \\
         [--reference ref.fa] \\
         [--tolerance 0]
 """
@@ -156,6 +157,22 @@ def tag_reads_file(input_path, output_path, assignments, reference=None):
                 outfile.write(read)
 
 
+def tag_reads_file_in_place(path, assignments, reference=None):
+    """Tag a BAM/CRAM with HP values, replacing the file atomically."""
+    reads_dir = os.path.dirname(path) or "."
+    suffix = ".cram" if path.endswith(".cram") else ".bam"
+    fd, tmp_path = tempfile.mkstemp(suffix=suffix, dir=reads_dir)
+    os.close(fd)
+    try:
+        tag_reads_file(path, tmp_path, assignments, reference=reference)
+        shutil.move(tmp_path, path)
+        index_bam(path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+
+
 def index_bam(bam_path):
     """Create a BAI/CRAI index for a BAM or CRAM file."""
     pysam.index(bam_path)
@@ -211,6 +228,12 @@ def main(args=None):
              "The original --reads-in file is not modified.",
     )
     parser.add_argument(
+        "--reads-in-place",
+        action="store_true",
+        help="Tag --reads-in in place (atomic replace) instead of writing "
+             "--reads-out. Useful after optional remapping workflows.",
+    )
+    parser.add_argument(
         "--reference",
         help="Reference FASTA (required when --reads-out is a CRAM file).",
     )
@@ -229,8 +252,13 @@ def main(args=None):
     if not os.path.isfile(hap2_bam):
         sys.exit(f"ERROR: hap2 BAM not found: {hap2_bam}")
 
-    # Validate reads-in/reads-out pair
-    if bool(opts.reads_in) != bool(opts.reads_out):
+    # Validate reads-in/reads-out options
+    if opts.reads_in_place:
+        if not opts.reads_in:
+            sys.exit("ERROR: --reads-in-place requires --reads-in")
+        if opts.reads_out:
+            sys.exit("ERROR: --reads-out cannot be used with --reads-in-place")
+    elif bool(opts.reads_in) != bool(opts.reads_out):
         sys.exit("ERROR: --reads-in and --reads-out must be used together")
     if opts.reads_in and not os.path.isfile(opts.reads_in):
         sys.exit(f"ERROR: reads-in file not found: {opts.reads_in}")
@@ -261,8 +289,13 @@ def main(args=None):
     print(f"[assign_haplotypes] Tagging {hap2_bam}", file=sys.stderr)
     tag_bam_in_place(hap2_bam, assignments)
 
-    # ── 2. New HP-tagged reads file for the reference panel ─────────────────
-    if opts.reads_in and opts.reads_out:
+    # ── 2. HP-tagging of reads file for the reference panel ──────────────────
+    if opts.reads_in and opts.reads_in_place:
+        print(f"[assign_haplotypes] Tagging reads file in place: {opts.reads_in}",
+              file=sys.stderr)
+        tag_reads_file_in_place(opts.reads_in, assignments,
+                                reference=opts.reference)
+    elif opts.reads_in and opts.reads_out:
         print(
             f"[assign_haplotypes] Writing HP-tagged reads file: "
             f"{opts.reads_in} → {opts.reads_out}",

@@ -11,6 +11,7 @@ set -euo pipefail
 THREADS=4
 READ_TYPE="ont"
 CRAM_REF=""
+REMAP_CRAM_TO_REFERENCE=0
 REF_CACHE_DIR="${PWD}/references"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC_DIR="${SCRIPT_DIR}/../src"
@@ -51,7 +52,10 @@ Reference (one of):
 Optional:
   -t, --threads   INT  Number of threads [${THREADS}]
   --cram-ref      FILE Reference FASTA used to encode the CRAM
-                       (required when different from --reference)
+                        (required when different from --reference)
+  --remap-cram-to-reference
+                       Remap input CRAM to --reference/--genome, then tag HP
+                       in-place on the remapped CRAM (no extra *_reads.hp.cram)
   -h, --help           Show this help message
 EOF
     exit 1
@@ -81,6 +85,7 @@ while [[ $# -gt 0 ]]; do
         --hifi)          READ_TYPE="hifi";   shift   ;;
         --read-type)     READ_TYPE="$2";     shift 2 ;;
         --cram-ref)      CRAM_REF="$2";      shift 2 ;;
+        --remap-cram-to-reference) REMAP_CRAM_TO_REFERENCE=1; shift ;;
         -h|--help)       usage ;;
         *)               echo "Unknown option: $1" >&2; usage ;;
     esac
@@ -300,9 +305,10 @@ align_reads_to_asm "${HAP2}" "hap2"
 #    hap1 and hap2 BAMs → compute HP:i:1/2/0 assignments.
 # 2. Tag the pipeline-generated reads_to_hap{1,2}.bam files in-place (used
 #    by the haplotype-space assembly panels in IGV).
-# 3. Create a new HP-tagged CRAM (${SAMPLE_NAME}_reads.hp.cram) derived from
-#    the original --cram input (which is never modified).  This HP-tagged CRAM
-#    is used as the reads track in the reference-panel IGV browser.
+# 3a. (Default) Create a new HP-tagged CRAM (${SAMPLE_NAME}_reads.hp.cram)
+#     derived from the original --cram input (which is never modified).
+# 3b. (Optional --remap-cram-to-reference) Remap input CRAM to the selected
+#     reference and tag HP in-place on the remapped CRAM.
 #
 # HP:i:1 = hap1 wins  |  HP:i:2 = hap2 wins  |  HP:i:0 = ambiguous
 # IGV natively groups, sorts, and colours reads by the HP tag.
@@ -315,7 +321,24 @@ READS_HP_CRAM="${OUTPUT_DIR}/${SAMPLE_NAME}_reads.hp.cram"
 HP_REF="${CRAM_REF:-${REFERENCE}}"
 
 log "Step 5b: Assigning haplotype tags (HP) based on competitive alignment scores"
-if [[ -f "${READS_HP_CRAM}" && -f "${READS_HP_CRAM}.crai" ]]; then
+if [[ "${REMAP_CRAM_TO_REFERENCE}" -eq 1 ]]; then
+    if [[ -f "${READS_HP_CRAM}" && -f "${READS_HP_CRAM}.crai" ]]; then
+        log "  Remapped HP-tagged CRAM exists, skipping"
+    else
+        log "  Remapping input CRAM to selected reference: ${READS_HP_CRAM}"
+        log "CMD: samtools view -@ ${THREADS} -T ${REFERENCE} -C -o ${READS_HP_CRAM} ${CRAM}"
+        samtools view -@ "${THREADS}" -T "${REFERENCE}" -C -o "${READS_HP_CRAM}" "${CRAM}"
+
+        # shellcheck disable=SC2086
+        log "CMD: python3 ${SRC_DIR}/assign_haplotypes.py --hap1-bam ${HAP1_BAM} --hap2-bam ${HAP2_BAM} --reads-in ${READS_HP_CRAM} --reads-in-place --reference ${REFERENCE}"
+        run python3 "${SRC_DIR}/assign_haplotypes.py" \
+            --hap1-bam      "${HAP1_BAM}" \
+            --hap2-bam      "${HAP2_BAM}" \
+            --reads-in      "${READS_HP_CRAM}" \
+            --reads-in-place \
+            --reference     "${REFERENCE}"
+    fi
+elif [[ -f "${READS_HP_CRAM}" && -f "${READS_HP_CRAM}.crai" ]]; then
     log "  HP-tagged CRAM exists, skipping"
 else
     # shellcheck disable=SC2086
@@ -399,4 +422,3 @@ echo "Query coordinate mappings with:"
 echo "  python3 ${SRC_DIR}/coordinate_mapper.py query \\"
 echo "    -i ${OUTPUT_DIR}/${SAMPLE_NAME}_hap1_to_ref.mapping.json.gz \\"
 echo "    -r chr1:1000000-2000000"
-
