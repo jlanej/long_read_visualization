@@ -18,6 +18,8 @@ import os
 import sys
 import time
 
+DOT_PLOT_COMPLETE_STATUS = "done"
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -80,6 +82,27 @@ def main():
                 os.path.join(args.output_dir, "03_next_region.png"))
         except Exception as e:
             print(f"  Warning: Could not navigate to next region: {e}")
+
+        # 4. Open dot-plot modal and capture generated plots
+        print("Capturing dot plots...")
+        try:
+            dot_btn = driver.find_element(By.ID, "dotPlotBtn")
+            dot_btn.click()
+            run_btn = WebDriverWait(driver, 20).until(
+                EC.element_to_be_clickable((By.ID, "dotPlotRunBtn"))
+            )
+            run_btn.click()
+            WebDriverWait(driver, 120).until(
+                lambda d: (
+                    d.find_element(By.ID, "dotPlotStatus").text.strip().lower()
+                    == DOT_PLOT_COMPLETE_STATUS
+                )
+            )
+            time.sleep(1)
+            driver.save_screenshot(
+                os.path.join(args.output_dir, "04_dot_plots.png"))
+        except Exception as e:
+            print(f"  Warning: Could not capture dot plots: {e}")
 
         print(f"Screenshots saved to {args.output_dir}/")
 
