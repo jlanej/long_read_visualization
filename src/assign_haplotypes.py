@@ -3,7 +3,13 @@
 
 Given two BAM files — reads aligned to haplotype 1 and reads aligned to
 haplotype 2 — this script compares the minimap2 Alignment Score (``AS:i:``)
-for every read and injects an ``HP:i:`` tag into both BAMs:
+for every read and injects an ``HP:i:`` tag into both BAMs.
+
+The original pipeline input CRAM (the user's sequencing data) is never
+modified — this script only operates on the pipeline-generated
+``_reads_to_hap{1,2}.bam`` files produced by Step 5 of ``preprocess.sh``.
+
+Output HP tags:
 
 * ``HP:i:1`` — read aligns better to hap1
 * ``HP:i:2`` — read aligns better to hap2
@@ -12,8 +18,9 @@ for every read and injects an ``HP:i:`` tag into both BAMs:
 IGV natively understands the ``HP`` tag and can sort, group, and colour
 reads by haplotype phase.
 
-The script is **idempotent**: running it on BAMs that already carry ``HP``
-tags will recompute and overwrite them deterministically.
+The script is **idempotent**: running it multiple times produces identical
+results because the HP tag is always recomputed from the AS scores and
+overwritten.
 
 Usage
 -----
@@ -112,10 +119,12 @@ def index_bam(bam_path):
 
 
 def tag_bam_in_place(bam_path, assignments):
-    """Tag a BAM with HP values, replacing the original file atomically.
+    """Tag a BAM with HP values, replacing the file atomically.
 
     Writes to a temporary file in the same directory and renames on
-    success so that a crash never leaves a half-written BAM.
+    success so that a crash never leaves a half-written BAM.  Only
+    pipeline-generated BAMs should be passed here; the original user
+    CRAM input is never touched by this script.
     """
     bam_dir = os.path.dirname(bam_path) or "."
     fd, tmp_path = tempfile.mkstemp(suffix=".bam", dir=bam_dir)
@@ -137,15 +146,17 @@ def tag_bam_in_place(bam_path, assignments):
 def main(args=None):
     parser = argparse.ArgumentParser(
         description="Assign HP (haplotype phase) tags to reads via "
-                    "competitive alignment scoring."
+                    "competitive alignment scoring. Operates on the "
+                    "pipeline-generated reads_to_hap{1,2}.bam files; "
+                    "the original CRAM input is never modified."
     )
     parser.add_argument(
         "--hap1-bam", required=True,
-        help="BAM of reads aligned to haplotype 1",
+        help="Pipeline-generated BAM of reads aligned to haplotype 1",
     )
     parser.add_argument(
         "--hap2-bam", required=True,
-        help="BAM of reads aligned to haplotype 2",
+        help="Pipeline-generated BAM of reads aligned to haplotype 2",
     )
     parser.add_argument(
         "--tolerance", type=int, default=0,

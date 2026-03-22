@@ -297,12 +297,15 @@ align_reads_to_asm "${HAP2}" "hap2"
 # ── Step 5b: Assign haplotype tags (HP) via competitive alignment scoring ──
 #
 # Compare the minimap2 Alignment Score (AS:i:) for every read between the
-# hap1 and hap2 BAMs.  Each read is tagged with HP:i:1 (hap1), HP:i:2
-# (hap2), or HP:i:0 (ambiguous / equal scores).  IGV natively groups,
-# sorts, and colours reads by the HP tag.
+# hap1 and hap2 BAMs and inject HP:i: tags in-place.  The original user
+# CRAM input (--cram) is never touched; only the pipeline-generated
+# reads_to_hap{1,2}.bam files produced in Step 5 are modified.
 #
-# The script is idempotent: re-running on already-tagged BAMs produces
-# the same result.
+# HP:i:1 = hap1 wins  |  HP:i:2 = hap2 wins  |  HP:i:0 = ambiguous
+# IGV natively groups, sorts, and colours reads by the HP tag.
+#
+# The assignment is deterministic so re-running always produces the same
+# result (idempotent).
 HAP1_BAM="${OUTPUT_DIR}/${SAMPLE_NAME}_reads_to_hap1.bam"
 HAP2_BAM="${OUTPUT_DIR}/${SAMPLE_NAME}_reads_to_hap2.bam"
 
