@@ -955,6 +955,8 @@
         console.log("[LRV] Sample config:", JSON.stringify({
             has_mapping_index: hasMappingIndex,
             cram_ref: config.cram_ref || "(not set)",
+            reads_hp_cram: config.tracks.reads_hp_cram || null,
+            reads_hp_bam: config.tracks.reads_hp_bam || null,
             reads_cram: config.tracks.reads_cram || null,
             reads_to_hap1_cram: config.tracks.reads_to_hap1_cram || null,
             reads_to_hap2_cram: config.tracks.reads_to_hap2_cram || null,
@@ -1105,11 +1107,11 @@
             tracks: [],
         };
 
-        // Reads → Ref (BAM or CRAM)
+        // Reads → Ref: prefer HP-tagged file when available; fall back to original
         const readsRefTrack = makeReadTrack(
             "Reads → Ref",
-            config.tracks.reads_bam,
-            config.tracks.reads_cram,
+            config.tracks.reads_hp_bam || config.tracks.reads_bam,
+            config.tracks.reads_hp_cram || config.tracks.reads_cram,
             {}
         );
         if (readsRefTrack) refOpts.tracks.push(readsRefTrack);

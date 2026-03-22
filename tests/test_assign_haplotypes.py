@@ -270,6 +270,46 @@ class TestTagBam(unittest.TestCase):
         hp = _read_hp_tags(bam)
         self.assertEqual(hp, {"r1": 1, "r2": 2})
 
+    def test_tag_reads_file_writes_hp_tagged_bam(self):
+        """tag_reads_file() writes a new BAM with HP tags; original unchanged."""
+        src = os.path.join(self.tmpdir, "reads.bam")
+        dst = os.path.join(self.tmpdir, "reads.hp.bam")
+        _make_bam(src, [
+            {"qname": "r1", "tags": [("AS", 100)]},
+            {"qname": "r2", "tags": [("AS", 200)]},
+        ])
+        src_mtime = os.path.getmtime(src)
+        assign_haplotypes.tag_reads_file(src, dst, {"r1": 1, "r2": 2})
+        # Original not modified
+        self.assertEqual(os.path.getmtime(src), src_mtime)
+        # Output has HP tags
+        hp = _read_hp_tags(dst)
+        self.assertEqual(hp, {"r1": 1, "r2": 2})
+
+    def test_tag_reads_file_passthrough_unassigned(self):
+        """Reads not in assignments are written through without an HP tag."""
+        src = os.path.join(self.tmpdir, "reads.bam")
+        dst = os.path.join(self.tmpdir, "reads.hp.bam")
+        _make_bam(src, [
+            {"qname": "r1", "tags": [("AS", 100)]},
+            {"qname": "rX", "tags": [("AS", 50)]},
+        ])
+        assign_haplotypes.tag_reads_file(src, dst, {"r1": 1})
+        hp = _read_hp_tags(dst)
+        self.assertEqual(hp, {"r1": 1})
+        with pysam.AlignmentFile(dst, "rb") as f:
+            names = [r.query_name for r in f.fetch(until_eof=True)]
+        self.assertIn("rX", names)
+
+    def test_tag_reads_file_cram_requires_reference(self):
+        """tag_reads_file() raises ValueError for CRAM output without reference."""
+        src = os.path.join(self.tmpdir, "reads.bam")
+        _make_bam(src, [{"qname": "r1", "tags": []}])
+        with self.assertRaises(ValueError):
+            assign_haplotypes.tag_reads_file(
+                src, os.path.join(self.tmpdir, "out.cram"), {}
+            )
+
 
 @unittest.skipUnless(HAS_PYSAM, "pysam not installed")
 class TestIdempotency(unittest.TestCase):
@@ -340,6 +380,49 @@ class TestMainCLI(unittest.TestCase):
         hp2 = _read_hp_tags(hap2)
         self.assertEqual(hp1, {"r1": 1, "r2": 2})
         self.assertEqual(hp2, {"r1": 1, "r2": 2})
+
+    def test_main_writes_reads_out(self):
+        """main() creates a new HP-tagged BAM from --reads-in."""
+        hap1 = os.path.join(self.tmpdir, "h1.bam")
+        hap2 = os.path.join(self.tmpdir, "h2.bam")
+        reads_in = os.path.join(self.tmpdir, "reads.bam")
+        reads_out = os.path.join(self.tmpdir, "reads.hp.bam")
+        _make_bam(hap1, [
+            {"qname": "r1", "tags": [("AS", 500)]},
+            {"qname": "r2", "tags": [("AS", 100)]},
+        ])
+        _make_bam(hap2, [
+            {"qname": "r1", "tags": [("AS", 300)]},
+            {"qname": "r2", "tags": [("AS", 400)]},
+        ])
+        _make_bam(reads_in, [
+            {"qname": "r1", "tags": []},
+            {"qname": "r2", "tags": []},
+        ])
+        reads_in_mtime = os.path.getmtime(reads_in)
+        assign_haplotypes.main([
+            "--hap1-bam", hap1, "--hap2-bam", hap2,
+            "--reads-in", reads_in, "--reads-out", reads_out,
+        ])
+        # Original reads-in not modified
+        self.assertEqual(os.path.getmtime(reads_in), reads_in_mtime)
+        # New HP-tagged file written with index
+        self.assertTrue(os.path.isfile(reads_out))
+        self.assertTrue(os.path.isfile(reads_out + ".bai"))
+        hp = _read_hp_tags(reads_out)
+        self.assertEqual(hp, {"r1": 1, "r2": 2})
+
+    def test_main_reads_out_without_reads_in_errors(self):
+        """Supplying --reads-out without --reads-in raises SystemExit."""
+        hap1 = os.path.join(self.tmpdir, "h1.bam")
+        hap2 = os.path.join(self.tmpdir, "h2.bam")
+        _make_bam(hap1, [{"qname": "r1", "tags": [("AS", 500)]}])
+        _make_bam(hap2, [{"qname": "r1", "tags": [("AS", 300)]}])
+        with self.assertRaises(SystemExit):
+            assign_haplotypes.main([
+                "--hap1-bam", hap1, "--hap2-bam", hap2,
+                "--reads-out", os.path.join(self.tmpdir, "out.bam"),
+            ])
 
     def test_main_with_tolerance(self):
         """main() respects --tolerance flag."""

@@ -3,30 +3,36 @@
 
 Given two BAM files — reads aligned to haplotype 1 and reads aligned to
 haplotype 2 — this script compares the minimap2 Alignment Score (``AS:i:``)
-for every read and injects an ``HP:i:`` tag into both BAMs.
-
-The original pipeline input CRAM (the user's sequencing data) is never
-modified — this script only operates on the pipeline-generated
-``_reads_to_hap{1,2}.bam`` files produced by Step 5 of ``preprocess.sh``.
-
-Output HP tags:
+for every read and assigns an HP tag:
 
 * ``HP:i:1`` — read aligns better to hap1
 * ``HP:i:2`` — read aligns better to hap2
 * ``HP:i:0`` — ambiguous (scores within *tolerance* of each other)
 
+The script performs two operations:
+
+1. **In-place tagging** of the pipeline-generated ``reads_to_hap{1,2}.bam``
+   files (haplotype-space BAMs used in the assembly panels).  The original
+   ``--cram`` input supplied by the user is *never* modified.
+
+2. **New HP-tagged reads file** (``--reads-out``) derived from the original
+   ``--reads-in`` CRAM/BAM.  This new file is in reference coordinate space
+   and is used as the reads track in the reference panel IGV browser.
+
 IGV natively understands the ``HP`` tag and can sort, group, and colour
 reads by haplotype phase.
 
-The script is **idempotent**: running it multiple times produces identical
-results because the HP tag is always recomputed from the AS scores and
-overwritten.
+The script is **idempotent**: HP tags are always recomputed from the AS
+scores so re-running produces the same result.
 
 Usage
 -----
     python3 assign_haplotypes.py \\
-        --hap1-bam sample_reads_to_hap1.bam \\
-        --hap2-bam sample_reads_to_hap2.bam \\
+        --hap1-bam  sample_reads_to_hap1.bam \\
+        --hap2-bam  sample_reads_to_hap2.bam \\
+        --reads-in  sample.cram \\
+        --reads-out sample_reads.hp.cram \\
+        [--reference ref.fa] \\
         [--tolerance 0]
 """
 
@@ -113,8 +119,45 @@ def tag_bam(input_bam, output_bam, assignments):
                 outfile.write(read)
 
 
+def tag_reads_file(input_path, output_path, assignments, reference=None):
+    """Write a new *output_path* with HP:i: tags from *assignments*.
+
+    Supports both BAM (``.bam``) and CRAM (``.cram``) output formats.  When
+    writing CRAM, a *reference* FASTA path must be supplied.
+
+    The original *input_path* is never modified.  Reads whose query name is
+    not in *assignments* pass through unchanged.
+    """
+    is_cram_out = output_path.endswith(".cram")
+    if is_cram_out and not reference:
+        raise ValueError(
+            f"--reference is required when writing CRAM output: {output_path}"
+        )
+
+    open_kw_in = {}
+    if input_path.endswith(".cram") and reference:
+        open_kw_in["reference_filename"] = reference
+
+    if is_cram_out:
+        mode_out = "wc"
+        open_kw_out = {"reference_filename": reference}
+    else:
+        mode_out = "wb"
+        open_kw_out = {}
+
+    with pysam.AlignmentFile(input_path, "rb", **open_kw_in) as infile:
+        with pysam.AlignmentFile(
+            output_path, mode_out, header=infile.header, **open_kw_out
+        ) as outfile:
+            for read in infile.fetch(until_eof=True):
+                hp = assignments.get(read.query_name)
+                if hp is not None:
+                    read.set_tag("HP", hp, value_type="i")
+                outfile.write(read)
+
+
 def index_bam(bam_path):
-    """Create a BAI index for a BAM file."""
+    """Create a BAI/CRAI index for a BAM or CRAM file."""
     pysam.index(bam_path)
 
 
@@ -146,9 +189,7 @@ def tag_bam_in_place(bam_path, assignments):
 def main(args=None):
     parser = argparse.ArgumentParser(
         description="Assign HP (haplotype phase) tags to reads via "
-                    "competitive alignment scoring. Operates on the "
-                    "pipeline-generated reads_to_hap{1,2}.bam files; "
-                    "the original CRAM input is never modified."
+                    "competitive alignment scoring."
     )
     parser.add_argument(
         "--hap1-bam", required=True,
@@ -157,6 +198,21 @@ def main(args=None):
     parser.add_argument(
         "--hap2-bam", required=True,
         help="Pipeline-generated BAM of reads aligned to haplotype 2",
+    )
+    parser.add_argument(
+        "--reads-in",
+        help="Original CRAM/BAM input (e.g. the --cram passed to preprocess.sh). "
+             "Used together with --reads-out to create an HP-tagged copy in "
+             "reference coordinate space for IGV visualisation.",
+    )
+    parser.add_argument(
+        "--reads-out",
+        help="Path for the new HP-tagged output file (CRAM or BAM). "
+             "The original --reads-in file is not modified.",
+    )
+    parser.add_argument(
+        "--reference",
+        help="Reference FASTA (required when --reads-out is a CRAM file).",
     )
     parser.add_argument(
         "--tolerance", type=int, default=0,
@@ -172,6 +228,12 @@ def main(args=None):
         sys.exit(f"ERROR: hap1 BAM not found: {hap1_bam}")
     if not os.path.isfile(hap2_bam):
         sys.exit(f"ERROR: hap2 BAM not found: {hap2_bam}")
+
+    # Validate reads-in/reads-out pair
+    if bool(opts.reads_in) != bool(opts.reads_out):
+        sys.exit("ERROR: --reads-in and --reads-out must be used together")
+    if opts.reads_in and not os.path.isfile(opts.reads_in):
+        sys.exit(f"ERROR: reads-in file not found: {opts.reads_in}")
 
     print(f"[assign_haplotypes] Reading alignment scores from {hap1_bam}",
           file=sys.stderr)
@@ -193,10 +255,22 @@ def main(args=None):
           f"hap1: {counts[1]}, hap2: {counts[2]}, "
           f"ambiguous: {counts[0]}", file=sys.stderr)
 
+    # ── 1. In-place tagging of the haplotype-space BAMs ─────────────────────
     print(f"[assign_haplotypes] Tagging {hap1_bam}", file=sys.stderr)
     tag_bam_in_place(hap1_bam, assignments)
     print(f"[assign_haplotypes] Tagging {hap2_bam}", file=sys.stderr)
     tag_bam_in_place(hap2_bam, assignments)
+
+    # ── 2. New HP-tagged reads file for the reference panel ─────────────────
+    if opts.reads_in and opts.reads_out:
+        print(
+            f"[assign_haplotypes] Writing HP-tagged reads file: "
+            f"{opts.reads_in} → {opts.reads_out}",
+            file=sys.stderr,
+        )
+        tag_reads_file(opts.reads_in, opts.reads_out, assignments,
+                       reference=opts.reference)
+        index_bam(opts.reads_out)
 
     print("[assign_haplotypes] Done.", file=sys.stderr)
 

@@ -296,24 +296,38 @@ align_reads_to_asm "${HAP2}" "hap2"
 
 # ── Step 5b: Assign haplotype tags (HP) via competitive alignment scoring ──
 #
-# Compare the minimap2 Alignment Score (AS:i:) for every read between the
-# hap1 and hap2 BAMs and inject HP:i: tags in-place.  The original user
-# CRAM input (--cram) is never touched; only the pipeline-generated
-# reads_to_hap{1,2}.bam files produced in Step 5 are modified.
+# 1. Compare the minimap2 Alignment Score (AS:i:) for every read between the
+#    hap1 and hap2 BAMs → compute HP:i:1/2/0 assignments.
+# 2. Tag the pipeline-generated reads_to_hap{1,2}.bam files in-place (used
+#    by the haplotype-space assembly panels in IGV).
+# 3. Create a new HP-tagged CRAM (${SAMPLE_NAME}_reads.hp.cram) derived from
+#    the original --cram input (which is never modified).  This HP-tagged CRAM
+#    is used as the reads track in the reference-panel IGV browser.
 #
 # HP:i:1 = hap1 wins  |  HP:i:2 = hap2 wins  |  HP:i:0 = ambiguous
 # IGV natively groups, sorts, and colours reads by the HP tag.
-#
-# The assignment is deterministic so re-running always produces the same
-# result (idempotent).
+# Idempotent: re-running produces the same assignments and output files.
 HAP1_BAM="${OUTPUT_DIR}/${SAMPLE_NAME}_reads_to_hap1.bam"
 HAP2_BAM="${OUTPUT_DIR}/${SAMPLE_NAME}_reads_to_hap2.bam"
+READS_HP_CRAM="${OUTPUT_DIR}/${SAMPLE_NAME}_reads.hp.cram"
+
+# Choose the best available reference for CRAM encoding
+HP_REF="${CRAM_REF:-${REFERENCE}}"
 
 log "Step 5b: Assigning haplotype tags (HP) based on competitive alignment scores"
-log "CMD: python3 ${SRC_DIR}/assign_haplotypes.py --hap1-bam ${HAP1_BAM} --hap2-bam ${HAP2_BAM}"
-run python3 "${SRC_DIR}/assign_haplotypes.py" \
-    --hap1-bam "${HAP1_BAM}" \
-    --hap2-bam "${HAP2_BAM}"
+if [[ -f "${READS_HP_CRAM}" && -f "${READS_HP_CRAM}.crai" ]]; then
+    log "  HP-tagged CRAM exists, skipping"
+else
+    # shellcheck disable=SC2086
+    log "CMD: python3 ${SRC_DIR}/assign_haplotypes.py --hap1-bam ${HAP1_BAM} --hap2-bam ${HAP2_BAM} --reads-in ${CRAM} --reads-out ${READS_HP_CRAM} --reference ${HP_REF}"
+    # shellcheck disable=SC2086
+    run python3 "${SRC_DIR}/assign_haplotypes.py" \
+        --hap1-bam  "${HAP1_BAM}" \
+        --hap2-bam  "${HAP2_BAM}" \
+        --reads-in  "${CRAM}" \
+        --reads-out "${READS_HP_CRAM}" \
+        --reference "${HP_REF}"
+fi
 
 # ── Step 6: Align reference to assemblies (ref-on-asm cross-check BAMs) ────
 #
