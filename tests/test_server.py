@@ -984,6 +984,66 @@ class TestSelectDotplotRegion(unittest.TestCase):
         self.assertEqual(best["start"], 0)
         self.assertEqual(best["end"], 200)
 
+    def test_inversion_keeps_both_strands_together(self):
+        """An inversion has flanking + hits and an inverted - hit on the
+        same contig.  All three should be grouped together so the full
+        envelope is returned."""
+        regions = [
+            {"chrom": "ctgA", "start": 1000, "end": 4000, "strand": "+"},
+            {"chrom": "ctgA", "start": 4000, "end": 7000, "strand": "-"},
+            {"chrom": "ctgA", "start": 7000, "end": 10000, "strand": "+"},
+        ]
+        best = server_app._select_dotplot_region(regions)
+        self.assertIsNotNone(best)
+        self.assertEqual(best["chrom"], "ctgA")
+        self.assertEqual(best["start"], 1000)
+        self.assertEqual(best["end"], 10000)
+
+    def test_no_strand_in_result(self):
+        """Result dict should not carry a strand key (grouping is by
+        chrom only)."""
+        regions = [
+            {"chrom": "ctgA", "start": 0, "end": 100, "strand": "+"},
+        ]
+        best = server_app._select_dotplot_region(regions)
+        self.assertNotIn("strand", best)
+
+    def test_runaway_envelope_isolated_by_clustering(self):
+        """A spurious distant hit on the same contig must not blow up the
+        envelope.  The nearby cluster with more covered bp should win."""
+        regions = [
+            # True locus: 1 kb–11 kb (10 kb covered)
+            {"chrom": "ctgA", "start": 1000, "end": 6000, "strand": "+"},
+            {"chrom": "ctgA", "start": 6000, "end": 11000, "strand": "+"},
+            # Spurious ALU hit far away (1 kb covered, 50 Mb away)
+            {"chrom": "ctgA", "start": 50000000, "end": 50001000, "strand": "+"},
+        ]
+        best = server_app._select_dotplot_region(regions)
+        self.assertIsNotNone(best)
+        self.assertEqual(best["chrom"], "ctgA")
+        self.assertEqual(best["start"], 1000)
+        self.assertEqual(best["end"], 11000)
+        # Envelope must NOT span 50 Mb
+        self.assertLess(best["end"] - best["start"], 100000)
+
+    def test_max_gap_parameter(self):
+        """Intervals within max_gap should stay in one cluster; intervals
+        beyond max_gap should split."""
+        regions = [
+            {"chrom": "ctgA", "start": 0, "end": 100},
+            {"chrom": "ctgA", "start": 200, "end": 300},
+        ]
+        # With default max_gap (50000), both in one cluster
+        best = server_app._select_dotplot_region(regions)
+        self.assertEqual(best["start"], 0)
+        self.assertEqual(best["end"], 300)
+
+        # With tiny max_gap, they split into separate clusters
+        best = server_app._select_dotplot_region(regions, max_gap=50)
+        self.assertEqual(best["start"], 0)
+        self.assertEqual(best["end"], 100)
+        # Both clusters have 100 bp but first has tighter envelope
+
 
 class TestTranslatorSelectionRobustness(unittest.TestCase):
     """Tests for robust translation hit filtering in CoordinateTranslator."""
@@ -1288,7 +1348,7 @@ class TestFrontendMemoryGuards(unittest.TestCase):
         with open(index_path, encoding="utf-8") as fh:
             html = fh.read()
 
-        self.assertIn("function selectBestRegion(regions, coordType = \"half-open\")", html)
+        self.assertIn("function selectBestRegion(regions, coordType = \"half-open\", maxGap = 50000)", html)
         self.assertIn("function selectBestLocus(loci)", html)
         self.assertIn("selectBestRegion(regions, \"inclusive\")", html)
         self.assertIn("selectBestRegion(result.hap1)", html)
