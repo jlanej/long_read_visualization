@@ -18,6 +18,8 @@ import os
 import sys
 import time
 
+DOT_PLOT_COMPLETE_STATUS = "done"
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -91,7 +93,10 @@ def main():
             )
             run_btn.click()
             WebDriverWait(driver, 120).until(
-                lambda d: d.find_element(By.ID, "dotPlotStatus").text.strip().lower() == "done"
+                lambda d: (
+                    d.find_element(By.ID, "dotPlotStatus").text.strip().lower()
+                    == DOT_PLOT_COMPLETE_STATUS
+                )
             )
             time.sleep(1)
             driver.save_screenshot(

@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 # Allow importing from server/ and src/ directories
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -991,8 +992,6 @@ class TestApiDotplot(unittest.TestCase):
             "hap1_assembly": "/hap1.fa.gz",
             "hap2_assembly": "/hap2.fa.gz",
         }])
-
-        from unittest.mock import patch
 
         calls = []
 
