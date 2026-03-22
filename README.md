@@ -165,7 +165,7 @@ Read type (controls minimap2 alignment preset):
 Reference (one of):
   -r, --reference FILE Target reference genome FASTA (local file)
   --genome        STR  Download a known reference if not already cached.
-                       Supported: hg38 hg19 chm13v2.0 grch38
+                       Supported: hg38 hg19 chm13v2.0 chm13v2.0_maskedY_rCRS grch38
   --ref-dir       DIR  Cache directory for downloaded references
                        [./references]
 
@@ -180,9 +180,16 @@ Optional:
 | Name | Source | Download URL |
 |---|---|---|
 | `chm13v2.0` | T2T-CHM13 v2.0 (human-pangenomics S3) | <https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0.fa.gz> |
+| `chm13v2.0_maskedY_rCRS` | T2T-CHM13 v2.0 — chrY PAR hard-masked to `N`, chrM = rCRS (NC_012920.1); **recommended for most human sequencing workflows** | <https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0_maskedY_rCRS.fa.gz> |
 | `hg38` | UCSC hg38 | <https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz> |
 | `hg19` | UCSC hg19 | <https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/hg19.fa.gz> |
 | `grch38` | NCBI GRCh38 no-alt analysis set | <https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/001/405/GCA_000001405.15_GRCh38/seqs_for_alignment_pipelines.ucsc_ids/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna.gz> |
+
+> **Which reference should I use?**  
+> For most human ONT and PacBio HiFi workflows, `chm13v2.0_maskedY_rCRS` is the recommended best practice:
+> hard-masking the chrY PAR regions prevents spurious multi-mapping (the PAR sequence is identical on chrX and chrY),
+> and the rCRS mitochondrial sequence (NC_012920.1) is the international standard for clinical and population genomics.
+> Use plain `chm13v2.0` if you need to match an existing analysis already aligned to that reference.
 
 ---
 
@@ -436,7 +443,8 @@ cite them if you use this dataset in your work:
   Liao *et al.* (2025). *Nature* <https://doi.org/10.1038/s41586-025-09290-7>.
   Data: <https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1KG_ONT_VIENNA/>
 - **T2T-CHM13 v2.0** — reference genome used to encode the `*.t2t.cram` files
-  (the encoding reference; pass to `--cram-ref` when aligning against a different assembly reference):
+  (the encoding reference for `*.t2t.cram` files; pass to `--cram-ref` if aligning to a different assembly reference).
+  For new analyses, `--genome chm13v2.0_maskedY_rCRS` is the recommended best practice (see above).
   Nurk *et al.* (2022). *Science* 376, 44–53. <https://doi.org/10.1126/science.abj6987>.
   Download: <https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0.fa.gz>
   — or use `--genome chm13v2.0` to download automatically.
