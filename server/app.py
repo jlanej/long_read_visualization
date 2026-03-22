@@ -752,6 +752,11 @@ class IGVHandler(SimpleHTTPRequestHandler):
         ref_region = query.get("ref", [""])[0]
         hap1_region = query.get("hap1", [""])[0]
         hap2_region = query.get("hap2", [""])[0]
+        # Keep the raw IGV loci so we can highlight the currently visible
+        # window inside any buffered/translated extraction region.
+        raw_ref_region = ref_region
+        raw_hap1_region = hap1_region
+        raw_hap2_region = hap2_region
         try:
             k = int(query.get("k", [31])[0])
         except (ValueError, IndexError):
@@ -775,14 +780,25 @@ class IGVHandler(SimpleHTTPRequestHandler):
         if sample is None:
             return {"error": f"Sample '{sample_id}' not found"}
 
+        def _parse_region(region):
+            if not region:
+                return None
+            m = re.match(r"^(.+):(\d+)-(\d+)$", region)
+            if not m:
+                return None
+            return {
+                "chrom": m.group(1),
+                "start": int(m.group(2)),
+                "end": int(m.group(3)),
+            }
+
         # ── Expand reference region by buffer ────────────────────────────
         ref_chrom, ref_start, ref_end = None, None, None
-        if ref_region:
-            m = re.match(r"^(.+):(\d+)-(\d+)$", ref_region)
-            if m:
-                ref_chrom = m.group(1)
-                ref_start = int(m.group(2))
-                ref_end = int(m.group(3))
+        parsed_ref_region = _parse_region(ref_region)
+        if parsed_ref_region is not None:
+            ref_chrom = parsed_ref_region["chrom"]
+            ref_start = parsed_ref_region["start"]
+            ref_end = parsed_ref_region["end"]
 
         if ref_chrom is not None:
             viewport_span = ref_end - ref_start
@@ -872,6 +888,28 @@ class IGVHandler(SimpleHTTPRequestHandler):
                     "end_offset": ev_off_end,
                 }
 
+        # ── Compute IGV viewport highlights for ref/hap axes ─────────────
+        def _region_highlight(extracted_region, viewport_region, seq_len):
+            ext = _parse_region(extracted_region)
+            vis = _parse_region(viewport_region)
+            if ext is None or vis is None or ext["chrom"] != vis["chrom"]:
+                return None
+            ext_span = ext["end"] - ext["start"]
+            if ext_span <= 0:
+                return None
+            seq_limit = seq_len if (seq_len is not None and seq_len > 0) else ext_span
+            hl_start = max(0, vis["start"] - ext["start"])
+            hl_end = min(seq_limit, vis["end"] - ext["start"])
+            if hl_end <= hl_start:
+                return None
+            return {"start_offset": hl_start, "end_offset": hl_end}
+
+        viewport_highlights = {
+            "ref": _region_highlight(buffered_ref_region, raw_ref_region, len(ref_seq)),
+            "hap1": _region_highlight(hap1_region, raw_hap1_region, len(hap1_seq)),
+            "hap2": _region_highlight(hap2_region, raw_hap2_region, len(hap2_seq)),
+        }
+
         # Compute three pairwise dot plots
         result = {
             "hap1_vs_ref": dot_plot.compute_dotplot(ref_seq, hap1_seq, k),
@@ -884,6 +922,7 @@ class IGVHandler(SimpleHTTPRequestHandler):
             },
             "k": k,
             "event_highlight": event_highlight,
+            "viewport_highlights": viewport_highlights,
             "buffered_ref_region": buffered_ref_region,
         }
         return result

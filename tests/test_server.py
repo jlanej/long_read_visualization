@@ -838,6 +838,63 @@ class TestApiDotplot(unittest.TestCase):
         })
         self.assertIsNone(result["event_highlight"])
 
+    def test_viewport_highlights_present_for_buffered_ref_and_haps(self):
+        """Viewport highlights map raw loci into extracted sequence offsets."""
+        handler = self._make_handler_class([{
+            "sample_id": "S1",
+            "reference": "",
+            "hap1_assembly": "",
+            "hap2_assembly": "",
+        }])
+        result = handler._api_dotplot({
+            "sample": ["S1"],
+            "ref": ["chr1:10000-20000"],
+            "hap1": ["asm1:500-1500"],
+            "hap2": ["asm2:600-1600"],
+            "buffer": ["1.0"],
+        })
+        hl = result["viewport_highlights"]
+        self.assertIsNotNone(hl["ref"])
+        self.assertEqual(hl["ref"]["start_offset"], 10000)
+        self.assertEqual(hl["ref"]["end_offset"], 20000)
+        self.assertIsNotNone(hl["hap1"])
+        self.assertEqual(hl["hap1"]["start_offset"], 0)
+        self.assertEqual(hl["hap1"]["end_offset"], 1000)
+        self.assertIsNotNone(hl["hap2"])
+        self.assertEqual(hl["hap2"]["start_offset"], 0)
+        self.assertEqual(hl["hap2"]["end_offset"], 1000)
+
+    def test_viewport_highlights_use_translated_hap_regions(self):
+        """When translator is used, hap highlights use translated extraction coords."""
+        class _FakeTranslator:
+            def has_index(self, sid):
+                return sid == "S1"
+
+            def translate(self, sid, chrom, start, end, **kw):
+                return {
+                    "hap1": [{"chrom": "asm1", "start": 1000, "end": 3000, "strand": "+"}],
+                    "hap2": [{"chrom": "asm2", "start": 2000, "end": 5000, "strand": "+"}],
+                }
+
+        handler = self._make_handler_class([{
+            "sample_id": "S1",
+            "reference": "",
+            "hap1_assembly": "",
+            "hap2_assembly": "",
+        }], translator=_FakeTranslator())
+        result = handler._api_dotplot({
+            "sample": ["S1"],
+            "ref": ["chr1:10000-20000"],
+            "hap1": ["asm1:1200-2200"],
+            "hap2": ["asm2:2500-3500"],
+            "buffer": ["0"],
+        })
+        hl = result["viewport_highlights"]
+        self.assertEqual(hl["hap1"]["start_offset"], 200)
+        self.assertEqual(hl["hap1"]["end_offset"], 1200)
+        self.assertEqual(hl["hap2"]["start_offset"], 500)
+        self.assertEqual(hl["hap2"]["end_offset"], 1500)
+
     def test_translator_used_when_available(self):
         """When a mapping index exists, translator.translate() is called
         to derive hap regions from the buffered reference region."""
