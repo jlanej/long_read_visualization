@@ -483,13 +483,9 @@ apptainer run \
         <p style="font-size:.85rem;color:var(--muted);margin-top:10px;">
           If the CRAM was encoded with a <em>different</em> reference than the one used for assembly alignment,
           pass <code>--cram-ref /path/to/encoding_reference.fa.gz</code> so <code>samtools</code> can decode it correctly.
-          The 1KG ONT Vienna <code>*.t2t.cram</code> files were encoded with
-          <a href="https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0_maskedY_rCRS.fa.gz" target="_blank" rel="noopener"><code>chm13v2.0_maskedY_rCRS.fa.gz</code></a>
-          — a variant of CHM13 v2.0 where the chrY PAR regions are hard-masked to <code>N</code>
-          and chrM uses the rCRS sequence. This differs from the plain <code>chm13v2.0.fa.gz</code>
-          downloaded by <code>--genome chm13v2.0</code>, so you must pass
-          <code>--cram-ref /work/references/chm13v2.0_maskedY_rCRS.fa.gz</code> when using
-          these CRAMs.
+          For example, the 1KG ONT Vienna CRAM files are encoded with T2T-CHM13 v2.0
+          (<a href="https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0.fa.gz" target="_blank" rel="noopener">download</a>),
+          which is also the default <code>--genome chm13v2.0</code> reference, so no extra flag is needed here.
         </p>
       </div>
 
@@ -751,13 +747,8 @@ apptainer exec \
         <strong>T2T-CHM13 v2.0</strong> — Reference genome used to align the 1KG ONT Vienna reads (the encoding reference for <code>*.t2t.cram</code> files).<br>
         Nurk <em>et al.</em> (2022). <em>Science</em> 376, 44–53.
         <a href="https://doi.org/10.1126/science.abj6987" target="_blank" rel="noopener">https://doi.org/10.1126/science.abj6987</a><br>
-        The 1KG ONT Vienna pipeline uses the <strong><code>maskedY_rCRS</code></strong> variant:
-        chrY PAR regions are hard-masked to <code>N</code> (to prevent spurious multi-mapping from the identical PAR on chrX),
-        and chrM is replaced with the rCRS sequence (NC_012920.1).
-        These changes produce different MD5 checksums for chrY and chrM compared to the plain <code>chm13v2.0.fa.gz</code>.<br>
-        CRAM decoding reference:
-        <a href="https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0_maskedY_rCRS.fa.gz" target="_blank" rel="noopener">chm13v2.0_maskedY_rCRS.fa.gz</a>
-        — use with <code>--cram-ref</code> when decoding these CRAMs against a different assembly reference.
+        Download: <a href="https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0.fa.gz" target="_blank" rel="noopener">chm13v2.0.fa.gz (human-pangenomics S3)</a>
+        — or use <code>--genome chm13v2.0</code> to download automatically.
       </li>
       <li>
         <strong>shapeit5-phased callset</strong> — Phased, sequence-resolved SV VCF for NA21110; bundled in <code>resources/</code>.
@@ -783,7 +774,7 @@ apptainer exec \
       <a href="visualization_guide.md">Visualization Guide</a>
       <a href="toy_dataset.md">Toy Dataset</a>
     </div>
-    <p>Generated on 2026-03-22 20:54 UTC &nbsp;·&nbsp;
+    <p>Generated on 2026-03-22 20:58 UTC &nbsp;·&nbsp;
        <a href="https://github.com/jlanej/long_read_visualization" target="_blank" rel="noopener">jlanej/long_read_visualization</a>
     </p>
   </div>
