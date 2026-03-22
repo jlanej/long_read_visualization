@@ -173,9 +173,16 @@ def project_cigar(cigar_ops, ref_offset_start, ref_offset_end, strand,
     mapped to the adjacent assembly position (i.e. both edges of the
     deletion clamp to the same assembly coordinate).
 
-    For insertions (I/S), the reference position at the insertion site
-    maps to the start of the inserted assembly sequence, so queries
-    that straddle an insertion boundary include the full inserted range.
+    For insertions (I/S), the inserted bases do not consume any reference
+    position, so they sit *between* two reference-consuming operations.
+    A query that *straddles* the insertion boundary (starts before it and
+    ends after it) will include the full inserted assembly range.  However,
+    if ``ref_offset_start`` falls *exactly* on the insertion boundary, the
+    query resolves against the next reference-consuming operation and the
+    insertion is **not** included — consistent with half-open interval
+    semantics where the insertion is "before" the start position.  Callers
+    should include padding around SV breakpoints to ensure that boundary
+    insertions are captured.
 
     When *cigar_index* (produced by :func:`_build_cigar_index`) is
     provided, a binary search locates the starting CIGAR operation in
@@ -278,7 +285,9 @@ def classify_sv_gap(prev_block, next_block, gap_ref_start, gap_ref_end, chrom):
     * **inversion** – same contig, opposite strands.
     * **complex** – same contig, same strand, but the assembly gap is negative
       (blocks overlap in assembly space, indicating a duplication or other
-      complex event).
+      complex event).  This includes **tandem duplications** where the
+      reference has extra copies: the assembly maps to the same locus from
+      two adjacent reference blocks, causing a negative assembly gap.
     * **deletion** – same contig, same strand; assembly gap < reference gap
       (assembly has less sequence than reference at this locus).
     * **insertion** – same contig, same strand; assembly gap ≥ reference gap
@@ -503,6 +512,14 @@ def query(index, chrom, start, end, min_mapq=0):
     furthest so far.  This prevents false-positive ("phantom") gap events
     when a short supplementary alignment is nested inside a larger primary
     alignment — only genuinely uncovered reference intervals are flagged.
+
+    **Limitation – interleaving contigs:** when alignment blocks from
+    different assembly contigs interleave in reference space, the
+    high-water-mark may be on a different contig from the next block.
+    Junction events between same-contig blocks that are "shadowed" by a
+    longer block from another contig will not be reported.  All alignment
+    blocks are still returned, so callers that need full multi-contig
+    awareness can detect overlapping alignment results themselves.
 
     Args:
         index: Loaded index from :func:`load_index`.

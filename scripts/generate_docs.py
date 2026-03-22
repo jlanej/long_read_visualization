@@ -742,15 +742,22 @@ apptainer exec \\
           — so nested supplementary alignments never create phantom SV gaps.
         </p>
         <p style="margin-top:8px;">
-          <strong>Tandem duplications:</strong> Produce overlapping <code>alignment</code>
-          results mapping to different assembly loci. Both hits are returned, but no
-          gap event is emitted because the reference is fully covered.
+          <strong>Tandem duplications:</strong> When identical reference coordinates map
+          to multiple assembly loci, both <code>alignment</code> hits are returned but
+          no gap event is emitted. Adjacent ref blocks with overlapping assembly ranges
+          are classified as <code>complex</code> events (negative asm gap).
         </p>
         <p style="margin-top:8px;">
           <strong>CIGAR insertion boundaries:</strong> Assembly insertions at exact query
-          edges are invisible to <code>project_cigar()</code>.
-          <code>compute_regions()</code> enforces a minimum 100 bp padding to ensure
-          breakpoint-adjacent insertions always fall inside the queried window.
+          edges are invisible to <code>project_cigar()</code> (half-open interval
+          semantics). <code>compute_regions()</code> enforces a minimum 100 bp padding
+          to ensure breakpoint-adjacent insertions always fall inside the queried window.
+        </p>
+        <p style="margin-top:8px;">
+          <strong>Interleaving multi-contig blocks:</strong> When blocks from different
+          assembly contigs interleave in reference space, the high-water-mark may be on
+          a different contig. Same-contig junction events shadowed by a longer block from
+          another contig are not reported, but all alignment blocks are still returned.
         </p>
       </div>
     </div>
