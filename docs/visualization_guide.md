@@ -1,6 +1,6 @@
 # Long Read Visualization — User Guide
 
-> Auto-generated on 2026-03-22 03:09 UTC
+> Auto-generated on 2026-03-22 14:42 UTC
 
 ## Overview
 
@@ -18,6 +18,7 @@ BAM and CRAM read formats.
 | **Region-of-interest browsing** | Step through SV regions with ◀/▶ buttons or keyboard shortcuts |
 | **BAM & CRAM support** | Reads can be loaded from BAM or CRAM files; CRAM files use the panel reference for decoding |
 | **Long-read display mode** | Spurious small indels are hidden by default (threshold ≤ 3 bp), matching Java IGV behavior |
+| **Haplotype colouring** | Reads are coloured by haplotype phase (HP tag): green for hap1, orange for hap2, grey for ambiguous — sorted by haplotype for visual clarity |
 | **Squished display** | Reads default to squished (compact) view for better overview; toggle to expanded with one click |
 | **Byte-range HTTP** | Full support for HTTP Range requests enabling efficient BAM/CRAM random access |
 | **Containerized** | Run via Apptainer/Docker with the same image used for the pipeline |

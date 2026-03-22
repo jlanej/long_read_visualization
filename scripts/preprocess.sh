@@ -294,6 +294,24 @@ log "Step 5: Aligning reads to hap1 and hap2"
 align_reads_to_asm "${HAP1}" "hap1"
 align_reads_to_asm "${HAP2}" "hap2"
 
+# ── Step 5b: Assign haplotype tags (HP) via competitive alignment scoring ──
+#
+# Compare the minimap2 Alignment Score (AS:i:) for every read between the
+# hap1 and hap2 BAMs.  Each read is tagged with HP:i:1 (hap1), HP:i:2
+# (hap2), or HP:i:0 (ambiguous / equal scores).  IGV natively groups,
+# sorts, and colours reads by the HP tag.
+#
+# The script is idempotent: re-running on already-tagged BAMs produces
+# the same result.
+HAP1_BAM="${OUTPUT_DIR}/${SAMPLE_NAME}_reads_to_hap1.bam"
+HAP2_BAM="${OUTPUT_DIR}/${SAMPLE_NAME}_reads_to_hap2.bam"
+
+log "Step 5b: Assigning haplotype tags (HP) based on competitive alignment scores"
+log "CMD: python3 ${SRC_DIR}/assign_haplotypes.py --hap1-bam ${HAP1_BAM} --hap2-bam ${HAP2_BAM}"
+run python3 "${SRC_DIR}/assign_haplotypes.py" \
+    --hap1-bam "${HAP1_BAM}" \
+    --hap2-bam "${HAP2_BAM}"
+
 # ── Step 6: Align reference to assemblies (ref-on-asm cross-check BAMs) ────
 #
 # These BAMs are coordinate-sorted in *assembly* space so the reference

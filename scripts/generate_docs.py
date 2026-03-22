@@ -450,6 +450,11 @@ footer a:hover {{ color: var(--text); }}
         <p>Spurious small indels (≤ 3 bp) are hidden by default, matching Java IGV's third-generation sequencing mode. Squished display gives a compact overview; expand with one click.</p>
       </div>
       <div class="feature-card">
+        <div class="feature-icon">🏷️</div>
+        <h3>Haplotype colouring</h3>
+        <p>Reads are automatically coloured by haplotype phase (HP tag): green for hap1, orange for hap2, grey for ambiguous. Competitive alignment scoring assigns each read to its best-matching haplotype.</p>
+      </div>
+      <div class="feature-card">
         <div class="feature-icon">🚀</div>
         <h3>Zero-dependency server</h3>
         <p>The visualization server is pure Python stdlib — no Node.js, no external web framework. igv.js is bundled in the Docker image. Run it anywhere with a single command.</p>
@@ -499,6 +504,13 @@ footer a:hover {{ color: var(--text); }}
         </div>
       </div>
       <div class="step">
+        <div class="step-num green">3b</div>
+        <div class="step-body">
+          <h3>Assign haplotype phase tags (HP)</h3>
+          <p>The minimap2 Alignment Score (<code>AS:i:</code>) for every read is compared between the hap1 and hap2 BAMs. Each read is tagged with <code>HP:i:1</code> (hap1), <code>HP:i:2</code> (hap2), or <code>HP:i:0</code> (ambiguous / equal scores). IGV natively groups, sorts, and colours reads by the <code>HP</code> tag — no manual configuration required.</p>
+        </div>
+      </div>
+      <div class="step">
         <div class="step-num gold">4</div>
         <div class="step-body">
           <h3>Build reciprocal reference→assembly BAMs</h3>
@@ -518,7 +530,7 @@ footer a:hover {{ color: var(--text); }}
           <tr><td>*_hap{{1,2}}_to_ref.paf</td><td>PAF alignment used for coordinate mapping</td></tr>
           <tr><td>*_hap{{1,2}}_to_ref.mapping.json.gz</td><td>Compact JSON coordinate-mapping index</td></tr>
           <tr><td>*_hap{{1,2}}_to_ref.mapping.bed.gz(.tbi)</td><td>Tabix-indexed BED coordinate map</td></tr>
-          <tr><td>*_reads_to_hap{{1,2}}.bam(.bai)</td><td>Reads aligned to each haplotype assembly</td></tr>
+          <tr><td>*_reads_to_hap{{1,2}}.bam(.bai)</td><td>Reads aligned to each haplotype assembly, tagged with <code>HP:i:</code> haplotype phase (1&nbsp;=&nbsp;hap1, 2&nbsp;=&nbsp;hap2, 0&nbsp;=&nbsp;ambiguous)</td></tr>
           <tr><td>*_ref_to_hap{{1,2}}.bam(.bai)</td><td>Reference aligned to each haplotype — assembly-coordinate BAM</td></tr>
           <tr><td>*_hap2_to_hap1.bam(.bai)</td><td>Hap2 aligned to hap1 — cross-haplotype comparison track in hap1 panel</td></tr>
           <tr><td>*_hap1_to_hap2.bam(.bai)</td><td>Hap1 aligned to hap2 — cross-haplotype comparison track in hap2 panel</td></tr>
@@ -853,6 +865,9 @@ def build_markdown(screenshots, timestamp):
             "files; CRAM files use the panel reference for decoding |\n"
             "| **Long-read display mode** | Spurious small indels are hidden "
             "by default (threshold ≤ 3 bp), matching Java IGV behavior |\n"
+            "| **Haplotype colouring** | Reads are coloured by haplotype "
+            "phase (HP tag): green for hap1, orange for hap2, grey for "
+            "ambiguous — sorted by haplotype for visual clarity |\n"
             "| **Squished display** | Reads default to squished (compact) "
             "view for better overview; toggle to expanded with one click |\n"
             "| **Byte-range HTTP** | Full support for HTTP Range requests "

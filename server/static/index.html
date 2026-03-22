@@ -1039,7 +1039,19 @@
                 showSoftClips: false,
                 hideSmallIndels: hideSmallIndels,
                 smallIndelThreshold: 3,
-                colorBy: "strand",
+                colorBy: "tag:HP",
+                colorTable: {
+                    "HP": {
+                        "1": "#4CAF50",   // hap1 — green
+                        "2": "#FF9800",   // hap2 — orange
+                        "0": "#9E9E9E",   // ambiguous — grey
+                        "*": "#C8C8C8",   // untagged — light grey
+                    },
+                },
+                sort: {
+                    tag: "HP",
+                    direction: "ASC",
+                },
                 ...opts,
             };
             // CRAM files require a reference FASTA for decoding.
