@@ -498,6 +498,12 @@ def query(index, chrom, start, end, min_mapq=0):
     or by linear interpolation otherwise.  Gaps between successive overlapping
     blocks are detected and classified as structural-variation events.
 
+    Gap detection uses a *high-water-mark* strategy for the preceding block:
+    ``prev_block`` always tracks the block whose reference end extends
+    furthest so far.  This prevents false-positive ("phantom") gap events
+    when a short supplementary alignment is nested inside a larger primary
+    alignment — only genuinely uncovered reference intervals are flagged.
+
     Args:
         index: Loaded index from :func:`load_index`.
         chrom: Reference chromosome name.
@@ -579,7 +585,11 @@ def query(index, chrom, start, end, min_mapq=0):
         overlap_end = min(end, block["re"])
 
         if overlap_start >= overlap_end:
-            prev_block = block
+            # Track the block whose ref end extends furthest (high-water
+            # mark) so that nested/overlapping supplementary alignments
+            # don't create phantom gaps.
+            if prev_block is None or block["re"] > prev_block["re"]:
+                prev_block = block
             continue
 
         ref_offset_start = overlap_start - block["rs"]
@@ -624,7 +634,11 @@ def query(index, chrom, start, end, min_mapq=0):
             }
         )
 
-        prev_block = block
+        # Track the block whose ref end extends furthest (high-water
+        # mark) so that nested/overlapping supplementary alignments
+        # don't create phantom gaps.
+        if prev_block is None or block["re"] > prev_block["re"]:
+            prev_block = block
 
     return results
 

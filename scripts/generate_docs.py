@@ -734,6 +734,25 @@ apptainer exec \\
           low-complexity and segmental-duplication regions.
         </p>
       </div>
+      <div class="method-card">
+        <h3>Known limitations</h3>
+        <p>
+          <strong>Overlapping alignments:</strong> Gap detection uses a high-water-mark
+          strategy — <code>prev_block</code> tracks the furthest-reaching reference end
+          — so nested supplementary alignments never create phantom SV gaps.
+        </p>
+        <p style="margin-top:8px;">
+          <strong>Tandem duplications:</strong> Produce overlapping <code>alignment</code>
+          results mapping to different assembly loci. Both hits are returned, but no
+          gap event is emitted because the reference is fully covered.
+        </p>
+        <p style="margin-top:8px;">
+          <strong>CIGAR insertion boundaries:</strong> Assembly insertions at exact query
+          edges are invisible to <code>project_cigar()</code>.
+          <code>compute_regions()</code> enforces a minimum 100 bp padding to ensure
+          breakpoint-adjacent insertions always fall inside the queried window.
+        </p>
+      </div>
     </div>
   </div>
 </section>

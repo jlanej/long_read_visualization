@@ -2087,5 +2087,89 @@ class TestLoadIndexPreparsesCigars(unittest.TestCase):
             os.unlink(path)
 
 
+# =========================================================================
+# Phantom gap regression tests (overlapping / nested alignments)
+# =========================================================================
+
+# Model the case from the review: a long primary alignment fully contains a
+# short supplementary, followed by a third block after the primary.  Without
+# the high-water-mark fix, prev_block would track the short supplementary,
+# creating a phantom gap between it and the third block.
+#
+#   Primary:       ref chr11 [100, 1000), asm ctg11 [5000, 5900), + mapq=60
+#   Supplementary: ref chr11 [200,  300), asm ctg11 [8000, 8100), + mapq=5
+#   Next block:    ref chr11 [400,  500), asm ctg11 [5300, 5400), + mapq=60
+#     (Block 3 is ALSO covered by the primary, so no gap should be flagged.)
+#
+# Additionally, a fourth block AFTER the primary with a genuine gap:
+#   Block 4:       ref chr11 [1200, 1300), asm ctg11 [6200, 6300), + mapq=60
+#     (ref 1000-1200 is a real gap → should be flagged as a deletion.)
+
+PHANTOM_GAP_PAF = """\
+ctg11\t10000000\t5000\t5900\t+\tchr11\t135086622\t100\t1000\t900\t900\t60
+ctg11\t10000000\t8000\t8100\t+\tchr11\t135086622\t200\t300\t100\t100\t5
+ctg11\t10000000\t5300\t5400\t+\tchr11\t135086622\t400\t500\t100\t100\t60
+ctg11\t10000000\t5900\t5950\t+\tchr11\t135086622\t1200\t1300\t100\t100\t60
+"""
+
+
+class TestPhantomGapPrevention(unittest.TestCase):
+    """Regression tests: nested alignments must not produce phantom SV gaps."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        paf_path = os.path.join(self.tmpdir, "phantom.paf")
+        with open(paf_path, "w") as fh:
+            fh.write(PHANTOM_GAP_PAF)
+
+        blocks = coordinate_mapper.parse_paf(paf_path)
+        json_path = os.path.join(self.tmpdir, "phantom.mapping.json.gz")
+        coordinate_mapper.build_json_index(blocks, json_path)
+        self.index = coordinate_mapper.load_index(json_path)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_no_phantom_gap_from_nested_supplementary(self):
+        """Nested supplementary ending at 300 must not cause gap to block at 400."""
+        results = coordinate_mapper.query(self.index, "chr11", 0, 600)
+        gap_events = [r for r in results if r["event_type"] != "alignment"]
+        # All three blocks are covered by the primary; there should be no gap
+        self.assertEqual(len(gap_events), 0,
+                         f"Unexpected gap events: {gap_events}")
+
+    def test_genuine_gap_still_detected(self):
+        """Real gap (ref 1000-1200) between primary and fourth block is detected."""
+        results = coordinate_mapper.query(self.index, "chr11", 0, 1500)
+        gap_events = [r for r in results if r["event_type"] != "alignment"]
+        self.assertEqual(len(gap_events), 1,
+                         f"Expected exactly 1 gap event, got: {gap_events}")
+        gap = gap_events[0]
+        self.assertEqual(gap["ref_start"], 1000)
+        self.assertEqual(gap["ref_end"], 1200)
+
+    def test_genuine_gap_classified_as_deletion(self):
+        """The real gap (ref 1000-1200, 200 bp) with smaller asm gap is a deletion."""
+        results = coordinate_mapper.query(self.index, "chr11", 0, 1500)
+        gap = next(r for r in results if r["event_type"] != "alignment")
+        self.assertEqual(gap["event_type"], "deletion")
+        self.assertEqual(gap["ref_gap_size"], 200)
+
+    def test_all_alignment_blocks_returned(self):
+        """All four alignment blocks are still returned."""
+        results = coordinate_mapper.query(self.index, "chr11", 0, 1500)
+        alns = [r for r in results if r["event_type"] == "alignment"]
+        self.assertEqual(len(alns), 4)
+
+    def test_no_phantom_gap_with_mapq_filter(self):
+        """With min_mapq=10, the nested supplementary is removed; still no phantom gap."""
+        results = coordinate_mapper.query(
+            self.index, "chr11", 0, 600, min_mapq=10
+        )
+        gap_events = [r for r in results if r["event_type"] != "alignment"]
+        self.assertEqual(len(gap_events), 0,
+                         f"Unexpected gap events: {gap_events}")
+
+
 if __name__ == '__main__':
     unittest.main()

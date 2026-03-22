@@ -11,6 +11,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 import generate_toy_dataset  # noqa: E402
+import coordinate_mapper  # noqa: E402
 
 # Minimal VCF data for testing.  The REF/ALT lengths encode the deletion
 # size; positions and allele sequences are synthetic.
@@ -445,6 +446,67 @@ class TestRemapSaTag(unittest.TestCase):
             "SA:Z:chr1,5500,+,50M,60,0;", region_map
         )
         self.assertIn("chr1:5000-6000,501,+,50M,60,0", result)
+
+
+class TestMinimumPadding(unittest.TestCase):
+    """Verify compute_regions enforces a minimum padding."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+        # Simple alignment block spanning chr1 [490000, 520000)
+        paf_line = (
+            "ctg1\t5000000\t100000\t130000\t+\tchr1\t248956422"
+            "\t490000\t520000\t30000\t30000\t60\n"
+        )
+        paf_path = os.path.join(self.tmpdir, "min_pad.paf")
+        with open(paf_path, "w") as fh:
+            fh.write(paf_line)
+
+        blocks = coordinate_mapper.parse_paf(paf_path)
+        json_path = os.path.join(self.tmpdir, "min_pad.mapping.json.gz")
+        coordinate_mapper.build_json_index(blocks, json_path)
+        self.index = coordinate_mapper.load_index(json_path)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_zero_padding_raised_to_minimum(self):
+        """padding=0 should be silently raised to _MIN_PADDING (100)."""
+        variants = [
+            {"chrom": "chr1", "pos": 500000, "end": 510000, "size": 10000,
+             "genotype": "1|0"},
+        ]
+        regions = generate_toy_dataset.compute_regions(
+            variants, self.index, self.index, padding=0
+        )
+        r = regions[0]
+        # With _MIN_PADDING=100, region should be chr1:499900-510100
+        self.assertEqual(r["ref_region"], "chr1:499900-510100")
+
+    def test_small_padding_raised_to_minimum(self):
+        """padding=50 should be silently raised to _MIN_PADDING (100)."""
+        variants = [
+            {"chrom": "chr1", "pos": 500000, "end": 510000, "size": 10000,
+             "genotype": "1|0"},
+        ]
+        regions = generate_toy_dataset.compute_regions(
+            variants, self.index, self.index, padding=50
+        )
+        r = regions[0]
+        self.assertEqual(r["ref_region"], "chr1:499900-510100")
+
+    def test_large_padding_not_reduced(self):
+        """padding=5000 should be used as-is (above minimum)."""
+        variants = [
+            {"chrom": "chr1", "pos": 500000, "end": 510000, "size": 10000,
+             "genotype": "1|0"},
+        ]
+        regions = generate_toy_dataset.compute_regions(
+            variants, self.index, self.index, padding=5000
+        )
+        r = regions[0]
+        self.assertEqual(r["ref_region"], "chr1:495000-515000")
 
 
 if __name__ == "__main__":

@@ -138,6 +138,11 @@ def select_variants(deletions, num_variants=10):
 # Region helpers
 # ---------------------------------------------------------------------------
 
+# Minimum padding (bp) enforced by compute_regions() to ensure that
+# CIGAR insertions at exact SV breakpoint boundaries are captured.
+_MIN_PADDING = 100
+
+
 def compute_regions(variants, hap1_index, hap2_index, padding=50000):
     """Compute reference and assembly regions for each selected variant.
 
@@ -145,11 +150,16 @@ def compute_regions(variants, hap1_index, hap2_index, padding=50000):
     mapping indices are then queried to find the corresponding assembly
     regions on each haplotype.
 
+    A minimum padding of :data:`_MIN_PADDING` (100 bp) is silently enforced
+    so that CIGAR insertions at exact SV breakpoint boundaries are never
+    accidentally clipped when a caller supplies ``--padding 0``.
+
     Args:
         variants: List of selected variant dicts.
         hap1_index: Loaded coordinate-mapping index for haplotype 1.
         hap2_index: Loaded coordinate-mapping index for haplotype 2.
-        padding: Bases to add on each side of the deletion.
+        padding: Bases to add on each side of the deletion.  Values below
+            :data:`_MIN_PADDING` are silently raised.
 
     Returns:
         List of dicts, each containing:
@@ -158,6 +168,7 @@ def compute_regions(variants, hap1_index, hap2_index, padding=50000):
           - hap2_regions: list of "contig:start-end" strings
           - variant: the original variant dict
     """
+    padding = max(padding, _MIN_PADDING)
     regions = []
     for v in variants:
         ref_start = max(0, v["pos"] - padding)
