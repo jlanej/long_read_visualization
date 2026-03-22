@@ -165,24 +165,31 @@ Read type (controls minimap2 alignment preset):
 Reference (one of):
   -r, --reference FILE Target reference genome FASTA (local file)
   --genome        STR  Download a known reference if not already cached.
-                       Supported: hg38 hg19 chm13v2.0 grch38
+                       Supported: hg38 hg19 chm13v2.0 chm13v2.0_maskedY_rCRS grch38
   --ref-dir       DIR  Cache directory for downloaded references
                        [./references]
 
 Optional:
   -t, --threads   INT  Number of threads [4]
-  --cram-ref      FILE Reference FASTA used to encode the CRAM
-                       (needed only when different from --reference / --genome)
+  --cram-ref      FILE|NAME Reference FASTA used to encode the CRAM
+                       (path or supported --genome key; needed only when
+                        different from --reference / --genome)
 ```
 
 ### Supported `--genome` values
 
-| Name | Source |
-|---|---|
-| `chm13v2.0` | T2T-CHM13 v2.0 (human-pangenomics S3) |
-| `hg38` | UCSC hg38 |
-| `hg19` | UCSC hg19 |
-| `grch38` | NCBI GRCh38 no-alt analysis set |
+| Name | Source | Download URL |
+|---|---|---|
+| `chm13v2.0` | T2T-CHM13 v2.0 (human-pangenomics S3) | <https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0.fa.gz> |
+| `chm13v2.0_maskedY_rCRS` | T2T-CHM13 v2.0 — chrY PAR hard-masked to `N`, chrM = rCRS (NC_012920.1); used by the 1KG ONT Vienna project and useful as a `--cram-ref` for CRAMs encoded with this variant | <https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0_maskedY_rCRS.fa.gz> |
+| `hg38` | UCSC hg38 | <https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz> |
+| `hg19` | UCSC hg19 | <https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/hg19.fa.gz> |
+| `grch38` | NCBI GRCh38 no-alt analysis set | <https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/001/405/GCA_000001405.15_GRCh38/seqs_for_alignment_pipelines.ucsc_ids/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna.gz> |
+
+> **Which reference should I use?**  
+> Use `chm13v2.0` for general-purpose alignment to T2T-CHM13 (the default).
+> Use `chm13v2.0_maskedY_rCRS` if you need to decode or match a CRAM that was encoded with this variant
+> (e.g., from the 1KG ONT Vienna project) — its chrY PAR is hard-masked to `N` and chrM is rCRS (NC_012920.1).
 
 ---
 
@@ -435,6 +442,11 @@ cite them if you use this dataset in your work:
   across the 1000 Genomes Project (Oxford Nanopore, aligned to T2T-CHM13 v2.0):
   Liao *et al.* (2025). *Nature* <https://doi.org/10.1038/s41586-025-09290-7>.
   Data: <https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1KG_ONT_VIENNA/>
+- **T2T-CHM13 v2.0** — reference genome used to encode the `*.t2t.cram` files
+  (pass to `--cram-ref` if aligning to a different reference).
+  Nurk *et al.* (2022). *Science* 376, 44–53. <https://doi.org/10.1126/science.abj6987>.
+  Download: <https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0.fa.gz>
+  — or use `--genome chm13v2.0` to download automatically.
 - **shapeit5-phased callset** — phased, sequence-resolved SV VCF used as the
   primary training truth set; included in `resources/`.
 

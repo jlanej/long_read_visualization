@@ -571,6 +571,13 @@ apptainer run \\
     <span class="token-flag">--output-dir</span> <span class="token-value">/work/output/NA21110</span>            \\
     <span class="token-flag">--threads</span>    <span class="token-value">32</span>                               \\
     <span class="token-flag">--ont</span></code></pre>
+        <p style="font-size:.85rem;color:var(--muted);margin-top:10px;">
+          If the CRAM was encoded with a <em>different</em> reference than the one used for assembly alignment,
+          pass <code>--cram-ref</code> with either an encoding-reference FASTA path or a supported genome key so <code>samtools</code> can decode it correctly.
+          For example, if your CRAM was encoded with the 1KG ONT Vienna variant
+          (<code>chm13v2.0_maskedY_rCRS</code>), pass <code>--cram-ref chm13v2.0_maskedY_rCRS</code>
+          to auto-download and use that reference for decoding.
+        </p>
       </div>
 
       <div id="tab-apptainer-hifi" class="tab-panel">
@@ -785,7 +792,18 @@ apptainer exec \\
       <li>
         <strong>1KG ONT Vienna</strong> — Population-scale long-read SV calls from 1,019 humans (Oxford Nanopore, T2T-CHM13 v2.0).<br>
         Liao <em>et al.</em> (2025). <em>Nature.</em>
-        <a href="https://doi.org/10.1038/s41586-025-09290-7" target="_blank" rel="noopener">https://doi.org/10.1038/s41586-025-09290-7</a>
+        <a href="https://doi.org/10.1038/s41586-025-09290-7" target="_blank" rel="noopener">https://doi.org/10.1038/s41586-025-09290-7</a><br>
+        Data: <a href="https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1KG_ONT_VIENNA/" target="_blank" rel="noopener">https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1KG_ONT_VIENNA/</a>
+      </li>
+      <li>
+        <strong>T2T-CHM13 v2.0</strong> — Reference genome used to encode the 1KG ONT Vienna reads (<code>*.t2t.cram</code>).<br>
+        Nurk <em>et al.</em> (2022). <em>Science</em> 376, 44–53.
+        <a href="https://doi.org/10.1126/science.abj6987" target="_blank" rel="noopener">https://doi.org/10.1126/science.abj6987</a><br>
+        Plain reference (<code>--genome chm13v2.0</code>):
+        <a href="https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0.fa.gz" target="_blank" rel="noopener">chm13v2.0.fa.gz</a><br>
+        1KG ONT Vienna variant — chrY PAR hard-masked to <code>N</code>, chrM = rCRS (NC_012920.1);
+        use <code>--genome chm13v2.0_maskedY_rCRS</code> to download for CRAM decoding:
+        <a href="https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0_maskedY_rCRS.fa.gz" target="_blank" rel="noopener">chm13v2.0_maskedY_rCRS.fa.gz</a>
       </li>
       <li>
         <strong>shapeit5-phased callset</strong> — Phased, sequence-resolved SV VCF for NA21110; bundled in <code>resources/</code>.
