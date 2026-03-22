@@ -340,6 +340,9 @@
         background: var(--surface);
         color: var(--text);
     }
+    .dotplot-controls input[type="range"] {
+        width: 140px;
+    }
     .dotplot-controls button {
         font-size: 11px;
         padding: 4px 12px;
@@ -578,6 +581,9 @@
         <div class="dotplot-controls">
             <label>K-mer size:</label>
             <input type="number" id="dotPlotK" value="31" min="1" max="101" step="2">
+            <label>Buffer:</label>
+            <input type="range" id="dotPlotBuffer" min="0" max="5" step="0.25" value="1">
+            <span id="dotPlotBufferValue" style="font-size:11px;color:var(--text-muted)">1.00×</span>
             <button id="dotPlotRun">Generate</button>
             <span id="dotPlotStatus" style="font-size:11px;color:var(--text-muted)"></span>
         </div>
@@ -658,6 +664,8 @@
     const dotPlotClose = document.getElementById("dotPlotClose");
     const dotPlotBody = document.getElementById("dotPlotBody");
     const dotPlotKInput = document.getElementById("dotPlotK");
+    const dotPlotBufferInput = document.getElementById("dotPlotBuffer");
+    const dotPlotBufferValue = document.getElementById("dotPlotBufferValue");
     const dotPlotRunBtn = document.getElementById("dotPlotRun");
     const dotPlotStatus = document.getElementById("dotPlotStatus");
     const inlineDotPlotToggle = document.getElementById("inlineDotPlotToggle");
@@ -1841,6 +1849,9 @@
     // SV event highlight colour (translucent orange)
     const EVENT_HIGHLIGHT_COLOR = "rgba(255, 152, 0, 0.25)";
     const EVENT_HIGHLIGHT_BORDER = "rgba(255, 152, 0, 0.7)";
+    // Current IGV viewport highlight colour (translucent green)
+    const VIEWPORT_HIGHLIGHT_COLOR = "rgba(16, 185, 129, 0.20)";
+    const VIEWPORT_HIGHLIGHT_BORDER = "rgba(5, 150, 105, 0.75)";
 
     // Canvas rendering size (CSS pixels).  Actual backing pixels use
     // devicePixelRatio for crispness on high-DPI displays.
@@ -1864,10 +1875,14 @@
      * @param {Object} data - Dot plot result from server (forward, reverse, palindrome arrays).
      * @param {string} xLabel - Axis label for horizontal (seq1).
      * @param {string} yLabel - Axis label for vertical (seq2).
+     * @param {Object|null} xViewportHighlight - Optional {start_offset, end_offset} for current
+     *        IGV viewport on the x-axis sequence.
+     * @param {Object|null} yViewportHighlight - Optional {start_offset, end_offset} for current
+     *        IGV viewport on the y-axis sequence.
      * @param {Object|null} eventHighlight - Optional {start_offset, end_offset} for SV highlight
      *        on the x-axis (reference).  Only drawn when present and the x-axis represents the ref.
      */
-    function renderDotPlotCanvas(canvas, data, xLabel, yLabel, eventHighlight) {
+    function renderDotPlotCanvas(canvas, data, xLabel, yLabel, xViewportHighlight, yViewportHighlight, eventHighlight) {
         const dpr = window.devicePixelRatio || 1;
         const cssSize = DOTPLOT_CANVAS_SIZE;
         const margin = { top: 6, right: 6, bottom: 42, left: 50 };
@@ -1900,9 +1915,51 @@
             return;
         }
 
+        const xScale_ = plotW / s1Len;
+        const yScale_ = plotH / s2Len;
+
+        // ── IGV viewport highlights (x/y axes) ──────────────────────────
+        if (xViewportHighlight && s1Len > 0) {
+            const hlX1 = margin.left + xViewportHighlight.start_offset * xScale_;
+            const hlX2 = margin.left + xViewportHighlight.end_offset * xScale_;
+            const hlW = hlX2 - hlX1;
+            if (hlW > 0) {
+                ctx.fillStyle = VIEWPORT_HIGHLIGHT_COLOR;
+                ctx.fillRect(hlX1, margin.top, hlW, plotH);
+                ctx.strokeStyle = VIEWPORT_HIGHLIGHT_BORDER;
+                ctx.lineWidth = 1;
+                ctx.setLineDash([2, 2]);
+                ctx.beginPath();
+                ctx.moveTo(hlX1, margin.top);
+                ctx.lineTo(hlX1, margin.top + plotH);
+                ctx.moveTo(hlX2, margin.top);
+                ctx.lineTo(hlX2, margin.top + plotH);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+        }
+        if (yViewportHighlight && s2Len > 0) {
+            const hlY1 = margin.top + yViewportHighlight.start_offset * yScale_;
+            const hlY2 = margin.top + yViewportHighlight.end_offset * yScale_;
+            const hlH = hlY2 - hlY1;
+            if (hlH > 0) {
+                ctx.fillStyle = VIEWPORT_HIGHLIGHT_COLOR;
+                ctx.fillRect(margin.left, hlY1, plotW, hlH);
+                ctx.strokeStyle = VIEWPORT_HIGHLIGHT_BORDER;
+                ctx.lineWidth = 1;
+                ctx.setLineDash([2, 2]);
+                ctx.beginPath();
+                ctx.moveTo(margin.left, hlY1);
+                ctx.lineTo(margin.left + plotW, hlY1);
+                ctx.moveTo(margin.left, hlY2);
+                ctx.lineTo(margin.left + plotW, hlY2);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+        }
+
         // ── SV event highlight on x-axis (reference) ────────────────────
         if (eventHighlight && s1Len > 0) {
-            const xScale_ = plotW / s1Len;
             const hlX1 = margin.left + eventHighlight.start_offset * xScale_;
             const hlX2 = margin.left + eventHighlight.end_offset * xScale_;
             const hlW = hlX2 - hlX1;
@@ -2076,13 +2133,15 @@
         targetEl = targetEl || dotPlotBody;
 
         const eventHighlight = result.event_highlight || null;
+        const viewportHighlights = result.viewport_highlights || {};
+        const hasViewportHighlights = !!(viewportHighlights.ref || viewportHighlights.hap1 || viewportHighlights.hap2);
         const html = [];
         html.push('<div class="dotplot-grid">');
 
         const comparisons = [
-            { key: "hap1_vs_ref",  title: "Hap1 vs Reference",    xLabel: result.labels.ref,  yLabel: result.labels.hap1, hasRefOnX: true },
-            { key: "hap2_vs_ref",  title: "Hap2 vs Reference",    xLabel: result.labels.ref,  yLabel: result.labels.hap2, hasRefOnX: true },
-            { key: "hap1_vs_hap2", title: "Hap1 vs Hap2",         xLabel: result.labels.hap1, yLabel: result.labels.hap2, hasRefOnX: false },
+            { key: "hap1_vs_ref",  title: "Hap1 vs Reference",    xLabel: result.labels.ref,  yLabel: result.labels.hap1, xAxis: "ref",  yAxis: "hap1", hasRefOnX: true },
+            { key: "hap2_vs_ref",  title: "Hap2 vs Reference",    xLabel: result.labels.ref,  yLabel: result.labels.hap2, xAxis: "ref",  yAxis: "hap2", hasRefOnX: true },
+            { key: "hap1_vs_hap2", title: "Hap1 vs Hap2",         xLabel: result.labels.hap1, yLabel: result.labels.hap2, xAxis: "hap1", yAxis: "hap2", hasRefOnX: false },
         ];
 
         for (const c of comparisons) {
@@ -2118,6 +2177,10 @@
                 <div class="dotplot-legend-swatch" style="background:${EVENT_HIGHLIGHT_COLOR};border-color:${EVENT_HIGHLIGHT_BORDER}"></div>
                 SV event region
             </div>` : ""}
+            ${hasViewportHighlights ? `<div class="dotplot-legend-item">
+                <div class="dotplot-legend-swatch" style="background:${VIEWPORT_HIGHLIGHT_COLOR};border-color:${VIEWPORT_HIGHLIGHT_BORDER}"></div>
+                Current IGV viewport
+            </div>` : ""}
         </div>`);
         // Citation
         html.push(`<div class="dotplot-citation">
@@ -2134,8 +2197,10 @@
             const canvas = document.getElementById(idPrefix + c.key);
             if (canvas) {
                 // Only pass event highlight for plots where the x-axis is the reference
-                const hl = c.hasRefOnX ? eventHighlight : null;
-                renderDotPlotCanvas(canvas, result[c.key], c.xLabel, c.yLabel, hl);
+                const eventHl = c.hasRefOnX ? eventHighlight : null;
+                const xViewportHl = viewportHighlights[c.xAxis] || null;
+                const yViewportHl = viewportHighlights[c.yAxis] || null;
+                renderDotPlotCanvas(canvas, result[c.key], c.xLabel, c.yLabel, xViewportHl, yViewportHl, eventHl);
             }
         }
     }
@@ -2185,6 +2250,22 @@
         return params;
     }
 
+    function getDotPlotBufferMultiplier() {
+        const raw = parseFloat(dotPlotBufferInput.value);
+        if (!Number.isFinite(raw)) return 1.0;
+        return Math.max(0, Math.min(5, raw));
+    }
+
+    function updateDotPlotBufferLabel() {
+        dotPlotBufferValue.textContent = getDotPlotBufferMultiplier().toFixed(2) + "×";
+    }
+
+    dotPlotBufferInput.addEventListener("input", () => {
+        updateDotPlotBufferLabel();
+        if (inlineDotPlotsEnabled) scheduleInlineDotPlotRefresh();
+    });
+    updateDotPlotBufferLabel();
+
     /**
      * Run a dot plot and render into the specified target.
      *
@@ -2213,7 +2294,7 @@
         try {
             const params = buildDotPlotParams({
                 k: opts.k || parseInt(dotPlotKInput.value, 10) || 31,
-                buffer: opts.buffer != null ? opts.buffer : 1.0,
+                buffer: opts.buffer != null ? opts.buffer : getDotPlotBufferMultiplier(),
             });
 
             const resp = await fetch("/api/dotplot?" + params.toString());
@@ -2288,7 +2369,7 @@
                 targetEl: inlineDotPlotBody,
                 statusEl: inlineDpStatus,
                 idPrefix: "idp_",
-                buffer: 1.0,
+                buffer: getDotPlotBufferMultiplier(),
             });
         }, 600);
     }
