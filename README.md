@@ -177,12 +177,12 @@ Optional:
 
 ### Supported `--genome` values
 
-| Name | Source |
-|---|---|
-| `chm13v2.0` | T2T-CHM13 v2.0 (human-pangenomics S3) |
-| `hg38` | UCSC hg38 |
-| `hg19` | UCSC hg19 |
-| `grch38` | NCBI GRCh38 no-alt analysis set |
+| Name | Source | Download URL |
+|---|---|---|
+| `chm13v2.0` | T2T-CHM13 v2.0 (human-pangenomics S3) | <https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0.fa.gz> |
+| `hg38` | UCSC hg38 | <https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz> |
+| `hg19` | UCSC hg19 | <https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/hg19.fa.gz> |
+| `grch38` | NCBI GRCh38 no-alt analysis set | <https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/001/405/GCA_000001405.15_GRCh38/seqs_for_alignment_pipelines.ucsc_ids/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna.gz> |
 
 ---
 
@@ -435,6 +435,11 @@ cite them if you use this dataset in your work:
   across the 1000 Genomes Project (Oxford Nanopore, aligned to T2T-CHM13 v2.0):
   Liao *et al.* (2025). *Nature* <https://doi.org/10.1038/s41586-025-09290-7>.
   Data: <https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1KG_ONT_VIENNA/>
+- **T2T-CHM13 v2.0** — reference genome used to encode the `*.t2t.cram` files
+  (the encoding reference; pass to `--cram-ref` when aligning against a different assembly reference):
+  Nurk *et al.* (2022). *Science* 376, 44–53. <https://doi.org/10.1126/science.abj6987>.
+  Download: <https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0.fa.gz>
+  — or use `--genome chm13v2.0` to download automatically.
 - **shapeit5-phased callset** — phased, sequence-resolved SV VCF used as the
   primary training truth set; included in `resources/`.
 

@@ -25,6 +25,7 @@ resources.  **Please cite them if you use this dataset in your work.**
 | **shapeit5-phased callset** | Phased, sequence-resolved SV VCF used as the primary truth set; included in `resources/` | Ebler *et al.* (2022). Pangenome-based genome inference. *Nat Genet* — and the 1KG ONT Vienna consortium (see below) |
 | **1KG ONT Vienna** | Population-scale long-read SV calls from 1,019 samples across the 1000 Genomes Project, sequenced with Oxford Nanopore | Liao *et al.* (2025). Structural variation in 1,019 diverse humans based on long-read sequencing. *Nature* [https://doi.org/10.1038/s41586-025-09290-7](https://doi.org/10.1038/s41586-025-09290-7). Data: [EBI FTP](https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1KG_ONT_VIENNA/) |
 | **PMC12350158** | Curated structural variant truth sets used to validate the callset | [https://www.ncbi.nlm.nih.gov/pmc/articles/PMC12350158/](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC12350158/) |
+| **T2T-CHM13 v2.0** | Reference genome used to align the 1KG ONT Vienna reads — the encoding reference for `*.t2t.cram` files; pass to `--cram-ref` if aligning to a different assembly reference | Nurk *et al.* (2022). The complete sequence of a human genome. *Science* 376, 44–53. [https://doi.org/10.1126/science.abj6987](https://doi.org/10.1126/science.abj6987). Download: [chm13v2.0.fa.gz](https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0.fa.gz) |
 
 ### Source files
 
@@ -32,8 +33,8 @@ resources.  **Please cite them if you use this dataset in your work.**
 |---|---|
 | `resources/NA21110.shapeit5-phased-callset_final-vcf.phased.vcf.gz` | Phased SV callset for NA21110 — shapeit5-phased callset (bundled in repo; see citation above) |
 | Full NA21110 haplotype assemblies (hap1 & hap2) | HPRC r2 v1.0.1, sourced from the 1KG ONT Vienna project |
-| Full NA21110 long-read CRAM | ONT reads from the 1KG ONT Vienna project, aligned to T2T-CHM13 v2.0 |
-| T2T-CHM13 v2.0 reference genome | Downloaded via `--genome chm13v2.0` |
+| Full NA21110 long-read CRAM | ONT reads from the 1KG ONT Vienna project, aligned to T2T-CHM13 v2.0. Per-sample CRAMs available at the [EBI FTP](https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1KG_ONT_VIENNA/data/NA21110/alignment/) |
+| T2T-CHM13 v2.0 reference genome | The reference used to encode the CRAM. Download: [chm13v2.0.fa.gz](https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0.fa.gz) — or downloaded automatically via `--genome chm13v2.0` |
 
 ### Generated toy files
 
