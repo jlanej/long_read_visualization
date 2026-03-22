@@ -206,6 +206,16 @@ class TestDiscoverPipelineFiles(unittest.TestCase):
         self.assertIn("reads_to_hap2_cram", sample)
         self.assertIn("reads_cram", sample)
 
+    def test_discovers_hp_tagged_reads(self):
+        """HP-tagged reads files (reads.hp.cram / reads.hp.bam) are discovered."""
+        prefix = "test_sample"
+        for suffix in ("_reads.hp.cram", "_reads.hp.bam"):
+            open(os.path.join(self.tmpdir, prefix + suffix), "w").close()
+        sample = {"sample_id": "test", "output_dir": self.tmpdir}
+        sample = server_app.discover_pipeline_files(sample)
+        self.assertIn("reads_hp_cram", sample)
+        self.assertIn("reads_hp_bam", sample)
+
 
 class TestLoadRegions(unittest.TestCase):
     """Tests for loading regions of interest."""

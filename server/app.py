@@ -152,12 +152,16 @@ def discover_pipeline_files(sample):
         "hap1_to_hap2_bam": f"{prefix}_hap1_to_hap2.bam",
         "hap1_mapping_index": f"{prefix}_hap1_to_ref.mapping.json.gz",
         "hap2_mapping_index": f"{prefix}_hap2_to_ref.mapping.json.gz",
+        # HP-tagged reads in reference coordinate space (Step 5b output)
+        "reads_hp_bam": f"{prefix}_reads.hp.bam",
     }
     # Also check for CRAM versions of the read alignment files
     cram_map = {
         "reads_to_hap1_cram": f"{prefix}_reads_to_hap1.cram",
         "reads_to_hap2_cram": f"{prefix}_reads_to_hap2.cram",
         "reads_cram": f"{prefix}_reads.cram",
+        # HP-tagged reads CRAM in reference coordinate space (Step 5b output)
+        "reads_hp_cram": f"{prefix}_reads.hp.cram",
     }
     for key, fname in file_map.items():
         path = os.path.join(output_dir, fname)
@@ -618,7 +622,8 @@ class IGVHandler(SimpleHTTPRequestHandler):
             logger.info("Sample %s: using explicit cram_ref=%s",
                          sample_id, sample.get("cram_ref"))
         else:
-            cram_keys = [k for k in ("reads_cram", "reads_to_hap1_cram",
+            cram_keys = [k for k in ("reads_cram", "reads_hp_cram",
+                                      "reads_to_hap1_cram",
                                       "reads_to_hap2_cram")
                          if sample.get(k)]
             if cram_keys:
@@ -650,6 +655,8 @@ class IGVHandler(SimpleHTTPRequestHandler):
                 "hap1_to_hap2_bam": data_url("hap1_to_hap2_bam"),
                 "reads_bam": data_url("reads_bam"),
                 "reads_cram": data_url("reads_cram"),
+                "reads_hp_bam": data_url("reads_hp_bam"),
+                "reads_hp_cram": data_url("reads_hp_cram"),
                 "reads_to_hap1_cram": data_url("reads_to_hap1_cram"),
                 "reads_to_hap2_cram": data_url("reads_to_hap2_cram"),
             },
@@ -1389,7 +1396,8 @@ def main():
     for sample in samples:
         sid = sample["sample_id"]
         cram_ref = sample.get("cram_ref", "")
-        cram_keys = [k for k in ("reads_cram", "reads_to_hap1_cram",
+        cram_keys = [k for k in ("reads_cram", "reads_hp_cram",
+                                  "reads_to_hap1_cram",
                                   "reads_to_hap2_cram")
                      if sample.get(k)]
         if cram_keys and not cram_ref:
@@ -1421,11 +1429,13 @@ def main():
     for sample in samples:
         sid = sample["sample_id"]
         for key in ("reference", "hap1_assembly", "hap2_assembly",
-                     "reads_bam", "hap1_to_ref_bam", "hap2_to_ref_bam",
+                     "reads_bam", "reads_cram",
+                     "reads_hp_bam", "reads_hp_cram",
+                     "hap1_to_ref_bam", "hap2_to_ref_bam",
                      "reads_to_hap1_bam", "reads_to_hap2_bam",
+                     "reads_to_hap1_cram", "reads_to_hap2_cram",
                      "ref_to_hap1_bam", "ref_to_hap2_bam",
-                     "reads_cram", "reads_to_hap1_cram",
-                     "reads_to_hap2_cram", "cram_ref"):
+                     "cram_ref"):
             path = sample.get(key)
             if path and os.path.isfile(path):
                 url = f"/data/{sid}/{os.path.basename(path)}"

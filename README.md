@@ -24,7 +24,11 @@ It then:
 3. **Extracts reads** from the CRAM and **re-aligns them to each haplotype
    assembly** using `minimap2` (`-x map-ont` or `-x map-hifi`), producing
    sorted, indexed BAM files.
-4. **Aligns the reference genome back to each haplotype assembly** using
+4. **Assigns haplotype phase tags (HP)** by comparing the minimap2 Alignment
+   Score (`AS:i:`) for every read between the hap1 and hap2 BAMs.  Reads
+   are tagged `HP:i:1` (hap1), `HP:i:2` (hap2), or `HP:i:0` (ambiguous).
+   IGV natively sorts, groups, and colours reads by the `HP` tag.
+5. **Aligns the reference genome back to each haplotype assembly** using
    `minimap2 -x asm5 --eqx` (query and target swapped relative to item 1),
    producing assembly-coordinate-sorted BAM files that can be loaded as a
    reference track in any assembly-space genome browser.  These reciprocal
@@ -58,7 +62,7 @@ filename (everything before the first `.`): `NA21110.t2t.cram` → `NA21110`.
 | `*_hap{1,2}_to_ref.paf` | PAF alignment for coordinate mapping |
 | `*_hap{1,2}_to_ref.mapping.bed.gz(.tbi)` | Tabix-indexed coordinate map |
 | `*_hap{1,2}_to_ref.mapping.json.gz` | JSON coordinate map for programmatic use |
-| `*_reads_to_hap{1,2}.bam(.bai)` | Reads aligned to each haplotype assembly |
+| `*_reads_to_hap{1,2}.bam(.bai)` | Reads aligned to each haplotype assembly, tagged with `HP:i:` haplotype phase (1 = hap1, 2 = hap2, 0 = ambiguous) |
 | `*_ref_to_hap{1,2}.bam(.bai)` | Reference genome aligned to each haplotype assembly (assembly-coordinate BAM, for cross-checking and assembly-panel display) |
 | `*_hap2_to_hap1.bam(.bai)` | Hap2 aligned to hap1 (hap1-coordinate BAM, for cross-haplotype comparison in hap1 panel) |
 | `*_hap1_to_hap2.bam(.bai)` | Hap1 aligned to hap2 (hap2-coordinate BAM, for cross-haplotype comparison in hap2 panel) |
@@ -470,6 +474,7 @@ standard library (igv.js is bundled in the container image).
 | **K-mer dot plots** | Generate interactive dot plots comparing sequences across all three panels (Ref↔Hap1, Ref↔Hap2, Hap1↔Hap2) with configurable k-mer size |
 | **BAM & CRAM support** | Reads can be loaded from BAM or CRAM files; CRAM reference sequences are resolved automatically |
 | **Long-read display mode** | Spurious small indels (≤ 3 bp) are hidden by default, matching Java IGV's third-gen display mode |
+| **Haplotype colouring** | Reads are automatically coloured by haplotype phase (`HP` tag): green for hap1, orange for hap2, grey for ambiguous — sorted by haplotype for visual clarity |
 | **Squished display** | Reads default to squished (compact) view; toggle to expanded with a single toolbar button |
 | **Read comparison** | Compare read IDs across all three panels to verify region overlap |
 | **Multi-sample support** | TSV configuration file lists multiple samples; switch between them in the UI |

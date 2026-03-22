@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libssl-dev \
         pigz \
         python3 \
+        python3-dev \
         python3-pip \
         zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -52,6 +53,14 @@ RUN curl -fsSL \
     && make -j"$(nproc)" \
     && make install \
     && rm -rf "/tmp/samtools-${SAMTOOLS_VERSION}"
+
+# ── Python dependencies ─────────────────────────────────────────────────────
+# pysam is used by src/assign_haplotypes.py to read/write BAM/CRAM files
+# and inject HP:i: haplotype phase tags.  Build against the htslib installed
+# above so that pysam uses the same version and CRAM support is available.
+RUN HTSLIB_LIBRARY_DIR=/usr/local/lib \
+    HTSLIB_INCLUDE_DIR=/usr/local/include \
+    pip3 install --no-cache-dir pysam
 
 # ── Pipeline scripts ────────────────────────────────────────────────────────
 COPY src/ /opt/long_read_visualization/src/
