@@ -118,10 +118,18 @@ apptainer run \
     --hap2       /work/NA21110/NA21110_hap2_hprc_r2_v1.0.1.fa.gz \
     --cram       /work/NA21110/NA21110.t2t.cram \
     --genome      chm13v2.0 \
+    --cram-ref    /work/references/chm13v2.0_maskedY_rCRS.fa.gz \
     --output-dir  /work/output/NA21110 \
     --threads     32 \
     --ont
 ```
+
+> **Note on `--cram-ref`:** The 1KG ONT Vienna `*.t2t.cram` files were encoded with
+> `chm13v2.0_maskedY_rCRS.fa.gz` — a variant of CHM13 v2.0 where the chrY PAR regions
+> are hard-masked to `N` and chrM uses the rCRS sequence. This differs from the plain
+> `chm13v2.0.fa.gz` downloaded by `--genome chm13v2.0`, so `--cram-ref` must point to
+> the maskedY\_rCRS file for `samtools` to decode the CRAM correctly.
+> Download: <https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0_maskedY_rCRS.fa.gz>
 
 **PacBio HiFi reads:**
 
@@ -435,11 +443,14 @@ cite them if you use this dataset in your work:
   across the 1000 Genomes Project (Oxford Nanopore, aligned to T2T-CHM13 v2.0):
   Liao *et al.* (2025). *Nature* <https://doi.org/10.1038/s41586-025-09290-7>.
   Data: <https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1KG_ONT_VIENNA/>
-- **T2T-CHM13 v2.0** — reference genome used to encode the `*.t2t.cram` files
-  (the encoding reference; pass to `--cram-ref` when aligning against a different assembly reference):
+- **T2T-CHM13 v2.0** — reference genome used to encode the `*.t2t.cram` files.
+  The 1KG ONT Vienna pipeline uses the **`maskedY_rCRS`** variant: chrY PAR regions
+  are hard-masked to `N` (preventing spurious multi-mapping with chrX PAR), and chrM
+  uses the rCRS sequence (NC_012920.1). These changes produce different MD5 checksums
+  for chrY and chrM compared to the plain `chm13v2.0.fa.gz`.
   Nurk *et al.* (2022). *Science* 376, 44–53. <https://doi.org/10.1126/science.abj6987>.
-  Download: <https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0.fa.gz>
-  — or use `--genome chm13v2.0` to download automatically.
+  CRAM decoding reference (for `--cram-ref`):
+  <https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0_maskedY_rCRS.fa.gz>
 - **shapeit5-phased callset** — phased, sequence-resolved SV VCF used as the
   primary training truth set; included in `resources/`.
 
