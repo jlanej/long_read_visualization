@@ -171,8 +171,9 @@ Reference (one of):
 
 Optional:
   -t, --threads   INT  Number of threads [4]
-  --cram-ref      FILE Reference FASTA used to encode the CRAM
-                       (needed only when different from --reference / --genome)
+  --cram-ref      FILE|NAME Reference FASTA used to encode the CRAM
+                       (path or supported --genome key; needed only when
+                        different from --reference / --genome)
 ```
 
 ### Supported `--genome` values

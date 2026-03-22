@@ -52,8 +52,11 @@ Reference (one of):
 
 Optional:
   -t, --threads   INT  Number of threads [${THREADS}]
-  --cram-ref      FILE Reference FASTA used to encode the CRAM
-                        (required when different from --reference)
+  --cram-ref      FILE|NAME
+                        Reference FASTA used to encode the CRAM.
+                        Accepts either a FASTA path or a supported --genome key
+                        (e.g. chm13v2.0_maskedY_rCRS) for auto-download.
+                        Required when different from --reference.
   --remap-cram-to-reference
                        Remap input CRAM to --reference/--genome, then tag HP
                        in-place on the remapped CRAM (no extra *_reads.hp.cram)
@@ -167,12 +170,28 @@ if [[ -n "${GENOME}" && -z "${REFERENCE}" ]]; then
     REFERENCE=$(download_reference "${GENOME}" "${REF_CACHE_DIR}")
 fi
 
+# Resolve --cram-ref (path or named genome key) for samtools CRAM decoding.
+if [[ -n "${CRAM_REF}" ]]; then
+    if [[ -f "${CRAM_REF}" ]]; then
+        # CRAM_REF is already a valid local FASTA path.
+        true
+    elif [[ -n "${GENOME_URLS[${CRAM_REF}]+x}" ]]; then
+        CRAM_REF=$(download_reference "${CRAM_REF}" "${REF_CACHE_DIR}")
+    else
+        echo "ERROR: --cram-ref must be an existing FASTA file or one of: ${!GENOME_URLS[*]}" >&2
+        exit 1
+    fi
+fi
+
 # ── Resolve input paths to absolute paths ───────────────────────────────────
 # (done after file-existence checks so errors are clear)
 HAP1="$(cd "$(dirname "${HAP1}")" && pwd)/$(basename "${HAP1}")"
 HAP2="$(cd "$(dirname "${HAP2}")" && pwd)/$(basename "${HAP2}")"
 CRAM="$(cd "$(dirname "${CRAM}")" && pwd)/$(basename "${CRAM}")"
 REFERENCE="$(cd "$(dirname "${REFERENCE}")" && pwd)/$(basename "${REFERENCE}")"
+if [[ -n "${CRAM_REF}" ]]; then
+    CRAM_REF="$(cd "$(dirname "${CRAM_REF}")" && pwd)/$(basename "${CRAM_REF}")"
+fi
 
 # Derive sample name from the CRAM filename (everything before the first dot).
 # Example: NA21110.t2t.cram → NA21110 ; sample.hifi.cram → sample
@@ -184,6 +203,9 @@ echo "Hap1:       ${HAP1}"
 echo "Hap2:       ${HAP2}"
 echo "CRAM:       ${CRAM}"
 echo "Reference:  ${REFERENCE}"
+if [[ -n "${CRAM_REF}" ]]; then
+    echo "CRAM ref:   ${CRAM_REF}"
+fi
 echo "Output:     ${OUTPUT_DIR}"
 echo "Threads:    ${THREADS}"
 echo "Read type:  ${READ_TYPE} (minimap2 -x ${MM2_READ_PRESET})"

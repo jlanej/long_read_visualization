@@ -573,10 +573,10 @@ apptainer run \\
     <span class="token-flag">--ont</span></code></pre>
         <p style="font-size:.85rem;color:var(--muted);margin-top:10px;">
           If the CRAM was encoded with a <em>different</em> reference than the one used for assembly alignment,
-          pass <code>--cram-ref /path/to/encoding_reference.fa.gz</code> so <code>samtools</code> can decode it correctly.
+          pass <code>--cram-ref</code> with either an encoding-reference FASTA path or a supported genome key so <code>samtools</code> can decode it correctly.
           For example, if your CRAM was encoded with the 1KG ONT Vienna variant
-          (<code>chm13v2.0_maskedY_rCRS</code>), use <code>--genome chm13v2.0_maskedY_rCRS</code>
-          to download it automatically and then pass it as <code>--cram-ref</code>.
+          (<code>chm13v2.0_maskedY_rCRS</code>), pass <code>--cram-ref chm13v2.0_maskedY_rCRS</code>
+          to auto-download and use that reference for decoding.
         </p>
       </div>
 
