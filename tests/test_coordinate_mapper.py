@@ -2087,5 +2087,335 @@ class TestLoadIndexPreparsesCigars(unittest.TestCase):
             os.unlink(path)
 
 
+# =========================================================================
+# Phantom gap regression tests (overlapping / nested alignments)
+# =========================================================================
+
+# Model the case from the review: a long primary alignment fully contains a
+# short supplementary, followed by a third block after the primary.  Without
+# the high-water-mark fix, prev_block would track the short supplementary,
+# creating a phantom gap between it and the third block.
+#
+#   Primary:       ref chr11 [100, 1000), asm ctg11 [5000, 5900), + mapq=60
+#   Supplementary: ref chr11 [200,  300), asm ctg11 [8000, 8100), + mapq=5
+#   Next block:    ref chr11 [400,  500), asm ctg11 [5300, 5400), + mapq=60
+#     (Block 3 is ALSO covered by the primary, so no gap should be flagged.)
+#
+# Additionally, a fourth block AFTER the primary with a genuine gap:
+#   Block 4:       ref chr11 [1200, 1300), asm ctg11 [6200, 6300), + mapq=60
+#     (ref 1000-1200 is a real gap → should be flagged as a deletion.)
+
+PHANTOM_GAP_PAF = """\
+ctg11\t10000000\t5000\t5900\t+\tchr11\t135086622\t100\t1000\t900\t900\t60
+ctg11\t10000000\t8000\t8100\t+\tchr11\t135086622\t200\t300\t100\t100\t5
+ctg11\t10000000\t5300\t5400\t+\tchr11\t135086622\t400\t500\t100\t100\t60
+ctg11\t10000000\t5900\t5950\t+\tchr11\t135086622\t1200\t1300\t100\t100\t60
+"""
+
+
+class TestPhantomGapPrevention(unittest.TestCase):
+    """Regression tests: nested alignments must not produce phantom SV gaps."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        paf_path = os.path.join(self.tmpdir, "phantom.paf")
+        with open(paf_path, "w") as fh:
+            fh.write(PHANTOM_GAP_PAF)
+
+        blocks = coordinate_mapper.parse_paf(paf_path)
+        json_path = os.path.join(self.tmpdir, "phantom.mapping.json.gz")
+        coordinate_mapper.build_json_index(blocks, json_path)
+        self.index = coordinate_mapper.load_index(json_path)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_no_phantom_gap_from_nested_supplementary(self):
+        """Nested supplementary ending at 300 must not cause gap to block at 400."""
+        results = coordinate_mapper.query(self.index, "chr11", 0, 600)
+        gap_events = [r for r in results if r["event_type"] != "alignment"]
+        # All three blocks are covered by the primary; there should be no gap
+        self.assertEqual(len(gap_events), 0,
+                         f"Unexpected gap events: {gap_events}")
+
+    def test_genuine_gap_still_detected(self):
+        """Real gap (ref 1000-1200) between primary and fourth block is detected."""
+        results = coordinate_mapper.query(self.index, "chr11", 0, 1500)
+        gap_events = [r for r in results if r["event_type"] != "alignment"]
+        self.assertEqual(len(gap_events), 1,
+                         f"Expected exactly 1 gap event, got: {gap_events}")
+        gap = gap_events[0]
+        self.assertEqual(gap["ref_start"], 1000)
+        self.assertEqual(gap["ref_end"], 1200)
+
+    def test_genuine_gap_classified_as_deletion(self):
+        """The real gap (ref 1000-1200, 200 bp) with smaller asm gap is a deletion."""
+        results = coordinate_mapper.query(self.index, "chr11", 0, 1500)
+        gap = next(r for r in results if r["event_type"] != "alignment")
+        self.assertEqual(gap["event_type"], "deletion")
+        self.assertEqual(gap["ref_gap_size"], 200)
+
+    def test_all_alignment_blocks_returned(self):
+        """All four alignment blocks are still returned."""
+        results = coordinate_mapper.query(self.index, "chr11", 0, 1500)
+        alns = [r for r in results if r["event_type"] == "alignment"]
+        self.assertEqual(len(alns), 4)
+
+    def test_no_phantom_gap_with_mapq_filter(self):
+        """With min_mapq=10, the nested supplementary is removed; still no phantom gap."""
+        results = coordinate_mapper.query(
+            self.index, "chr11", 0, 600, min_mapq=10
+        )
+        gap_events = [r for r in results if r["event_type"] != "alignment"]
+        self.assertEqual(len(gap_events), 0,
+                         f"Unexpected gap events: {gap_events}")
+
+
+# =========================================================================
+# Expert review: additional biological edge-case tests
+# =========================================================================
+
+# ---------------------------------------------------------------------------
+# Edge case: interleaving blocks from different contigs
+# ---------------------------------------------------------------------------
+# Block A: ref chr12 [100,  500), ctgX [1000, 1400), + (primary)
+# Block B: ref chr12 [300,  800), ctgY [2000, 2500), + (different contig, extends further)
+# Block C: ref chr12 [1000, 1200), ctgX [1400, 1600), + (continuation on ctgX)
+#
+# The high-water-mark picks B (re=800).  When processing C, the gap
+# is between B (re=800) and C (rs=1000) → classified as translocation
+# because B is on ctgY and C on ctgX.  The gap between A and C on ctgX
+# is "shadowed" — this is a known limitation of the linear scan.
+
+INTERLEAVING_CONTIGS_PAF = """\
+ctgX\t10000000\t1000\t1400\t+\tchr12\t133275309\t100\t500\t400\t400\t60
+ctgY\t10000000\t2000\t2500\t+\tchr12\t133275309\t300\t800\t500\t500\t60
+ctgX\t10000000\t1400\t1600\t+\tchr12\t133275309\t1000\t1200\t200\t200\t60
+"""
+
+
+class TestInterleavingContigs(unittest.TestCase):
+    """Tests for blocks from different contigs interleaving in ref space."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        paf_path = os.path.join(self.tmpdir, "interleave.paf")
+        with open(paf_path, "w") as fh:
+            fh.write(INTERLEAVING_CONTIGS_PAF)
+
+        blocks = coordinate_mapper.parse_paf(paf_path)
+        json_path = os.path.join(self.tmpdir, "interleave.mapping.json.gz")
+        coordinate_mapper.build_json_index(blocks, json_path)
+        self.index = coordinate_mapper.load_index(json_path)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_all_alignment_blocks_returned(self):
+        """All three alignment blocks are returned regardless of contig."""
+        results = coordinate_mapper.query(self.index, "chr12", 0, 1500)
+        alns = [r for r in results if r["event_type"] == "alignment"]
+        self.assertEqual(len(alns), 3)
+
+    def test_gap_uses_high_water_mark(self):
+        """Gap is between high-water-mark block B (re=800) and C (rs=1000)."""
+        results = coordinate_mapper.query(self.index, "chr12", 0, 1500)
+        gaps = [r for r in results if r["event_type"] != "alignment"]
+        self.assertEqual(len(gaps), 1)
+        gap = gaps[0]
+        self.assertEqual(gap["ref_start"], 800)
+        self.assertEqual(gap["ref_end"], 1000)
+
+    def test_gap_classified_as_translocation(self):
+        """Gap between ctgY and ctgX is classified as translocation."""
+        results = coordinate_mapper.query(self.index, "chr12", 0, 1500)
+        gaps = [r for r in results if r["event_type"] != "alignment"]
+        self.assertEqual(gaps[0]["event_type"], "translocation")
+
+    def test_no_phantom_gap_in_overlap_zone(self):
+        """No phantom gap in the region [300, 500) where A and B overlap."""
+        results = coordinate_mapper.query(self.index, "chr12", 300, 500)
+        gaps = [r for r in results if r["event_type"] != "alignment"]
+        self.assertEqual(len(gaps), 0)
+
+
+# ---------------------------------------------------------------------------
+# Edge case: CIGAR insertion at exact query boundary
+# ---------------------------------------------------------------------------
+# Block with CIGAR: 10=50I5=
+#   ref [100, 115), asm [200, 265), +
+#   The insertion sits at the boundary between ref_offset 10 and 10.
+
+INSERTION_BOUNDARY_PAF = """\
+ctg_ins\t10000000\t200\t265\t+\tchr13\t114364328\t100\t115\t15\t15\t60\tcg:Z:10=50I5=
+"""
+
+
+class TestCigarInsertionBoundary(unittest.TestCase):
+    """Verify insertion behaviour at exact CIGAR boundaries."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        paf_path = os.path.join(self.tmpdir, "ins_boundary.paf")
+        with open(paf_path, "w") as fh:
+            fh.write(INSERTION_BOUNDARY_PAF)
+
+        blocks = coordinate_mapper.parse_paf(paf_path)
+        json_path = os.path.join(self.tmpdir, "ins_boundary.mapping.json.gz")
+        coordinate_mapper.build_json_index(blocks, json_path)
+        self.index = coordinate_mapper.load_index(json_path)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_straddle_insertion_includes_inserted_bases(self):
+        """Query that straddles the insertion includes the full 50bp insert.
+
+        Query ref [105, 113) spans from before the insertion (offset 5)
+        to after it (offset 13).  Expected asm: [205, 263).
+        """
+        results = coordinate_mapper.query(self.index, "chr13", 105, 113)
+        self.assertEqual(len(results), 1)
+        r = results[0]
+        self.assertEqual(r["asm_start"], 205)
+        self.assertEqual(r["asm_end"], 263)
+
+    def test_query_starting_at_insertion_skips_insert(self):
+        """Query starting exactly at the insertion boundary skips it.
+
+        Query ref [110, 115) starts exactly where the insertion sits
+        (ref_offset=10).  The 50bp insertion is NOT included because the
+        query resolves against the next ref-consuming op.
+        Expected asm: [260, 265).
+        """
+        results = coordinate_mapper.query(self.index, "chr13", 110, 115)
+        self.assertEqual(len(results), 1)
+        r = results[0]
+        self.assertEqual(r["asm_start"], 260)
+        self.assertEqual(r["asm_end"], 265)
+
+    def test_query_ending_at_insertion_excludes_insert(self):
+        """Query ending exactly at the insertion boundary excludes it.
+
+        Query ref [100, 110) ends where the insertion sits (ref_offset=10).
+        Expected asm: [200, 210) — insertion NOT included.
+        """
+        results = coordinate_mapper.query(self.index, "chr13", 100, 110)
+        self.assertEqual(len(results), 1)
+        r = results[0]
+        self.assertEqual(r["asm_start"], 200)
+        self.assertEqual(r["asm_end"], 210)
+
+    def test_one_base_before_insertion_captures_it(self):
+        """Starting one base before the insertion boundary captures it.
+
+        Query ref [109, 115) → ref_offset [9, 15).  The 10= op covers
+        offset 9, setting asm_q_start=209.  Then the 50I advances asm
+        to 260.  Then 5= covers offset 10-14, ending at asm 265.
+        Expected asm: [209, 265).
+        """
+        results = coordinate_mapper.query(self.index, "chr13", 109, 115)
+        self.assertEqual(len(results), 1)
+        r = results[0]
+        self.assertEqual(r["asm_start"], 209)
+        self.assertEqual(r["asm_end"], 265)
+
+
+# ---------------------------------------------------------------------------
+# Edge case: tandem duplication reference overlap → "complex" classification
+# ---------------------------------------------------------------------------
+# Tandem dup where reference blocks are adjacent but assembly blocks overlap:
+# Block A: ref [5000, 6000), asm ctgT [1000, 2000), +
+# Block B: ref [6000, 7000), asm ctgT [1500, 2500), +
+#   asm_gap = B["as"] - A["ae"] = 1500 - 2000 = -500 → complex
+
+TANDEM_DUP_COMPLEX_PAF = """\
+ctgT\t10000000\t1000\t2000\t+\tchr14\t107043718\t5000\t6000\t1000\t1000\t60
+ctgT\t10000000\t1500\t2500\t+\tchr14\t107043718\t6000\t7000\t1000\t1000\t60
+"""
+
+
+class TestTandemDuplicationComplex(unittest.TestCase):
+    """Adjacent ref blocks with overlapping asm → 'complex' (tandem dup)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        paf_path = os.path.join(self.tmpdir, "tandem.paf")
+        with open(paf_path, "w") as fh:
+            fh.write(TANDEM_DUP_COMPLEX_PAF)
+
+        blocks = coordinate_mapper.parse_paf(paf_path)
+        json_path = os.path.join(self.tmpdir, "tandem.mapping.json.gz")
+        coordinate_mapper.build_json_index(blocks, json_path)
+        self.index = coordinate_mapper.load_index(json_path)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_adjacent_blocks_with_asm_overlap_classified_complex(self):
+        """Adjacent ref blocks whose assembly overlaps yield 'complex' event."""
+        results = coordinate_mapper.query(self.index, "chr14", 4500, 7500)
+        gaps = [r for r in results if r["event_type"] != "alignment"]
+        self.assertEqual(len(gaps), 1)
+        self.assertEqual(gaps[0]["event_type"], "complex")
+
+    def test_complex_event_negative_asm_gap(self):
+        """Complex event has negative asm_gap_size (-500)."""
+        results = coordinate_mapper.query(self.index, "chr14", 4500, 7500)
+        gap = next(r for r in results if r["event_type"] == "complex")
+        self.assertEqual(gap["asm_gap_size"], -500)
+        self.assertEqual(gap["ref_gap_size"], 0)
+
+    def test_both_alignment_blocks_returned(self):
+        """Both alignment blocks are returned even with the complex event."""
+        results = coordinate_mapper.query(self.index, "chr14", 4500, 7500)
+        alns = [r for r in results if r["event_type"] == "alignment"]
+        self.assertEqual(len(alns), 2)
+
+
+# ---------------------------------------------------------------------------
+# Edge case: tandem dup with identical ref coordinates (no gap emitted)
+# ---------------------------------------------------------------------------
+# The existing TestBiologicalSVScenarios Scenario 4 tests this: same ref
+# region maps to two assembly loci.  Verify no gap event at all.
+
+TANDEM_DUP_IDENTICAL_REF_PAF = """\
+ctgD\t10000000\t3000\t4000\t+\tchr15\t101991189\t8000\t9000\t1000\t1000\t60
+ctgD\t10000000\t4000\t5000\t+\tchr15\t101991189\t8000\t9000\t1000\t1000\t60
+"""
+
+
+class TestTandemDupIdenticalRef(unittest.TestCase):
+    """Tandem dup: identical ref region, no gap event emitted."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        paf_path = os.path.join(self.tmpdir, "tandem_id.paf")
+        with open(paf_path, "w") as fh:
+            fh.write(TANDEM_DUP_IDENTICAL_REF_PAF)
+
+        blocks = coordinate_mapper.parse_paf(paf_path)
+        json_path = os.path.join(self.tmpdir, "tandem_id.mapping.json.gz")
+        coordinate_mapper.build_json_index(blocks, json_path)
+        self.index = coordinate_mapper.load_index(json_path)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_no_gap_event_for_identical_ref_blocks(self):
+        """Identical ref ranges produce no gap event (known limitation)."""
+        results = coordinate_mapper.query(self.index, "chr15", 7500, 9500)
+        gaps = [r for r in results if r["event_type"] != "alignment"]
+        self.assertEqual(len(gaps), 0)
+
+    def test_both_alignment_hits_returned(self):
+        """Both mapping hits to different asm loci are returned."""
+        results = coordinate_mapper.query(self.index, "chr15", 7500, 9500)
+        alns = [r for r in results if r["event_type"] == "alignment"]
+        self.assertEqual(len(alns), 2)
+        asm_starts = sorted(r["asm_start"] for r in alns)
+        self.assertEqual(asm_starts, [3000, 4000])
+
+
 if __name__ == '__main__':
     unittest.main()

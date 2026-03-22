@@ -220,3 +220,7 @@ apptainer run \
 
 Larger `--padding` values produce a bigger dataset but provide more
 flanking context for alignment and visualization.
+
+> **Note:** A minimum padding of 100 bp is enforced internally to ensure
+> that assembly insertions at exact SV breakpoint boundaries are never
+> clipped.  Specifying `--padding 0` silently uses 100 bp.
