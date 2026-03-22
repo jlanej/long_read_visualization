@@ -443,16 +443,19 @@ def _merge_regions(regions):
     return merged
 
 
-def _select_dotplot_region(regions):
+def _select_dotplot_region(regions, max_gap=50000):
     """Select a stable assembly region for dot-plot sequence extraction.
 
-    Translation can yield multiple disjoint intervals. For dot plots we need a
-    single contiguous region string, so we pick the strongest contig/strand
-    group (highest covered bp) and return its full envelope.
+    Translation can yield multiple disjoint intervals.  For dot plots we need
+    a single contiguous region string, so we group hits by contig (ignoring
+    strand so that inversions are kept together), cluster by proximity to
+    avoid runaway envelopes from distant spurious alignments, and pick the
+    cluster with the highest covered bp.
     """
     if not regions:
         return None
 
+    # 1. Group by contig ONLY (ignoring strand to keep inversions together)
     grouped = collections.defaultdict(list)
     for r in regions:
         chrom = r.get("chrom")
@@ -464,37 +467,51 @@ def _select_dotplot_region(regions):
             continue
         if end <= start:
             continue
-        grouped[(chrom, r.get("strand", "+"))].append({
-            "start": start,
-            "end": end,
-        })
+        grouped[chrom].append({"start": start, "end": end})
 
     best = None
-    for (chrom, strand), group in grouped.items():
+    for chrom, group in grouped.items():
         intervals = sorted((r["start"], r["end"]) for r in group)
-        merged_intervals = []
-        for s, e in intervals:
-            if not merged_intervals or s > merged_intervals[-1][1]:
-                merged_intervals.append([s, e])
-            else:
-                merged_intervals[-1][1] = max(merged_intervals[-1][1], e)
-        if not merged_intervals:
-            continue
 
-        covered_bp = sum(e - s for s, e in merged_intervals)
-        envelope_start = merged_intervals[0][0]
-        envelope_end = merged_intervals[-1][1]
-        # Prefer larger covered sequence; break ties with a tighter envelope.
-        score = (covered_bp, -(envelope_end - envelope_start))
-        if best is None or score > best["score"]:
-            best = {
-                "chrom": chrom,
-                "start": envelope_start,
-                "end": envelope_end,
-                "strand": strand,
-                "score": score,
-                "pieces": len(group),
-            }
+        # 2. Cluster by proximity AND merge overlaps within clusters
+        clusters = []
+        current_cluster = []
+
+        for s, e in intervals:
+            if not current_cluster:
+                current_cluster.append([s, e])
+            else:
+                prev_e = current_cluster[-1][1]
+
+                if s > prev_e + max_gap:
+                    # Gap too large – start a new cluster
+                    clusters.append(current_cluster)
+                    current_cluster = [[s, e]]
+                elif s > prev_e:
+                    # Disjoint but close enough to cluster
+                    current_cluster.append([s, e])
+                else:
+                    # Overlapping – merge with last
+                    current_cluster[-1][1] = max(prev_e, e)
+
+        if current_cluster:
+            clusters.append(current_cluster)
+
+        # 3. Score each cluster based on covered bases and envelope tightness
+        for cluster in clusters:
+            covered_bp = sum(e - s for s, e in cluster)
+            envelope_start = cluster[0][0]
+            envelope_end = cluster[-1][1]
+            score = (covered_bp, -(envelope_end - envelope_start))
+
+            if best is None or score > best["score"]:
+                best = {
+                    "chrom": chrom,
+                    "start": envelope_start,
+                    "end": envelope_end,
+                    "score": score,
+                    "pieces": len(cluster),
+                }
 
     return best
 

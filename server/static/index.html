@@ -688,67 +688,86 @@
     }
 
     // Select a stable region from potentially disjoint translated intervals.
-    // Groups by contig, merges overlaps, and chooses the group with the
-    // greatest covered span (tie-break: tighter envelope).
+    // Groups by contig only (ignoring strand to keep inversions together),
+    // clusters by proximity to avoid runaway envelopes from distant spurious
+    // alignments, merges overlaps within each cluster, and chooses the cluster
+    // with the greatest covered span (tie-break: tighter envelope).
     // coordType:
     //   - "half-open": [start, end), used by translated API regions.
     //   - "inclusive": [start, end], used by precomputed locus strings.
-    function selectBestRegion(regions, coordType = "half-open") {
+    function selectBestRegion(regions, coordType = "half-open", maxGap = 50000) {
         if (!Array.isArray(regions) || regions.length === 0) return null;
         const inclusive = coordType === "inclusive";
 
-        const grouped = new Map(); // key => [{start,end}]
+        // 1. Group by contig ONLY (ignoring strand to keep inversions together)
+        const grouped = new Map(); // chrom => [{start,end}]
         for (const r of regions) {
             if (!r || !r.chrom) continue;
             const start = parseInt(r.start, 10);
             const end = parseInt(r.end, 10);
             if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
             if (inclusive ? end < start : end <= start) continue;
-            const strand = r.strand || "+";
-            const key = `${r.chrom}\u0000${strand}`;
+            const key = r.chrom;
             if (!grouped.has(key)) grouped.set(key, []);
             grouped.get(key).push({ start, end });
         }
 
         let best = null;
-        for (const [key, intervals] of grouped.entries()) {
+        for (const [chrom, intervals] of grouped.entries()) {
             intervals.sort((a, b) => a.start - b.start);
-            const merged = [];
+
+            // 2. Cluster by proximity AND merge overlaps within clusters
+            const clusters = [];
+            let currentCluster = [];
+
             for (const iv of intervals) {
-                const prevEnd = merged.length === 0 ? null : merged[merged.length - 1].end;
-                const separated = merged.length === 0 || (
-                    inclusive ? iv.start > (prevEnd + 1) : iv.start > prevEnd
-                );
-                if (separated) {
-                    merged.push({ start: iv.start, end: iv.end });
+                if (currentCluster.length === 0) {
+                    currentCluster.push({ start: iv.start, end: iv.end });
                 } else {
-                    merged[merged.length - 1].end = Math.max(
-                        merged[merged.length - 1].end, iv.end
-                    );
+                    const prevEnd = currentCluster[currentCluster.length - 1].end;
+                    const gap = inclusive ? (iv.start - prevEnd - 1) : (iv.start - prevEnd);
+
+                    if (gap > maxGap) {
+                        // Gap too large – start a new cluster
+                        clusters.push(currentCluster);
+                        currentCluster = [{ start: iv.start, end: iv.end }];
+                    } else {
+                        const separated = inclusive
+                            ? iv.start > (prevEnd + 1)
+                            : iv.start > prevEnd;
+                        if (separated) {
+                            // Disjoint but close enough to cluster
+                            currentCluster.push({ start: iv.start, end: iv.end });
+                        } else {
+                            // Overlapping – merge with last
+                            currentCluster[currentCluster.length - 1].end = Math.max(prevEnd, iv.end);
+                        }
+                    }
                 }
             }
-            if (merged.length === 0) continue;
+            if (currentCluster.length > 0) clusters.push(currentCluster);
 
-            const covered = merged.reduce(
-                (acc, iv) => acc + (inclusive ? (iv.end - iv.start + 1) : (iv.end - iv.start)),
-                0
-            );
-            const envelopeStart = merged[0].start;
-            const envelopeEnd = merged[merged.length - 1].end;
-            const envelope = inclusive
-                ? (envelopeEnd - envelopeStart + 1)
-                : (envelopeEnd - envelopeStart);
-            const [chrom, strand] = key.split("\u0000");
+            // 3. Score each cluster based on covered bases and envelope tightness
+            for (const cluster of clusters) {
+                const covered = cluster.reduce(
+                    (acc, iv) => acc + (inclusive ? (iv.end - iv.start + 1) : (iv.end - iv.start)),
+                    0
+                );
+                const envelopeStart = cluster[0].start;
+                const envelopeEnd = cluster[cluster.length - 1].end;
+                const envelope = inclusive
+                    ? (envelopeEnd - envelopeStart + 1)
+                    : (envelopeEnd - envelopeStart);
 
-            if (!best || covered > best.covered || (covered === best.covered && envelope < best.envelope)) {
-                best = {
-                    chrom,
-                    strand,
-                    start: envelopeStart,
-                    end: envelopeEnd,
-                    covered,
-                    envelope,
-                };
+                if (!best || covered > best.covered || (covered === best.covered && envelope < best.envelope)) {
+                    best = {
+                        chrom,
+                        start: envelopeStart,
+                        end: envelopeEnd,
+                        covered,
+                        envelope,
+                    };
+                }
             }
         }
         return best;
