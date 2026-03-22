@@ -792,6 +792,15 @@ class IGVHandler(SimpleHTTPRequestHandler):
                 "end": int(m.group(3)),
             }
 
+        def _normalize_faidx_region(region):
+            """Normalize a region string for samtools faidx (1-based start)."""
+            parsed = _parse_region(region)
+            if parsed is None:
+                return region
+            start = max(1, parsed["start"])
+            end = max(start, parsed["end"])
+            return f"{parsed['chrom']}:{start}-{end}"
+
         # ── Expand reference region by buffer ────────────────────────────
         ref_chrom, ref_start, ref_end = None, None, None
         parsed_ref_region = _parse_region(ref_region)
@@ -854,12 +863,15 @@ class IGVHandler(SimpleHTTPRequestHandler):
         hap2_fasta = sample.get("hap2_assembly", "")
 
         # Extract sequences using the buffered reference region
-        ref_seq = (dot_plot.extract_sequence(ref_fasta, buffered_ref_region)
-                   if ref_fasta and buffered_ref_region else "")
-        hap1_seq = (dot_plot.extract_sequence(hap1_fasta, hap1_region)
-                    if hap1_fasta and hap1_region else "")
-        hap2_seq = (dot_plot.extract_sequence(hap2_fasta, hap2_region)
-                    if hap2_fasta and hap2_region else "")
+        extract_ref_region = _normalize_faidx_region(buffered_ref_region)
+        extract_hap1_region = _normalize_faidx_region(hap1_region)
+        extract_hap2_region = _normalize_faidx_region(hap2_region)
+        ref_seq = (dot_plot.extract_sequence(ref_fasta, extract_ref_region)
+                   if ref_fasta and extract_ref_region else "")
+        hap1_seq = (dot_plot.extract_sequence(hap1_fasta, extract_hap1_region)
+                    if hap1_fasta and extract_hap1_region else "")
+        hap2_seq = (dot_plot.extract_sequence(hap2_fasta, extract_hap2_region)
+                    if hap2_fasta and extract_hap2_region else "")
 
         logger.info(
             "Dot plot: ref=%d bp (%s), hap1=%d bp (%s), hap2=%d bp (%s), k=%d, buffer=%.1f",
@@ -905,9 +917,9 @@ class IGVHandler(SimpleHTTPRequestHandler):
             return {"start_offset": hl_start, "end_offset": hl_end}
 
         viewport_highlights = {
-            "ref": _region_highlight(buffered_ref_region, raw_ref_region, len(ref_seq)),
-            "hap1": _region_highlight(hap1_region, raw_hap1_region, len(hap1_seq)),
-            "hap2": _region_highlight(hap2_region, raw_hap2_region, len(hap2_seq)),
+            "ref": _region_highlight(extract_ref_region, raw_ref_region, len(ref_seq)),
+            "hap1": _region_highlight(extract_hap1_region, raw_hap1_region, len(hap1_seq)),
+            "hap2": _region_highlight(extract_hap2_region, raw_hap2_region, len(hap2_seq)),
         }
 
         # Compute three pairwise dot plots

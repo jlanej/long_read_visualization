@@ -855,8 +855,8 @@ class TestApiDotplot(unittest.TestCase):
         })
         hl = result["viewport_highlights"]
         self.assertIsNotNone(hl["ref"])
-        self.assertEqual(hl["ref"]["start_offset"], 10000)
-        self.assertEqual(hl["ref"]["end_offset"], 20000)
+        self.assertEqual(hl["ref"]["start_offset"], 9999)
+        self.assertEqual(hl["ref"]["end_offset"], 19999)
         self.assertIsNotNone(hl["hap1"])
         self.assertEqual(hl["hap1"]["start_offset"], 0)
         self.assertEqual(hl["hap1"]["end_offset"], 1000)
@@ -982,6 +982,42 @@ class TestApiDotplot(unittest.TestCase):
         })
         self.assertEqual(result["labels"]["hap1"], "asm1:100-800")
         self.assertEqual(result["labels"]["hap2"], "asm2:1000-1100")
+
+    def test_dotplot_extraction_regions_are_normalized_for_faidx(self):
+        """Dotplot extraction uses 1-based starts even if loci include 0."""
+        handler = self._make_handler_class([{
+            "sample_id": "S1",
+            "reference": "/ref.fa.gz",
+            "hap1_assembly": "/hap1.fa.gz",
+            "hap2_assembly": "/hap2.fa.gz",
+        }])
+
+        from unittest.mock import patch
+
+        calls = []
+
+        def _fake_extract_sequence(path, region):
+            calls.append((path, region))
+            return "ACGT"
+
+        with patch.object(server_app.dot_plot, "extract_sequence", side_effect=_fake_extract_sequence):
+            result = handler._api_dotplot({
+                "sample": ["S1"],
+                "ref": ["chr1:0-100"],
+                "hap1": ["ctg1:0-200"],
+                "hap2": ["ctg2:0-300"],
+                "buffer": ["0"],
+            })
+
+        self.assertEqual(calls, [
+            ("/ref.fa.gz", "chr1:1-100"),
+            ("/hap1.fa.gz", "ctg1:1-200"),
+            ("/hap2.fa.gz", "ctg2:1-300"),
+        ])
+        self.assertEqual(result["labels"]["ref"], "chr1:0-100")
+        self.assertEqual(result["labels"]["hap1"], "ctg1:0-200")
+        self.assertEqual(result["labels"]["hap2"], "ctg2:0-300")
+        self.assertIsNotNone(result["viewport_highlights"]["ref"])
 
 
 class TestSelectDotplotRegion(unittest.TestCase):
