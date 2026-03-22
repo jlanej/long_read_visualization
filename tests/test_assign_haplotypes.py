@@ -310,6 +310,18 @@ class TestTagBam(unittest.TestCase):
                 src, os.path.join(self.tmpdir, "out.cram"), {}
             )
 
+    def test_tag_reads_file_in_place(self):
+        """tag_reads_file_in_place() updates BAM atomically and re-indexes."""
+        bam = os.path.join(self.tmpdir, "reads.bam")
+        _make_bam(bam, [
+            {"qname": "r1", "tags": [("AS", 100)]},
+            {"qname": "r2", "tags": [("AS", 200)]},
+        ])
+        assign_haplotypes.tag_reads_file_in_place(bam, {"r1": 1, "r2": 2})
+        hp = _read_hp_tags(bam)
+        self.assertEqual(hp, {"r1": 1, "r2": 2})
+        self.assertTrue(os.path.isfile(bam + ".bai"))
+
 
 @unittest.skipUnless(HAS_PYSAM, "pysam not installed")
 class TestIdempotency(unittest.TestCase):
@@ -423,6 +435,51 @@ class TestMainCLI(unittest.TestCase):
                 "--hap1-bam", hap1, "--hap2-bam", hap2,
                 "--reads-out", os.path.join(self.tmpdir, "out.bam"),
             ])
+
+    def test_main_reads_in_place_without_reads_in_errors(self):
+        """Supplying --reads-in-place without --reads-in raises SystemExit."""
+        hap1 = os.path.join(self.tmpdir, "h1.bam")
+        hap2 = os.path.join(self.tmpdir, "h2.bam")
+        _make_bam(hap1, [{"qname": "r1", "tags": [("AS", 500)]}])
+        _make_bam(hap2, [{"qname": "r1", "tags": [("AS", 300)]}])
+        with self.assertRaises(SystemExit):
+            assign_haplotypes.main([
+                "--hap1-bam", hap1, "--hap2-bam", hap2,
+                "--reads-in-place",
+            ])
+
+    def test_main_reads_out_with_reads_in_place_errors(self):
+        """Supplying --reads-out with --reads-in-place raises SystemExit."""
+        hap1 = os.path.join(self.tmpdir, "h1.bam")
+        hap2 = os.path.join(self.tmpdir, "h2.bam")
+        reads_in = os.path.join(self.tmpdir, "reads.bam")
+        _make_bam(hap1, [{"qname": "r1", "tags": [("AS", 500)]}])
+        _make_bam(hap2, [{"qname": "r1", "tags": [("AS", 300)]}])
+        _make_bam(reads_in, [{"qname": "r1", "tags": []}])
+        with self.assertRaises(SystemExit):
+            assign_haplotypes.main([
+                "--hap1-bam", hap1, "--hap2-bam", hap2,
+                "--reads-in", reads_in,
+                "--reads-out", os.path.join(self.tmpdir, "out.bam"),
+                "--reads-in-place",
+            ])
+
+    def test_main_reads_in_place_updates_reads_in(self):
+        """main() tags --reads-in in place when --reads-in-place is used."""
+        hap1 = os.path.join(self.tmpdir, "h1.bam")
+        hap2 = os.path.join(self.tmpdir, "h2.bam")
+        reads_in = os.path.join(self.tmpdir, "reads.bam")
+        _make_bam(hap1, [{"qname": "r1", "tags": [("AS", 500)]}])
+        _make_bam(hap2, [{"qname": "r1", "tags": [("AS", 300)]}])
+        _make_bam(reads_in, [{"qname": "r1", "tags": []}])
+        assign_haplotypes.main([
+            "--hap1-bam", hap1, "--hap2-bam", hap2,
+            "--reads-in", reads_in,
+            "--reads-in-place",
+        ])
+        hp = _read_hp_tags(reads_in)
+        self.assertEqual(hp, {"r1": 1})
+        self.assertTrue(os.path.isfile(reads_in + ".bai"))
 
     def test_main_with_tolerance(self):
         """main() respects --tolerance flag."""
