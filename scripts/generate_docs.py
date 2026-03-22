@@ -574,8 +574,9 @@ apptainer run \\
         <p style="font-size:.85rem;color:var(--muted);margin-top:10px;">
           If the CRAM was encoded with a <em>different</em> reference than the one used for assembly alignment,
           pass <code>--cram-ref /path/to/encoding_reference.fa.gz</code> so <code>samtools</code> can decode it correctly.
-          For new analyses, consider <code>--genome chm13v2.0_maskedY_rCRS</code> for best-practice alignment
-          (chrY PAR hard-masked, rCRS mitochondria — see the <em>Data &amp; Citations</em> section below for details).
+          For example, if your CRAM was encoded with the 1KG ONT Vienna variant
+          (<code>chm13v2.0_maskedY_rCRS</code>), use <code>--genome chm13v2.0_maskedY_rCRS</code>
+          to download it automatically and then pass it as <code>--cram-ref</code>.
         </p>
       </div>
 
@@ -795,13 +796,13 @@ apptainer exec \\
         Data: <a href="https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1KG_ONT_VIENNA/" target="_blank" rel="noopener">https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1KG_ONT_VIENNA/</a>
       </li>
       <li>
-        <strong>T2T-CHM13 v2.0</strong> — Reference genome used to align the 1KG ONT Vienna reads.<br>
+        <strong>T2T-CHM13 v2.0</strong> — Reference genome used to encode the 1KG ONT Vienna reads (<code>*.t2t.cram</code>).<br>
         Nurk <em>et al.</em> (2022). <em>Science</em> 376, 44–53.
         <a href="https://doi.org/10.1126/science.abj6987" target="_blank" rel="noopener">https://doi.org/10.1126/science.abj6987</a><br>
         Plain reference (<code>--genome chm13v2.0</code>):
         <a href="https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0.fa.gz" target="_blank" rel="noopener">chm13v2.0.fa.gz</a><br>
-        <strong>Recommended best practice</strong> — chrY PAR hard-masked to <code>N</code> (prevents spurious multi-mapping),
-        chrM = rCRS (NC_012920.1); use <code>--genome chm13v2.0_maskedY_rCRS</code>:
+        1KG ONT Vienna variant — chrY PAR hard-masked to <code>N</code>, chrM = rCRS (NC_012920.1);
+        use <code>--genome chm13v2.0_maskedY_rCRS</code> to download for CRAM decoding:
         <a href="https://s3-us-west-2.amazonaws.com/human-pangenomics/T2T/CHM13/assemblies/analysis_set/chm13v2.0_maskedY_rCRS.fa.gz" target="_blank" rel="noopener">chm13v2.0_maskedY_rCRS.fa.gz</a>
       </li>
       <li>
