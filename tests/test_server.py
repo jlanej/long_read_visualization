@@ -1030,8 +1030,8 @@ class TestSelectDotplotRegion(unittest.TestCase):
         """Intervals within max_gap should stay in one cluster; intervals
         beyond max_gap should split."""
         regions = [
-            {"chrom": "ctgA", "start": 0, "end": 100},
-            {"chrom": "ctgA", "start": 200, "end": 300},
+            {"chrom": "ctgA", "start": 0, "end": 100, "strand": "+"},
+            {"chrom": "ctgA", "start": 200, "end": 300, "strand": "+"},
         ]
         # With default max_gap (50000), both in one cluster
         best = server_app._select_dotplot_region(regions)
