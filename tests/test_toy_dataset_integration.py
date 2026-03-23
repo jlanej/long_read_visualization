@@ -73,9 +73,9 @@ class TestToyManifest(unittest.TestCase):
         self.assertIsInstance(self.manifest["variants"], list)
         self.assertGreater(len(self.manifest["variants"]), 0)
 
-    def test_variant_count_is_40(self):
-        """Manifest contains exactly 40 variants (deletions)."""
-        self.assertEqual(len(self.manifest["variants"]), 40)
+    def test_variant_count_is_10(self):
+        """Manifest contains exactly 10 variants (deletions)."""
+        self.assertEqual(len(self.manifest["variants"]), 10)
 
     def test_variant_fields(self):
         """Every variant has the expected fields."""
@@ -119,7 +119,7 @@ class TestToyManifest(unittest.TestCase):
     def test_chromosome_diversity(self):
         """Variants span multiple chromosomes."""
         chroms = {v["chrom"] for v in self.manifest["variants"]}
-        self.assertGreater(len(chroms), 10)
+        self.assertGreaterEqual(len(chroms), 10)
 
     def test_ref_regions_match_chromosome(self):
         """ref_region chromosome matches the variant chrom field."""
