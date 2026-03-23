@@ -524,8 +524,7 @@ class TestGenerateToyDatasetScriptIndexDiscovery(unittest.TestCase):
         shutil.rmtree(self.tmpdir)
 
     def _touch(self, path):
-        with open(path, "w", encoding="utf-8"):
-            pass
+        open(path, "a", encoding="utf-8").close()
 
     def _run_script(self, cram_name):
         cmd = [

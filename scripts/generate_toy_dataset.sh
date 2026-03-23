@@ -112,7 +112,7 @@ if [[ ! -f "${HAP1_INDEX}" || ! -f "${HAP2_INDEX}" ]]; then
             -name '*_hap2_to_ref.mapping.json.gz' -print 2>/dev/null
     )
 
-    # Build a set of hap2 candidate prefixes to find paired hap1/hap2 indices.
+    # Use an associative array as a set for O(1) hap2-prefix membership checks.
     declare -A HAP2_PREFIXES=()
     for p in "${HAP2_CANDIDATES[@]}"; do
         base="$(basename "${p}")"
