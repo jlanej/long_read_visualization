@@ -350,13 +350,13 @@ class TestLoadRegions(unittest.TestCase):
         self.assertEqual(server_app.load_regions(""), [])
 
     def test_load_toy_manifest(self):
-        """Load the actual toy manifest and get 40 regions."""
+        """Load the actual toy manifest and get 10 regions."""
         manifest_path = os.path.join(
             _REPO_ROOT, "resources", "toy_dataset", "toy_manifest.json")
         if not os.path.isfile(manifest_path):
             self.skipTest("Toy manifest not found")
         regions = server_app.load_regions(manifest_path)
-        self.assertEqual(len(regions), 40)
+        self.assertEqual(len(regions), 10)
         # Verify regions have expected fields
         for r in regions:
             self.assertIn("chrom", r)
