@@ -233,6 +233,7 @@ class TestToyReadsIndexing(unittest.TestCase):
 
     def test_toy_reads_bai_has_nonzero_virtual_offsets(self):
         """toy_reads.bam.bai should not be a degenerate all-zero index."""
+        bam_path = os.path.join(_TOY_DIR, "toy_reads.bam")
         bai_path = os.path.join(_TOY_DIR, "toy_reads.bam.bai")
         with open(bai_path, "rb") as fh:
             data = fh.read()
@@ -264,6 +265,11 @@ class TestToyReadsIndexing(unittest.TestCase):
 
         self.assertGreater(
             max_vo, 0, "toy_reads.bam.bai has only zero virtual offsets"
+        )
+        self.assertLess(
+            max_vo >> 16,
+            os.path.getsize(bam_path),
+            "toy_reads.bam.bai virtual offsets exceed BAM file size",
         )
 
 
