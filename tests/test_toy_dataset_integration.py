@@ -10,6 +10,7 @@ standard library is needed.
 import gzip
 import json
 import os
+import struct
 import sys
 import unittest
 
@@ -187,6 +188,83 @@ class TestToyFastaIndices(unittest.TestCase):
                         len(cols), 5,
                         f"{fname}:{lineno} has only {len(cols)} columns",
                     )
+
+
+class TestToyReadsIndexing(unittest.TestCase):
+    """Validate toy reads BAM/BAI are non-empty and indexable by range."""
+
+    def test_toy_reads_bam_contains_alignments(self):
+        """toy_reads.bam should include at least one mapped alignment."""
+        bam_path = os.path.join(_TOY_DIR, "toy_reads.bam")
+        with gzip.open(bam_path, "rb") as fh:
+            data = fh.read()
+
+        self.assertGreaterEqual(len(data), 8, "BAM payload too small")
+        self.assertEqual(data[:4], b"BAM\x01")
+
+        p = 4
+        l_text, = struct.unpack_from("<i", data, p)
+        p += 4 + l_text
+        n_ref, = struct.unpack_from("<i", data, p)
+        p += 4
+        for _ in range(n_ref):
+            l_name, = struct.unpack_from("<i", data, p)
+            p += 4 + l_name + 4  # name bytes + l_ref
+
+        mapped = 0
+        while p + 4 <= len(data):
+            block_size, = struct.unpack_from("<i", data, p)
+            p += 4
+            if block_size <= 0 or p + block_size > len(data):
+                break
+
+            rec = data[p:p + block_size]
+            p += block_size
+
+            _, _, _, _, _, _, flag, _, _, _, _ = struct.unpack_from(
+                "<iiBBHHHiiii", rec, 0
+            )
+            if (flag & 0x4) == 0:
+                mapped += 1
+
+        self.assertGreater(
+            mapped, 0, "toy_reads.bam has no mapped alignments"
+        )
+
+    def test_toy_reads_bai_has_nonzero_virtual_offsets(self):
+        """toy_reads.bam.bai should not be a degenerate all-zero index."""
+        bai_path = os.path.join(_TOY_DIR, "toy_reads.bam.bai")
+        with open(bai_path, "rb") as fh:
+            data = fh.read()
+
+        self.assertGreaterEqual(len(data), 8, "BAI payload too small")
+        self.assertEqual(data[:4], b"BAI\x01")
+
+        p = 4
+        n_ref, = struct.unpack_from("<i", data, p)
+        p += 4
+        max_vo = 0
+        for _ in range(n_ref):
+            n_bin, = struct.unpack_from("<i", data, p)
+            p += 4
+            for _ in range(n_bin):
+                _, n_chunk = struct.unpack_from("<II", data, p)
+                p += 8
+                for _ in range(n_chunk):
+                    cs, ce = struct.unpack_from("<QQ", data, p)
+                    p += 16
+                    max_vo = max(max_vo, cs, ce)
+
+            n_intv, = struct.unpack_from("<i", data, p)
+            p += 4
+            for _ in range(n_intv):
+                io, = struct.unpack_from("<Q", data, p)
+                p += 8
+                max_vo = max(max_vo, io)
+
+        self.assertGreater(
+            max_vo, 0, "toy_reads.bam.bai has only zero virtual offsets"
+        )
 
 
 if __name__ == "__main__":
