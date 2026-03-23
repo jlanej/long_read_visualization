@@ -28,13 +28,12 @@ It then:
    Score (`AS:i:`) for every read between the hap1 and hap2 BAMs.  Reads
    are tagged `HP:i:1` (hap1), `HP:i:2` (hap2), or `HP:i:0` (ambiguous).
    IGV natively sorts, groups, and colours reads by the `HP` tag.
-5. **Aligns the reference genome back to each haplotype assembly** using
-   `minimap2 -x asm5 --eqx` (query and target swapped relative to item 1),
-   producing assembly-coordinate-sorted BAM files that can be loaded as a
-   reference track in any assembly-space genome browser.  These reciprocal
-   alignments serve as a cross-check against the hap→ref alignments: every
-   block visible in the hap→ref BAM should have a complementary block in
-   the ref→hap BAM, making spurious or missed mappings immediately apparent.
+5. **Aligns the reference genome back to each haplotype assembly** (Step 6)
+   using `minimap2 -x asm5 --eqx`, producing assembly-coordinate-sorted BAM
+   files that can be loaded as reference tracks in assembly-space panels.
+6. **Aligns each haplotype assembly to the other** (Step 7) using
+   `minimap2 -x asm5 --eqx`, producing cross-haplotype BAMs for direct
+   haplotype-vs-haplotype comparison in each assembly panel.
 
 ### Example input files
 

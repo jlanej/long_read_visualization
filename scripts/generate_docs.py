@@ -467,7 +467,7 @@ footer a:hover {{ color: var(--text); }}
       <div class="feature-card">
         <div class="feature-icon">🧪</div>
         <h3>Integrated test suite</h3>
-        <p>196 unit tests covering coordinate mapping, CIGAR projection, SV classification, server endpoints, CRAM handling, and toy-dataset generation. Runs on every push.</p>
+        <p>Comprehensive unit tests cover coordinate mapping, CIGAR projection, SV classification, server endpoints, CRAM handling, and toy-dataset generation. Runs on every push.</p>
       </div>
     </div>
   </div>
@@ -515,6 +515,13 @@ footer a:hover {{ color: var(--text); }}
         <div class="step-body">
           <h3>Build reciprocal reference→assembly BAMs</h3>
           <p>The reference genome is aligned <em>back</em> to each assembly (<code>minimap2 -x asm5 --eqx</code> with swapped query/target). These assembly-coordinate BAMs serve as cross-check tracks in the assembly panels and confirm every SV from both perspectives.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num green">5</div>
+        <div class="step-body">
+          <h3>Build cross-haplotype BAMs</h3>
+          <p>Each haplotype assembly is aligned to the other (<code>hap2→hap1</code> and <code>hap1→hap2</code>) with <code>minimap2 -x asm5 --eqx</code>, producing assembly-coordinate tracks for direct haplotype-vs-haplotype comparison.</p>
         </div>
       </div>
     </div>
@@ -746,8 +753,8 @@ apptainer exec \\
       <div class="method-card">
         <h3>Reciprocal alignment cross-check</h3>
         <p>
-          Step 4 of the pipeline aligns the reference <em>back</em> to each
-          assembly (<code>ref→hap BAM</code>). Every block in the
+          In <code>preprocess.sh</code> Step 6, the reference is aligned
+          <em>back</em> to each assembly (<code>ref→hap BAM</code>). Every block in the
           <code>hap→ref</code> direction should have a mirror in
           <code>ref→hap</code>. Discordant blocks flag spurious mappings in
           low-complexity and segmental-duplication regions.
