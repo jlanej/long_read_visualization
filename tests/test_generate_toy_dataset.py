@@ -5,6 +5,7 @@ import gzip
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -507,6 +508,76 @@ class TestMinimumPadding(unittest.TestCase):
         )
         r = regions[0]
         self.assertEqual(r["ref_region"], "chr1:495000-515000")
+
+
+class TestGenerateToyDatasetScriptIndexDiscovery(unittest.TestCase):
+    """Tests for scripts/generate_toy_dataset.sh index prefix discovery."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        self.script = os.path.join(
+            self.repo_root, "scripts", "generate_toy_dataset.sh"
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def _touch(self, path):
+        open(path, "a", encoding="utf-8").close()
+
+    def _run_script(self, cram_name):
+        cmd = [
+            "bash",
+            self.script,
+            "--pipeline-output", self.tmpdir,
+            "--hap1", "/dev/null",
+            "--hap2", "/dev/null",
+            "--reference", "/dev/null",
+            "--cram", os.path.join(self.tmpdir, cram_name),
+            "--output-dir", os.path.join(self.tmpdir, "toy"),
+            "--vcf", os.path.join(self.tmpdir, "missing.vcf.gz"),
+        ]
+        return subprocess.run(
+            cmd, capture_output=True, text=True, cwd=self.repo_root, check=False
+        )
+
+    def test_uses_derived_sample_name_when_indices_match(self):
+        """When prefix matches CRAM-derived sample, no fallback is needed."""
+        self._touch(
+            os.path.join(self.tmpdir, "sample_hap1_to_ref.mapping.json.gz")
+        )
+        self._touch(
+            os.path.join(self.tmpdir, "sample_hap2_to_ref.mapping.json.gz")
+        )
+        result = self._run_script("sample.cram")
+        self.assertNotIn("mapping index not found", result.stderr)
+        self.assertIn("VCF not found", result.stderr)
+
+    def test_fallback_finds_single_matching_index_pair(self):
+        """If CRAM basename differs (e.g. reads.hp.cram), paired indices are inferred."""
+        self._touch(
+            os.path.join(self.tmpdir, "NA21110_reads_hap1_to_ref.mapping.json.gz")
+        )
+        self._touch(
+            os.path.join(self.tmpdir, "NA21110_reads_hap2_to_ref.mapping.json.gz")
+        )
+        result = self._run_script("NA21110_reads.hp.cram")
+        self.assertNotIn("mapping index not found", result.stderr)
+        self.assertIn("VCF not found", result.stderr)
+
+    def test_fallback_errors_when_multiple_pairs_exist(self):
+        """When multiple index pairs exist, script asks for --sample-name."""
+        self._touch(os.path.join(self.tmpdir, "S1_hap1_to_ref.mapping.json.gz"))
+        self._touch(os.path.join(self.tmpdir, "S1_hap2_to_ref.mapping.json.gz"))
+        self._touch(os.path.join(self.tmpdir, "S2_hap1_to_ref.mapping.json.gz"))
+        self._touch(os.path.join(self.tmpdir, "S2_hap2_to_ref.mapping.json.gz"))
+        result = self._run_script("reads.hp.cram")
+        self.assertIn(
+            "could not infer sample prefix from --pipeline-output; found multiple index pairs",
+            result.stderr,
+        )
+        self.assertIn("Use --sample-name to select one of:", result.stderr)
 
 
 if __name__ == "__main__":

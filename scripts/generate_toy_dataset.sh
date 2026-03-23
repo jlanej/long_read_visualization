@@ -99,6 +99,47 @@ fi
 HAP1_INDEX="${PIPELINE_OUTPUT}/${SAMPLE_NAME}_hap1_to_ref.mapping.json.gz"
 HAP2_INDEX="${PIPELINE_OUTPUT}/${SAMPLE_NAME}_hap2_to_ref.mapping.json.gz"
 
+if [[ ! -f "${HAP1_INDEX}" || ! -f "${HAP2_INDEX}" ]]; then
+    # Fallback: auto-detect sample prefix from mapping indices in pipeline output.
+    # This handles cases like CRAM name "*_reads.hp.cram" where preprocess sample
+    # prefix (used for mapping indices) differs from CRAM basename prefix.
+    mapfile -t HAP1_CANDIDATES < <(
+        find "${PIPELINE_OUTPUT}" -maxdepth 1 -type f \
+            -name '*_hap1_to_ref.mapping.json.gz' -print 2>/dev/null
+    )
+    mapfile -t HAP2_CANDIDATES < <(
+        find "${PIPELINE_OUTPUT}" -maxdepth 1 -type f \
+            -name '*_hap2_to_ref.mapping.json.gz' -print 2>/dev/null
+    )
+
+    # Use an associative array as a set for O(1) hap2-prefix membership checks.
+    declare -A HAP2_PREFIXES=()
+    for p in "${HAP2_CANDIDATES[@]}"; do
+        base="$(basename "${p}")"
+        prefix="${base%_hap2_to_ref.mapping.json.gz}"
+        HAP2_PREFIXES["${prefix}"]=1
+    done
+
+    MATCHED_PREFIXES=()
+    for p in "${HAP1_CANDIDATES[@]}"; do
+        base="$(basename "${p}")"
+        prefix="${base%_hap1_to_ref.mapping.json.gz}"
+        if [[ -n "${HAP2_PREFIXES[${prefix}]+x}" ]]; then
+            MATCHED_PREFIXES+=("${prefix}")
+        fi
+    done
+
+    if [[ "${#MATCHED_PREFIXES[@]}" -eq 1 ]]; then
+        SAMPLE_NAME="${MATCHED_PREFIXES[0]}"
+        HAP1_INDEX="${PIPELINE_OUTPUT}/${SAMPLE_NAME}_hap1_to_ref.mapping.json.gz"
+        HAP2_INDEX="${PIPELINE_OUTPUT}/${SAMPLE_NAME}_hap2_to_ref.mapping.json.gz"
+    elif [[ "${#MATCHED_PREFIXES[@]}" -gt 1 ]]; then
+        echo "ERROR: could not infer sample prefix from --pipeline-output; found multiple index pairs." >&2
+        echo "       Use --sample-name to select one of: ${MATCHED_PREFIXES[*]}" >&2
+        exit 1
+    fi
+fi
+
 [[ -f "${HAP1_INDEX}" ]] || {
     echo "ERROR: hap1 mapping index not found: ${HAP1_INDEX}" >&2
     echo "       Run preprocess.sh first, then re-run this script." >&2
