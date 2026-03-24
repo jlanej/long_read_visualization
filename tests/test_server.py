@@ -1471,5 +1471,116 @@ class TestFrontendMemoryGuards(unittest.TestCase):
         self.assertIn("config.tracks.hap1_to_hap2_bam", html)
 
 
+class TestFrontendDisplayToggles(unittest.TestCase):
+    """Tests for soft-clip and mismatch display toggles.
+
+    These verify the implementation pattern rather than just code presence:
+    - State variables are declared with correct defaults.
+    - Track configs use the state variables (not hardcoded values).
+    - Update functions apply the double-set pattern: both the live track
+      property (t.showSoftClips / t.showMismatches) AND the config object
+      property (t.config.showSoftClips / t.config.showMismatches) are updated
+      so the setting persists across pan/zoom re-renders.
+    - Buttons have the correct initial active/inactive CSS class.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        index_path = os.path.join(_REPO_ROOT, "server", "static", "index.html")
+        with open(index_path, encoding="utf-8") as fh:
+            cls.html = fh.read()
+
+    # ── State variables ────────────────────────────────────────────────────
+
+    def test_soft_clips_state_variable_initialised_false(self):
+        """showSoftClips must default to false (hide clipped bases by default)."""
+        self.assertIn("let showSoftClips = false;", self.html)
+
+    def test_mismatches_state_variable_initialised_true(self):
+        """showMismatches must default to true (show SNVs by default)."""
+        self.assertIn("let showMismatches = true;", self.html)
+
+    # ── Track configs use state variables ─────────────────────────────────
+
+    def test_read_track_uses_soft_clip_state_variable(self):
+        """makeReadTrack must use showSoftClips variable, not hardcoded false."""
+        self.assertIn("showSoftClips: showSoftClips,", self.html)
+        self.assertNotIn("showSoftClips: false,", self.html)
+
+    def test_read_track_uses_mismatch_state_variable(self):
+        """makeReadTrack must use showMismatches variable."""
+        self.assertIn("showMismatches: showMismatches,", self.html)
+
+    # ── Double-set pattern in update functions ─────────────────────────────
+
+    def test_update_soft_clips_sets_track_property(self):
+        """updateAllTrackSoftClipDisplay must set t.showSoftClips on the track."""
+        self.assertIn("t.showSoftClips = showSoftClips;", self.html)
+
+    def test_update_soft_clips_sets_config_property(self):
+        """updateAllTrackSoftClipDisplay must also update t.config.showSoftClips.
+
+        Setting only the live property causes toggles to revert when IGV.js
+        re-reads the config object after a pan/zoom fetch.  The config must
+        be kept in sync to make the change durable.
+        """
+        self.assertIn("t.config.showSoftClips = showSoftClips;", self.html)
+
+    def test_update_mismatches_sets_track_property(self):
+        """updateAllTrackMismatchDisplay must set t.showMismatches on the track."""
+        self.assertIn("t.showMismatches = showMismatches;", self.html)
+
+    def test_update_mismatches_sets_config_property(self):
+        """updateAllTrackMismatchDisplay must also update t.config.showMismatches."""
+        self.assertIn("t.config.showMismatches = showMismatches;", self.html)
+
+    # ── Buttons existence and initial state ────────────────────────────────
+
+    def test_soft_clips_button_exists(self):
+        """toggleSoftClips button must be present in the toolbar."""
+        self.assertIn('id="toggleSoftClips"', self.html)
+
+    def test_soft_clips_button_initially_inactive(self):
+        """toggleSoftClips button must NOT carry 'active' class initially.
+
+        The default is showSoftClips=false, so the button should appear
+        inactive (not pressed) to match the state.
+        """
+        # Locate the button element and confirm it has no 'active' class.
+        import re
+        btn_match = re.search(
+            r'<button[^>]+id="toggleSoftClips"[^>]*>', self.html
+        )
+        self.assertIsNotNone(btn_match, "toggleSoftClips button not found")
+        self.assertNotIn("active", btn_match.group())
+
+    def test_mismatches_button_exists(self):
+        """toggleMismatches button must be present in the toolbar."""
+        self.assertIn('id="toggleMismatches"', self.html)
+
+    def test_mismatches_button_initially_active(self):
+        """toggleMismatches button must carry 'active' class initially.
+
+        The default is showMismatches=true, so the button should appear
+        active (pressed) to reflect the enabled state.
+        """
+        import re
+        btn_match = re.search(
+            r'<button[^>]+id="toggleMismatches"[^>]*>', self.html
+        )
+        self.assertIsNotNone(btn_match, "toggleMismatches button not found")
+        self.assertIn("active", btn_match.group())
+
+    # ── Click handlers call update functions ──────────────────────────────
+
+    def test_soft_clips_handler_calls_update_function(self):
+        """The soft-clips click handler must call updateAllTrackSoftClipDisplay()."""
+        self.assertIn("updateAllTrackSoftClipDisplay();", self.html)
+
+    def test_mismatches_handler_calls_update_function(self):
+        """The mismatches click handler must call updateAllTrackMismatchDisplay()."""
+        self.assertIn("updateAllTrackMismatchDisplay();", self.html)
+
+
 if __name__ == "__main__":
     unittest.main()
