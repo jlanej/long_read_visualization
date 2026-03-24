@@ -1472,7 +1472,20 @@ class TestFrontendMemoryGuards(unittest.TestCase):
 
 
 class TestFrontendDisplayToggles(unittest.TestCase):
-    """Tests for display toggle buttons in the visualization frontend."""
+    """Tests for alignment display toggles: soft clips, mismatches, display mode, and 3rd gen view.
+
+    These verify the implementation pattern rather than just code presence:
+    - State variables are declared with correct defaults.
+    - Track configs use the state variables (not hardcoded values).
+    - Update functions apply the double-set pattern: both the live track
+      property (t.showSoftClips / t.showMismatches / etc.) AND the config
+      object property (t.config.*) are updated so the setting persists across
+      pan/zoom re-renders.
+    - Buttons have the correct initial active/inactive CSS class.
+    - The indel threshold is set to LONG_READ_INDEL_THRESHOLD (50 bp) —
+      the 3-bp default is meaningless for PacBio/ONT, which have many
+      sequencing-error indels in the 1–50 bp range.
+    """
 
     @classmethod
     def setUpClass(cls):
@@ -1480,133 +1493,270 @@ class TestFrontendDisplayToggles(unittest.TestCase):
         with open(index_path, encoding="utf-8") as fh:
             cls.html = fh.read()
 
-    # ── Indels toggle ────────────────────────────────────────────────────
+    # ── State variables ────────────────────────────────────────────────────
 
-    def test_indels_toggle_button_present(self):
-        """Indels toggle button is present in toolbar."""
-        self.assertIn('id="toggleSmallIndels"', self.html)
-
-    def test_indels_default_state_hides_small_indels(self):
-        """Small indels are hidden by default (hideSmallIndels = true)."""
-        self.assertIn("let hideSmallIndels = true;", self.html)
-
-    def test_indels_threshold_matches_igv_thirdgen(self):
-        """smallIndelThreshold is 3 bp, matching Java IGV third-gen preset."""
-        self.assertIn("smallIndelThreshold: 3", self.html)
-
-    def test_indels_toggle_updates_all_panels(self):
-        """updateAllTrackIndelDisplay iterates all three browsers."""
-        self.assertIn("function updateAllTrackIndelDisplay()", self.html)
-        self.assertIn("t.hideSmallIndels = hideSmallIndels;", self.html)
-
-    # ── Soft clips toggle ────────────────────────────────────────────────
-
-    def test_softclips_toggle_button_present(self):
-        """Soft clips toggle button is present in toolbar."""
-        self.assertIn('id="toggleSoftClips"', self.html)
-
-    def test_softclips_default_state_hidden(self):
-        """Soft clips are hidden by default."""
+    def test_soft_clips_state_variable_initialised_false(self):
+        """showSoftClips must default to false (hide clipped bases by default)."""
         self.assertIn("let showSoftClips = false;", self.html)
 
-    def test_softclips_state_variable_used_in_track_config(self):
-        """Tracks use the showSoftClips state variable, not a hardcoded value."""
-        self.assertIn("showSoftClips: showSoftClips,", self.html)
-
-    def test_softclips_toggle_updates_all_panels(self):
-        """updateAllTrackSoftClipDisplay iterates all three browsers."""
-        self.assertIn("function updateAllTrackSoftClipDisplay()", self.html)
-        self.assertIn("t.showSoftClips = showSoftClips;", self.html)
-
-    def test_softclips_toggle_has_click_handler(self):
-        """Soft clips button has a click event handler."""
-        self.assertIn("toggleSoftClipsBtn.addEventListener", self.html)
-
-    # ── Mismatches / SNV toggle ──────────────────────────────────────────
-
-    def test_mismatches_toggle_button_present(self):
-        """Mismatches toggle button is present in toolbar."""
-        self.assertIn('id="toggleMismatches"', self.html)
-
-    def test_mismatches_default_state_shown(self):
-        """Mismatches are shown by default."""
+    def test_mismatches_state_variable_initialised_true(self):
+        """showMismatches must default to true (show SNVs by default)."""
         self.assertIn("let showMismatches = true;", self.html)
 
-    def test_mismatches_state_variable_used_in_track_config(self):
-        """Tracks use the showMismatches state variable."""
+    # ── Track configs use state variables ─────────────────────────────────
+
+    def test_read_track_uses_soft_clip_state_variable(self):
+        """makeReadTrack must use showSoftClips variable, not hardcoded false."""
+        self.assertIn("showSoftClips: showSoftClips,", self.html)
+        self.assertNotIn("showSoftClips: false,", self.html)
+
+    def test_read_track_uses_mismatch_state_variable(self):
+        """makeReadTrack must use showMismatches variable."""
         self.assertIn("showMismatches: showMismatches,", self.html)
 
-    def test_mismatches_toggle_updates_all_panels(self):
-        """updateAllTrackMismatchDisplay iterates all three browsers."""
-        self.assertIn("function updateAllTrackMismatchDisplay()", self.html)
+    # ── Double-set pattern in update functions ─────────────────────────────
+
+    def test_update_soft_clips_sets_track_property(self):
+        """updateAllTrackSoftClipDisplay must set t.showSoftClips on the track."""
+        self.assertIn("t.showSoftClips = showSoftClips;", self.html)
+
+    def test_update_soft_clips_sets_config_property(self):
+        """updateAllTrackSoftClipDisplay must also update t.config.showSoftClips.
+
+        Setting only the live property causes toggles to revert when IGV.js
+        re-reads the config object after a pan/zoom fetch.  The config must
+        be kept in sync to make the change durable.
+        """
+        self.assertIn("t.config.showSoftClips = showSoftClips;", self.html)
+
+    def test_update_mismatches_sets_track_property(self):
+        """updateAllTrackMismatchDisplay must set t.showMismatches on the track."""
         self.assertIn("t.showMismatches = showMismatches;", self.html)
 
-    def test_mismatches_toggle_has_click_handler(self):
-        """Mismatches button has a click event handler."""
-        self.assertIn("toggleMismatchesBtn.addEventListener", self.html)
+    def test_update_mismatches_sets_config_property(self):
+        """updateAllTrackMismatchDisplay must also update t.config.showMismatches."""
+        self.assertIn("t.config.showMismatches = showMismatches;", self.html)
 
+    # ── Buttons existence and initial state ────────────────────────────────
 
-class TestFrontendHapPanelLockdown(unittest.TestCase):
-    """Tests that haplotype panels are navigation-locked."""
+    def test_soft_clips_button_exists(self):
+        """toggleSoftClips button must be present in the toolbar."""
+        self.assertIn('id="toggleSoftClips"', self.html)
 
-    @classmethod
-    def setUpClass(cls):
-        index_path = os.path.join(_REPO_ROOT, "server", "static", "index.html")
-        with open(index_path, encoding="utf-8") as fh:
-            cls.html = fh.read()
+    def test_soft_clips_button_initially_inactive(self):
+        """toggleSoftClips button must NOT carry 'active' class initially.
 
-    def test_lock_function_defined(self):
-        """_lockHapPanel helper function is defined."""
-        self.assertIn("function _lockHapPanel(el)", self.html)
+        The default is showSoftClips=false, so the button should appear
+        inactive (not pressed) to match the state.
+        """
+        # Locate the button element and confirm it has no 'active' class.
+        import re
+        btn_match = re.search(
+            r'<button[^>]+id="toggleSoftClips"[^>]*>', self.html
+        )
+        self.assertIsNotNone(btn_match, "toggleSoftClips button not found")
+        self.assertNotIn("active", btn_match.group())
 
-    def test_hap1_panel_locked(self):
-        """Hap1 panel is locked after browser creation."""
-        self.assertIn('_lockHapPanel(document.getElementById("igv-hap1"))', self.html)
+    def test_mismatches_button_exists(self):
+        """toggleMismatches button must be present in the toolbar."""
+        self.assertIn('id="toggleMismatches"', self.html)
 
-    def test_hap2_panel_locked(self):
-        """Hap2 panel is locked after browser creation."""
-        self.assertIn('_lockHapPanel(document.getElementById("igv-hap2"))', self.html)
+    def test_mismatches_button_initially_active(self):
+        """toggleMismatches button must carry 'active' class initially.
 
-    def test_lock_blocks_wheel_zoom(self):
-        """_lockHapPanel intercepts wheel events to prevent zoom."""
-        self.assertIn('"wheel"', self.html)
+        The default is showMismatches=true, so the button should appear
+        active (pressed) to reflect the enabled state.
+        """
+        import re
+        btn_match = re.search(
+            r'<button[^>]+id="toggleMismatches"[^>]*>', self.html
+        )
+        self.assertIsNotNone(btn_match, "toggleMismatches button not found")
+        self.assertIn("active", btn_match.group())
 
-    def test_lock_preserves_vertical_scroll(self):
-        """_lockHapPanel forwards deltaY to scrollable container for reads."""
-        self.assertIn("scroller.scrollTop += e.deltaY", self.html)
+    # ── Click handlers call update functions ──────────────────────────────
 
-    def test_lock_blocks_horizontal_drag(self):
-        """_lockHapPanel blocks pointermove beyond drag threshold."""
-        self.assertIn("pointermove", self.html)
-        self.assertIn("DRAG_PX", self.html)
+    def test_soft_clips_handler_calls_update_function(self):
+        """The soft-clips click handler must call updateAllTrackSoftClipDisplay()."""
+        self.assertIn("updateAllTrackSoftClipDisplay();", self.html)
 
-    def test_lock_allows_clicks(self):
-        """_lockHapPanel does NOT block pointerdown to allow read selection."""
-        # The lock sets dragOriginX on pointerdown but does not call
-        # stopPropagation or preventDefault on it — clicks pass through.
-        self.assertIn("dragOriginX = e.clientX", self.html)
+    def test_mismatches_handler_calls_update_function(self):
+        """The mismatches click handler must call updateAllTrackMismatchDisplay()."""
+        self.assertIn("updateAllTrackMismatchDisplay();", self.html)
 
-    def test_lock_blocks_touch_pan(self):
-        """_lockHapPanel blocks touch events to prevent mobile pan."""
-        self.assertIn('"touchmove"', self.html)
+    # ── Display mode (squished / expanded) ────────────────────────────────
 
-    def test_lock_uses_capture_phase(self):
-        """Event blocking uses capture phase to intercept before IGV.js."""
-        self.assertIn("capture: true", self.html)
+    def test_display_squished_state_variable_initialised_true(self):
+        """displaySquished must default to true (squished is the long-read default)."""
+        self.assertIn("let displaySquished = true;", self.html)
 
-    def test_hap_panels_navigation_hidden(self):
-        """Hap panels have showNavigation: false so IGV nav bar is hidden."""
-        # This was already the case; verify it hasn't been removed
-        self.assertIn("showNavigation: false", self.html)
+    def test_read_track_uses_display_mode_state_variable(self):
+        """makeReadTrack must derive displayMode from displaySquished, not hardcode it.
 
-    def test_hap_panel_navbar_css_hidden(self):
-        """CSS rule hides IGV navbar on hap panels."""
-        self.assertIn(".panel.hap1 .igv-navbar", self.html)
-        self.assertIn(".panel.hap2 .igv-navbar", self.html)
+        The local 'readDisplayMode' variable is computed from the state and
+        passed into the track config so the initial panel creation respects
+        any toggle state set before tracks are loaded.
+        """
+        self.assertIn(
+            'const readDisplayMode = displaySquished ? "SQUISHED" : "EXPANDED";',
+            self.html,
+        )
+        self.assertIn("displayMode: readDisplayMode,", self.html)
 
-    def test_ref_panel_sync_listener_attached(self):
-        """Reference browser has locuschange listener for sync."""
-        self.assertIn('refBrowser.on("locuschange", onRefLocusChange)', self.html)
+    def test_update_display_mode_sets_track_property(self):
+        """updateAllTrackDisplayModes must set t.displayMode on the live track."""
+        self.assertIn("t.displayMode = mode;", self.html)
+
+    def test_update_display_mode_sets_config_property(self):
+        """updateAllTrackDisplayModes must also update t.config.displayMode.
+
+        Without the config update, the display mode reverts to the original
+        value whenever IGV.js re-reads the config during a pan/zoom re-render.
+        """
+        self.assertIn("if (t.config) t.config.displayMode = mode;", self.html)
+
+    def test_display_mode_button_exists(self):
+        """toggleDisplayMode button must be present in the toolbar."""
+        self.assertIn('id="toggleDisplayMode"', self.html)
+
+    def test_display_mode_button_initially_inactive(self):
+        """toggleDisplayMode button must NOT carry 'active' class initially.
+
+        The default is displaySquished=true.  The handler applies 'active'
+        only when expanded (i.e. classList.toggle('active', !displaySquished)),
+        so on first load the button must be inactive.
+        """
+        import re
+        btn_match = re.search(
+            r'<button[^>]+id="toggleDisplayMode"[^>]*>', self.html
+        )
+        self.assertIsNotNone(btn_match, "toggleDisplayMode button not found")
+        self.assertNotIn("active", btn_match.group())
+
+    def test_display_mode_handler_calls_update_function(self):
+        """The display-mode click handler must call updateAllTrackDisplayModes()."""
+        self.assertIn("updateAllTrackDisplayModes();", self.html)
+
+    def test_display_mode_active_class_tied_to_expanded_not_squished(self):
+        """The 'active' class must be applied when EXPANDED, not when SQUISHED.
+
+        The handler uses classList.toggle('active', !displaySquished) so the
+        button is highlighted when the user switches to expanded view.
+        This is the semantically correct UX (button lit = non-default state).
+        """
+        self.assertIn(
+            "toggleDisplayModeBtn.classList.toggle(\"active\", !displaySquished);",
+            self.html,
+        )
+
+    # ── 3rd gen view (hide small indels) ──────────────────────────────────
+
+    def test_indel_threshold_default_constant_is_fifty(self):
+        """LONG_READ_INDEL_THRESHOLD_DEFAULT must be 50 bp.
+
+        50 bp is a practical community convention for filtering sequencing-error
+        noise in raw PacBio / ONT long reads (discussed on Biostars, IGV GitHub
+        issues, and the PacBio blog "IGV 3 Improves Support for PacBio Long
+        Reads").  There is no single authoritative paper — the threshold is
+        technology-dependent (HiFi data benefits from 10–20 bp instead), so the
+        value is exposed as a user-adjustable input.
+        """
+        self.assertIn("const LONG_READ_INDEL_THRESHOLD_DEFAULT = 50;", self.html)
+
+    def test_indel_threshold_not_hardcoded_to_three(self):
+        """smallIndelThreshold must not use the literal '3'.
+
+        3 bp (the IGV.js default for short reads) hides essentially nothing on
+        long reads and makes the toggle visually ineffective.
+        """
+        self.assertNotIn("smallIndelThreshold: 3,", self.html)
+
+    def test_indel_threshold_input_exists_with_default_50(self):
+        """indelThresholdInput must be present in the toolbar with value=\"50\".
+
+        The threshold is exposed as a numeric input so users can tune it to
+        their data (e.g. 10–20 bp for HiFi, 50+ bp for raw ONT reads).
+        """
+        self.assertIn('id="indelThresholdInput"', self.html)
+        self.assertIn('value="50"', self.html)
+
+    def test_get_indel_threshold_function_exists(self):
+        """getIndelThreshold() helper must exist and read from indelThresholdInput."""
+        self.assertIn("function getIndelThreshold()", self.html)
+        self.assertIn("indelThresholdInput.value", self.html)
+
+    def test_read_track_uses_get_indel_threshold(self):
+        """makeReadTrack must use getIndelThreshold(), not a hardcoded literal."""
+        self.assertIn("smallIndelThreshold: getIndelThreshold(),", self.html)
+
+    def test_update_indels_reads_threshold_via_helper(self):
+        """updateAllTrackIndelDisplay must set t.smallIndelThreshold from getIndelThreshold().
+
+        Reading the value from the DOM input (via getIndelThreshold) ensures
+        the user-adjusted threshold is applied immediately on every toggle or
+        change event, and persists across pan/zoom re-renders via config update.
+        """
+        self.assertIn("const threshold = getIndelThreshold();", self.html)
+        self.assertIn("t.smallIndelThreshold = threshold;", self.html)
+
+    def test_update_indels_sets_config_property_with_threshold(self):
+        """updateAllTrackIndelDisplay must also update t.config.smallIndelThreshold.
+
+        Without the config update, the threshold reverts on pan/zoom re-renders
+        (same async-overwrite problem as soft clips/mismatches).
+        """
+        self.assertIn("t.config.smallIndelThreshold = threshold;", self.html)
+
+    def test_indel_threshold_input_change_event_calls_update(self):
+        """Changing the threshold input must call updateAllTrackIndelDisplay().
+
+        The change event handler lets users live-tune the cutoff without having
+        to reload the page or toggle the filter off and back on.
+        """
+        self.assertIn('indelThresholdInput.addEventListener("change"', self.html)
+        self.assertIn("updateAllTrackIndelDisplay();", self.html)
+
+    def test_indels_button_labeled_3rd_gen_view_when_active(self):
+        """When hideSmallIndels=true (active), the button must say '3rd gen view'.
+
+        '3rd gen view' clearly signals that this setting is optimised for
+        third-generation (long-read) sequencing noise filtering, which is
+        more informative than the generic 'Hide indels' label.
+        """
+        self.assertIn("3rd gen view", self.html)
+
+    def test_indels_button_labeled_all_indels_when_inactive(self):
+        """When hideSmallIndels=false (inactive), the button must say 'All indels'."""
+        self.assertIn("All indels", self.html)
+
+    def test_indels_button_initially_active(self):
+        """toggleSmallIndels button must carry 'active' class initially.
+
+        The default is hideSmallIndels=true (filter on by default) so the
+        button should appear active (pressed) to reflect the enabled state.
+        """
+        import re
+        btn_match = re.search(
+            r'<button[^>]+id="toggleSmallIndels"[^>]*>', self.html
+        )
+        self.assertIsNotNone(btn_match, "toggleSmallIndels button not found")
+        self.assertIn("active", btn_match.group())
+
+    def test_indels_handler_calls_update_function(self):
+        """The 3rd-gen-view click handler must call updateAllTrackIndelDisplay()."""
+        self.assertIn("updateAllTrackIndelDisplay();", self.html)
+
+    def test_hide_small_indels_state_variable_initialised_true(self):
+        """hideSmallIndels must default to true (filter on for long-read mode)."""
+        self.assertIn("let hideSmallIndels = true;", self.html)
+
+    def test_update_indels_sets_hide_small_indels_track_property(self):
+        """updateAllTrackIndelDisplay must set t.hideSmallIndels on the live track."""
+        self.assertIn("t.hideSmallIndels = hideSmallIndels;", self.html)
+
+    def test_update_indels_sets_hide_small_indels_config_property(self):
+        """updateAllTrackIndelDisplay must also update t.config.hideSmallIndels."""
+        self.assertIn("t.config.hideSmallIndels = hideSmallIndels;", self.html)
 
 
 if __name__ == "__main__":

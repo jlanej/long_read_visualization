@@ -29,11 +29,7 @@ The toolbar provides quick-access toggle buttons:
 
 - **☰ Squished / ≡ Expanded** — Switch between compact and full-height read display
 - **🧹 Hide indels / 🔍 Show indels** — Toggle suppression of spurious small indels (≤ 3 bp)
-- **✂️ Show clips / Hide clips** — Toggle display of soft-clipped bases across all panels
-- **🔴 Mismatches / ⚪ Mismatches** — Toggle base-level mismatch display; hide to see only large SVs
 - **Sync panels** — Enable/disable cross-panel coordinate synchronization
-
-> **Note:** Haplotype 1 and Haplotype 2 panels are navigation-locked — zoom and pan are driven exclusively through the Reference panel to prevent accidental drag or scroll that can unload reads.
 
 ## Keyboard Shortcuts
 
