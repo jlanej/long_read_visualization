@@ -517,12 +517,6 @@
         <button id="toggleSmallIndels" class="toolbar-btn active" title="Hide spurious small indels (long-read mode)">
             <span class="btn-icon">🧹</span> Hide indels
         </button>
-        <button id="toggleSoftClips" class="toolbar-btn" title="Show/hide soft-clipped bases on reads">
-            <span class="btn-icon">✂️</span> Show clips
-        </button>
-        <button id="toggleMismatches" class="toolbar-btn active" title="Show/hide base mismatches (SNVs) — hide to see only large SVs">
-            <span class="btn-icon">🔴</span> Mismatches
-        </button>
         <button id="compareReads" class="toolbar-btn" title="Compare read IDs across all three panels">
             <span class="btn-icon">📊</span> Compare Reads
         </button>
@@ -620,8 +614,6 @@
     let translating = false;
     let displaySquished = true;          // default: squished (compact)
     let hideSmallIndels = true;          // default: hide spurious indels (long-read mode)
-    let showSoftClips = false;           // default: hide soft-clipped bases
-    let showMismatches = true;           // default: show base mismatches (SNVs)
     let opGeneration = 0;               // increments on sample/region change to invalidate stale ops
     let hasMappingIndex = false;         // true when server has loaded PAF-based coordinate indices
     let inlineDotPlotsEnabled = false;   // toggle for inline dot plots below IGV panels
@@ -657,8 +649,6 @@
     const statusBar = document.getElementById("statusBar");
     const toggleDisplayModeBtn = document.getElementById("toggleDisplayMode");
     const toggleSmallIndelsBtn = document.getElementById("toggleSmallIndels");
-    const toggleSoftClipsBtn = document.getElementById("toggleSoftClips");
-    const toggleMismatchesBtn = document.getElementById("toggleMismatches");
     const compareReadsBtn = document.getElementById("compareReads");
     const readCompareModal = document.getElementById("readCompareModal");
     const readCompareClose = document.getElementById("readCompareClose");
@@ -1048,8 +1038,7 @@
                 indexURL: baseUrl + url + (isCram ? ".crai" : ".bai"),
                 height: 120,
                 displayMode: readDisplayMode,
-                showSoftClips: showSoftClips,
-                showMismatches: showMismatches,
+                showSoftClips: false,
                 hideSmallIndels: hideSmallIndels,
                 smallIndelThreshold: 3,
                 colorBy: "tag:HP",
@@ -1098,8 +1087,7 @@
                 height: 60,
                 color: color,
                 displayMode: "SQUISHED",
-                showSoftClips: showSoftClips,
-                showMismatches: showMismatches,
+                showSoftClips: false,
                 hideSmallIndels: hideSmallIndels,
                 smallIndelThreshold: 3,
             };
@@ -1243,71 +1231,6 @@
 
         // Attach coordination listener to reference panel
         refBrowser.on("locuschange", onRefLocusChange);
-
-        // Lock hap panels: disable mouse/touch/wheel navigation to prevent
-        // accidental drag or zoom that unloads reads.  Hap panels are driven
-        // exclusively by the reference panel via coordinate translation.
-        _lockHapPanel(document.getElementById("igv-hap1"));
-        _lockHapPanel(document.getElementById("igv-hap2"));
-    }
-
-    // Lock a hap panel against IGV.js viewport navigation (drag-to-pan
-    // and wheel-zoom) while preserving normal read interaction:
-    //   ✓ Click to select a read
-    //   ✓ Right-click for context menu
-    //   ✓ Vertical scroll through stacked reads
-    //   ✗ Horizontal drag-to-pan  (blocked)
-    //   ✗ Wheel zoom              (blocked)
-    //   ✗ Touch pan               (blocked)
-    // Keyboard events are never blocked (accessibility).
-    function _lockHapPanel(el) {
-        if (!el) return;
-        const DRAG_PX = 3;  // px threshold to distinguish click from drag
-
-        // ── Prevent horizontal drag-to-pan ──────────────────────
-        // Track pointer-down position; suppress pointermove propagation
-        // once horizontal movement exceeds a small threshold so IGV.js
-        // never sees the drag.  Clicks (down → up with no large move)
-        // pass through normally for read selection and context menus.
-        let dragOriginX = null;
-
-        el.addEventListener("pointerdown", (e) => {
-            dragOriginX = e.clientX;
-        }, { capture: true });
-
-        el.addEventListener("pointermove", (e) => {
-            if (dragOriginX !== null &&
-                Math.abs(e.clientX - dragOriginX) > DRAG_PX) {
-                e.stopPropagation();
-            }
-        }, { capture: true });
-
-        const clearDrag = () => { dragOriginX = null; };
-        el.addEventListener("pointerup", clearDrag, { capture: true });
-        el.addEventListener("pointercancel", clearDrag, { capture: true });
-
-        // ── Block wheel-zoom but keep vertical read scrolling ───
-        // Walk up from the event target to find the nearest vertically
-        // scrollable container (IGV.js alignment track overflow div)
-        // and forward the deltaY so read pile-ups still scroll.
-        el.addEventListener("wheel", (e) => {
-            let scroller = e.target;
-            while (scroller && scroller !== el) {
-                if (scroller.scrollHeight > scroller.clientHeight) {
-                    scroller.scrollTop += e.deltaY;
-                    break;
-                }
-                scroller = scroller.parentElement;
-            }
-            e.preventDefault();   // block IGV.js zoom
-            e.stopPropagation();
-        }, { capture: true, passive: false });
-
-        // ── Block touch-based horizontal pan (mobile) ───────────
-        el.addEventListener("touchmove", (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-        }, { capture: true, passive: false });
     }
 
     // ── Coordinate translation & panel sync ─────────────────────────────────
@@ -1745,34 +1668,6 @@
         }
     }
 
-    function updateAllTrackSoftClipDisplay() {
-        for (const browser of [refBrowser, hap1Browser, hap2Browser]) {
-            if (!browser) continue;
-            for (const tv of browser.trackViews) {
-                const t = tv.track;
-                if (t && t.type === "alignment") {
-                    t.showSoftClips = showSoftClips;
-                    if (t.config) t.config.showSoftClips = showSoftClips;
-                }
-            }
-            browser.updateViews();
-        }
-    }
-
-    function updateAllTrackMismatchDisplay() {
-        for (const browser of [refBrowser, hap1Browser, hap2Browser]) {
-            if (!browser) continue;
-            for (const tv of browser.trackViews) {
-                const t = tv.track;
-                if (t && t.type === "alignment") {
-                    t.showMismatches = showMismatches;
-                    if (t.config) t.config.showMismatches = showMismatches;
-                }
-            }
-            browser.updateViews();
-        }
-    }
-
     toggleDisplayModeBtn.addEventListener("click", () => {
         displaySquished = !displaySquished;
         toggleDisplayModeBtn.innerHTML = displaySquished
@@ -1789,24 +1684,6 @@
             ? '<span class="btn-icon">🧹</span> Hide indels'
             : '<span class="btn-icon">🔍</span> Show indels';
         updateAllTrackIndelDisplay();
-    });
-
-    toggleSoftClipsBtn.addEventListener("click", () => {
-        showSoftClips = !showSoftClips;
-        toggleSoftClipsBtn.classList.toggle("active", showSoftClips);
-        toggleSoftClipsBtn.innerHTML = showSoftClips
-            ? '<span class="btn-icon">✂️</span> Hide clips'
-            : '<span class="btn-icon">✂️</span> Show clips';
-        updateAllTrackSoftClipDisplay();
-    });
-
-    toggleMismatchesBtn.addEventListener("click", () => {
-        showMismatches = !showMismatches;
-        toggleMismatchesBtn.classList.toggle("active", showMismatches);
-        toggleMismatchesBtn.innerHTML = showMismatches
-            ? '<span class="btn-icon">🔴</span> Mismatches'
-            : '<span class="btn-icon">⚪</span> Mismatches';
-        updateAllTrackMismatchDisplay();
     });
 
     // ── Read ID comparison ──────────────────────────────────────────────────
