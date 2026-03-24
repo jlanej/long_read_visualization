@@ -1471,5 +1471,143 @@ class TestFrontendMemoryGuards(unittest.TestCase):
         self.assertIn("config.tracks.hap1_to_hap2_bam", html)
 
 
+class TestFrontendDisplayToggles(unittest.TestCase):
+    """Tests for display toggle buttons in the visualization frontend."""
+
+    @classmethod
+    def setUpClass(cls):
+        index_path = os.path.join(_REPO_ROOT, "server", "static", "index.html")
+        with open(index_path, encoding="utf-8") as fh:
+            cls.html = fh.read()
+
+    # ── Indels toggle ────────────────────────────────────────────────────
+
+    def test_indels_toggle_button_present(self):
+        """Indels toggle button is present in toolbar."""
+        self.assertIn('id="toggleSmallIndels"', self.html)
+
+    def test_indels_default_state_hides_small_indels(self):
+        """Small indels are hidden by default (hideSmallIndels = true)."""
+        self.assertIn("let hideSmallIndels = true;", self.html)
+
+    def test_indels_threshold_matches_igv_thirdgen(self):
+        """smallIndelThreshold is 3 bp, matching Java IGV third-gen preset."""
+        self.assertIn("smallIndelThreshold: 3", self.html)
+
+    def test_indels_toggle_updates_all_panels(self):
+        """updateAllTrackIndelDisplay iterates all three browsers."""
+        self.assertIn("function updateAllTrackIndelDisplay()", self.html)
+        self.assertIn("t.hideSmallIndels = hideSmallIndels;", self.html)
+
+    # ── Soft clips toggle ────────────────────────────────────────────────
+
+    def test_softclips_toggle_button_present(self):
+        """Soft clips toggle button is present in toolbar."""
+        self.assertIn('id="toggleSoftClips"', self.html)
+
+    def test_softclips_default_state_hidden(self):
+        """Soft clips are hidden by default."""
+        self.assertIn("let showSoftClips = false;", self.html)
+
+    def test_softclips_state_variable_used_in_track_config(self):
+        """Tracks use the showSoftClips state variable, not a hardcoded value."""
+        self.assertIn("showSoftClips: showSoftClips,", self.html)
+
+    def test_softclips_toggle_updates_all_panels(self):
+        """updateAllTrackSoftClipDisplay iterates all three browsers."""
+        self.assertIn("function updateAllTrackSoftClipDisplay()", self.html)
+        self.assertIn("t.showSoftClips = showSoftClips;", self.html)
+
+    def test_softclips_toggle_has_click_handler(self):
+        """Soft clips button has a click event handler."""
+        self.assertIn("toggleSoftClipsBtn.addEventListener", self.html)
+
+    # ── Mismatches / SNV toggle ──────────────────────────────────────────
+
+    def test_mismatches_toggle_button_present(self):
+        """Mismatches toggle button is present in toolbar."""
+        self.assertIn('id="toggleMismatches"', self.html)
+
+    def test_mismatches_default_state_shown(self):
+        """Mismatches are shown by default."""
+        self.assertIn("let showMismatches = true;", self.html)
+
+    def test_mismatches_state_variable_used_in_track_config(self):
+        """Tracks use the showMismatches state variable."""
+        self.assertIn("showMismatches: showMismatches,", self.html)
+
+    def test_mismatches_toggle_updates_all_panels(self):
+        """updateAllTrackMismatchDisplay iterates all three browsers."""
+        self.assertIn("function updateAllTrackMismatchDisplay()", self.html)
+        self.assertIn("t.showMismatches = showMismatches;", self.html)
+
+    def test_mismatches_toggle_has_click_handler(self):
+        """Mismatches button has a click event handler."""
+        self.assertIn("toggleMismatchesBtn.addEventListener", self.html)
+
+
+class TestFrontendHapPanelLockdown(unittest.TestCase):
+    """Tests that haplotype panels are navigation-locked."""
+
+    @classmethod
+    def setUpClass(cls):
+        index_path = os.path.join(_REPO_ROOT, "server", "static", "index.html")
+        with open(index_path, encoding="utf-8") as fh:
+            cls.html = fh.read()
+
+    def test_lock_function_defined(self):
+        """_lockHapPanel helper function is defined."""
+        self.assertIn("function _lockHapPanel(el)", self.html)
+
+    def test_hap1_panel_locked(self):
+        """Hap1 panel is locked after browser creation."""
+        self.assertIn('_lockHapPanel(document.getElementById("igv-hap1"))', self.html)
+
+    def test_hap2_panel_locked(self):
+        """Hap2 panel is locked after browser creation."""
+        self.assertIn('_lockHapPanel(document.getElementById("igv-hap2"))', self.html)
+
+    def test_lock_blocks_wheel_zoom(self):
+        """_lockHapPanel intercepts wheel events to prevent zoom."""
+        self.assertIn('"wheel"', self.html)
+
+    def test_lock_preserves_vertical_scroll(self):
+        """_lockHapPanel forwards deltaY to scrollable container for reads."""
+        self.assertIn("scroller.scrollTop += e.deltaY", self.html)
+
+    def test_lock_blocks_horizontal_drag(self):
+        """_lockHapPanel blocks pointermove beyond drag threshold."""
+        self.assertIn("pointermove", self.html)
+        self.assertIn("DRAG_PX", self.html)
+
+    def test_lock_allows_clicks(self):
+        """_lockHapPanel does NOT block pointerdown to allow read selection."""
+        # The lock sets dragOriginX on pointerdown but does not call
+        # stopPropagation or preventDefault on it — clicks pass through.
+        self.assertIn("dragOriginX = e.clientX", self.html)
+
+    def test_lock_blocks_touch_pan(self):
+        """_lockHapPanel blocks touch events to prevent mobile pan."""
+        self.assertIn('"touchmove"', self.html)
+
+    def test_lock_uses_capture_phase(self):
+        """Event blocking uses capture phase to intercept before IGV.js."""
+        self.assertIn("capture: true", self.html)
+
+    def test_hap_panels_navigation_hidden(self):
+        """Hap panels have showNavigation: false so IGV nav bar is hidden."""
+        # This was already the case; verify it hasn't been removed
+        self.assertIn("showNavigation: false", self.html)
+
+    def test_hap_panel_navbar_css_hidden(self):
+        """CSS rule hides IGV navbar on hap panels."""
+        self.assertIn(".panel.hap1 .igv-navbar", self.html)
+        self.assertIn(".panel.hap2 .igv-navbar", self.html)
+
+    def test_ref_panel_sync_listener_attached(self):
+        """Reference browser has locuschange listener for sync."""
+        self.assertIn('refBrowser.on("locuschange", onRefLocusChange)', self.html)
+
+
 if __name__ == "__main__":
     unittest.main()
