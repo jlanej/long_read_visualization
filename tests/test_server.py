@@ -1567,17 +1567,27 @@ class TestFrontendHapPanelLockdown(unittest.TestCase):
         """Hap2 panel is locked after browser creation."""
         self.assertIn('_lockHapPanel(document.getElementById("igv-hap2"))', self.html)
 
-    def test_lock_blocks_wheel_events(self):
-        """_lockHapPanel blocks wheel events to prevent zoom."""
+    def test_lock_blocks_wheel_zoom(self):
+        """_lockHapPanel intercepts wheel events to prevent zoom."""
         self.assertIn('"wheel"', self.html)
 
-    def test_lock_blocks_mousedown_events(self):
-        """_lockHapPanel blocks mousedown events to prevent drag."""
-        self.assertIn('"mousedown"', self.html)
+    def test_lock_preserves_vertical_scroll(self):
+        """_lockHapPanel forwards deltaY to scrollable container for reads."""
+        self.assertIn("scroller.scrollTop += e.deltaY", self.html)
 
-    def test_lock_blocks_touch_events(self):
+    def test_lock_blocks_horizontal_drag(self):
+        """_lockHapPanel blocks pointermove beyond drag threshold."""
+        self.assertIn("pointermove", self.html)
+        self.assertIn("DRAG_PX", self.html)
+
+    def test_lock_allows_clicks(self):
+        """_lockHapPanel does NOT block pointerdown to allow read selection."""
+        # The lock sets dragOriginX on pointerdown but does not call
+        # stopPropagation or preventDefault on it — clicks pass through.
+        self.assertIn("dragOriginX = e.clientX", self.html)
+
+    def test_lock_blocks_touch_pan(self):
         """_lockHapPanel blocks touch events to prevent mobile pan."""
-        self.assertIn('"touchstart"', self.html)
         self.assertIn('"touchmove"', self.html)
 
     def test_lock_uses_capture_phase(self):

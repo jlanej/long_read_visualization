@@ -1251,18 +1251,63 @@
         _lockHapPanel(document.getElementById("igv-hap2"));
     }
 
-    // Block navigation-related pointer events on a container element.
-    // This prevents IGV.js from interpreting drag/scroll/pinch as viewport
-    // navigation while still allowing the browser to render alignment data.
-    // Keyboard events are intentionally NOT blocked so assistive technologies
-    // and screen readers can still interact.  Hap panel navigation is driven
-    // exclusively by the reference panel; use ←/→ or [/] keyboard shortcuts.
+    // Lock a hap panel against IGV.js viewport navigation (drag-to-pan
+    // and wheel-zoom) while preserving normal read interaction:
+    //   ✓ Click to select a read
+    //   ✓ Right-click for context menu
+    //   ✓ Vertical scroll through stacked reads
+    //   ✗ Horizontal drag-to-pan  (blocked)
+    //   ✗ Wheel zoom              (blocked)
+    //   ✗ Touch pan               (blocked)
+    // Keyboard events are never blocked (accessibility).
     function _lockHapPanel(el) {
         if (!el) return;
-        const block = (e) => { e.preventDefault(); e.stopPropagation(); };
-        for (const evt of ["mousedown", "wheel", "touchstart", "touchmove", "pointerdown"]) {
-            el.addEventListener(evt, block, { capture: true, passive: false });
-        }
+        const DRAG_PX = 3;  // px threshold to distinguish click from drag
+
+        // ── Prevent horizontal drag-to-pan ──────────────────────
+        // Track pointer-down position; suppress pointermove propagation
+        // once horizontal movement exceeds a small threshold so IGV.js
+        // never sees the drag.  Clicks (down → up with no large move)
+        // pass through normally for read selection and context menus.
+        let dragOriginX = null;
+
+        el.addEventListener("pointerdown", (e) => {
+            dragOriginX = e.clientX;
+        }, { capture: true });
+
+        el.addEventListener("pointermove", (e) => {
+            if (dragOriginX !== null &&
+                Math.abs(e.clientX - dragOriginX) > DRAG_PX) {
+                e.stopPropagation();
+            }
+        }, { capture: true });
+
+        const clearDrag = () => { dragOriginX = null; };
+        el.addEventListener("pointerup", clearDrag, { capture: true });
+        el.addEventListener("pointercancel", clearDrag, { capture: true });
+
+        // ── Block wheel-zoom but keep vertical read scrolling ───
+        // Walk up from the event target to find the nearest vertically
+        // scrollable container (IGV.js alignment track overflow div)
+        // and forward the deltaY so read pile-ups still scroll.
+        el.addEventListener("wheel", (e) => {
+            let scroller = e.target;
+            while (scroller && scroller !== el) {
+                if (scroller.scrollHeight > scroller.clientHeight) {
+                    scroller.scrollTop += e.deltaY;
+                    break;
+                }
+                scroller = scroller.parentElement;
+            }
+            e.preventDefault();   // block IGV.js zoom
+            e.stopPropagation();
+        }, { capture: true, passive: false });
+
+        // ── Block touch-based horizontal pan (mobile) ───────────
+        el.addEventListener("touchmove", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+        }, { capture: true, passive: false });
     }
 
     // ── Coordinate translation & panel sync ─────────────────────────────────
