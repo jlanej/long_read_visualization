@@ -907,8 +907,17 @@ def build_markdown(screenshots, timestamp):
             "full-height read display\n"
             "- **🧹 Hide indels / 🔍 Show indels** — Toggle suppression of "
             "spurious small indels (≤ 3 bp)\n"
+            "- **✂️ Show clips / Hide clips** — Toggle display of "
+            "soft-clipped bases across all panels\n"
+            "- **🔴 Mismatches / ⚪ Mismatches** — Toggle base-level "
+            "mismatch display; hide to see only large SVs\n"
             "- **Sync panels** — Enable/disable cross-panel coordinate "
             "synchronization\n"
+            "\n"
+            "> **Note:** Haplotype 1 and Haplotype 2 panels are "
+            "navigation-locked — zoom and pan are driven exclusively "
+            "through the Reference panel to prevent accidental drag or "
+            "scroll that can unload reads.\n"
         ),
         "## Keyboard Shortcuts\n",
         (

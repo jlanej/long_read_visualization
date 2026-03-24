@@ -517,6 +517,12 @@
         <button id="toggleSmallIndels" class="toolbar-btn active" title="Hide spurious small indels (long-read mode)">
             <span class="btn-icon">🧹</span> Hide indels
         </button>
+        <button id="toggleSoftClips" class="toolbar-btn" title="Show/hide soft-clipped bases on reads">
+            <span class="btn-icon">✂️</span> Show clips
+        </button>
+        <button id="toggleMismatches" class="toolbar-btn active" title="Show/hide base mismatches (SNVs) — hide to see only large SVs">
+            <span class="btn-icon">🔴</span> Mismatches
+        </button>
         <button id="compareReads" class="toolbar-btn" title="Compare read IDs across all three panels">
             <span class="btn-icon">📊</span> Compare Reads
         </button>
@@ -614,6 +620,8 @@
     let translating = false;
     let displaySquished = true;          // default: squished (compact)
     let hideSmallIndels = true;          // default: hide spurious indels (long-read mode)
+    let showSoftClips = false;           // default: hide soft-clipped bases
+    let showMismatches = true;           // default: show base mismatches (SNVs)
     let opGeneration = 0;               // increments on sample/region change to invalidate stale ops
     let hasMappingIndex = false;         // true when server has loaded PAF-based coordinate indices
     let inlineDotPlotsEnabled = false;   // toggle for inline dot plots below IGV panels
@@ -649,6 +657,8 @@
     const statusBar = document.getElementById("statusBar");
     const toggleDisplayModeBtn = document.getElementById("toggleDisplayMode");
     const toggleSmallIndelsBtn = document.getElementById("toggleSmallIndels");
+    const toggleSoftClipsBtn = document.getElementById("toggleSoftClips");
+    const toggleMismatchesBtn = document.getElementById("toggleMismatches");
     const compareReadsBtn = document.getElementById("compareReads");
     const readCompareModal = document.getElementById("readCompareModal");
     const readCompareClose = document.getElementById("readCompareClose");
@@ -1038,7 +1048,8 @@
                 indexURL: baseUrl + url + (isCram ? ".crai" : ".bai"),
                 height: 120,
                 displayMode: readDisplayMode,
-                showSoftClips: false,
+                showSoftClips: showSoftClips,
+                showMismatches: showMismatches,
                 hideSmallIndels: hideSmallIndels,
                 smallIndelThreshold: 3,
                 colorBy: "tag:HP",
@@ -1087,7 +1098,8 @@
                 height: 60,
                 color: color,
                 displayMode: "SQUISHED",
-                showSoftClips: false,
+                showSoftClips: showSoftClips,
+                showMismatches: showMismatches,
                 hideSmallIndels: hideSmallIndels,
                 smallIndelThreshold: 3,
             };
@@ -1231,6 +1243,23 @@
 
         // Attach coordination listener to reference panel
         refBrowser.on("locuschange", onRefLocusChange);
+
+        // Lock hap panels: disable mouse/touch/wheel navigation to prevent
+        // accidental drag or zoom that unloads reads.  Hap panels are driven
+        // exclusively by the reference panel via coordinate translation.
+        _lockHapPanel(document.getElementById("igv-hap1"));
+        _lockHapPanel(document.getElementById("igv-hap2"));
+    }
+
+    // Block navigation-related pointer events on a container element.
+    // This prevents IGV.js from interpreting drag/scroll/pinch as viewport
+    // navigation while still allowing the browser to render alignment data.
+    function _lockHapPanel(el) {
+        if (!el) return;
+        const block = (e) => { e.preventDefault(); e.stopPropagation(); };
+        for (const evt of ["mousedown", "wheel", "touchstart", "touchmove", "pointerdown"]) {
+            el.addEventListener(evt, block, { capture: true, passive: false });
+        }
     }
 
     // ── Coordinate translation & panel sync ─────────────────────────────────
@@ -1668,6 +1697,34 @@
         }
     }
 
+    function updateAllTrackSoftClipDisplay() {
+        for (const browser of [refBrowser, hap1Browser, hap2Browser]) {
+            if (!browser) continue;
+            for (const tv of browser.trackViews) {
+                const t = tv.track;
+                if (t && t.type === "alignment") {
+                    t.showSoftClips = showSoftClips;
+                    if (t.config) t.config.showSoftClips = showSoftClips;
+                }
+            }
+            browser.updateViews();
+        }
+    }
+
+    function updateAllTrackMismatchDisplay() {
+        for (const browser of [refBrowser, hap1Browser, hap2Browser]) {
+            if (!browser) continue;
+            for (const tv of browser.trackViews) {
+                const t = tv.track;
+                if (t && t.type === "alignment") {
+                    t.showMismatches = showMismatches;
+                    if (t.config) t.config.showMismatches = showMismatches;
+                }
+            }
+            browser.updateViews();
+        }
+    }
+
     toggleDisplayModeBtn.addEventListener("click", () => {
         displaySquished = !displaySquished;
         toggleDisplayModeBtn.innerHTML = displaySquished
@@ -1684,6 +1741,24 @@
             ? '<span class="btn-icon">🧹</span> Hide indels'
             : '<span class="btn-icon">🔍</span> Show indels';
         updateAllTrackIndelDisplay();
+    });
+
+    toggleSoftClipsBtn.addEventListener("click", () => {
+        showSoftClips = !showSoftClips;
+        toggleSoftClipsBtn.classList.toggle("active", showSoftClips);
+        toggleSoftClipsBtn.innerHTML = showSoftClips
+            ? '<span class="btn-icon">✂️</span> Hide clips'
+            : '<span class="btn-icon">✂️</span> Show clips';
+        updateAllTrackSoftClipDisplay();
+    });
+
+    toggleMismatchesBtn.addEventListener("click", () => {
+        showMismatches = !showMismatches;
+        toggleMismatchesBtn.classList.toggle("active", showMismatches);
+        toggleMismatchesBtn.innerHTML = showMismatches
+            ? '<span class="btn-icon">🔴</span> Mismatches'
+            : '<span class="btn-icon">⚪</span> Mismatches';
+        updateAllTrackMismatchDisplay();
     });
 
     // ── Read ID comparison ──────────────────────────────────────────────────
