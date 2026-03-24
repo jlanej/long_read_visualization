@@ -1581,6 +1581,71 @@ class TestFrontendDisplayToggles(unittest.TestCase):
         """The mismatches click handler must call updateAllTrackMismatchDisplay()."""
         self.assertIn("updateAllTrackMismatchDisplay();", self.html)
 
+    # ── Display mode (squished / expanded) ────────────────────────────────
+
+    def test_display_squished_state_variable_initialised_true(self):
+        """displaySquished must default to true (squished is the long-read default)."""
+        self.assertIn("let displaySquished = true;", self.html)
+
+    def test_read_track_uses_display_mode_state_variable(self):
+        """makeReadTrack must derive displayMode from displaySquished, not hardcode it.
+
+        The local 'readDisplayMode' variable is computed from the state and
+        passed into the track config so the initial panel creation respects
+        any toggle state set before tracks are loaded.
+        """
+        self.assertIn(
+            'const readDisplayMode = displaySquished ? "SQUISHED" : "EXPANDED";',
+            self.html,
+        )
+        self.assertIn("displayMode: readDisplayMode,", self.html)
+
+    def test_update_display_mode_sets_track_property(self):
+        """updateAllTrackDisplayModes must set t.displayMode on the live track."""
+        self.assertIn("t.displayMode = mode;", self.html)
+
+    def test_update_display_mode_sets_config_property(self):
+        """updateAllTrackDisplayModes must also update t.config.displayMode.
+
+        Without the config update, the display mode reverts to the original
+        value whenever IGV.js re-reads the config during a pan/zoom re-render.
+        """
+        self.assertIn("if (t.config) t.config.displayMode = mode;", self.html)
+
+    def test_display_mode_button_exists(self):
+        """toggleDisplayMode button must be present in the toolbar."""
+        self.assertIn('id="toggleDisplayMode"', self.html)
+
+    def test_display_mode_button_initially_inactive(self):
+        """toggleDisplayMode button must NOT carry 'active' class initially.
+
+        The default is displaySquished=true.  The handler applies 'active'
+        only when expanded (i.e. classList.toggle('active', !displaySquished)),
+        so on first load the button must be inactive.
+        """
+        import re
+        btn_match = re.search(
+            r'<button[^>]+id="toggleDisplayMode"[^>]*>', self.html
+        )
+        self.assertIsNotNone(btn_match, "toggleDisplayMode button not found")
+        self.assertNotIn("active", btn_match.group())
+
+    def test_display_mode_handler_calls_update_function(self):
+        """The display-mode click handler must call updateAllTrackDisplayModes()."""
+        self.assertIn("updateAllTrackDisplayModes();", self.html)
+
+    def test_display_mode_active_class_tied_to_expanded_not_squished(self):
+        """The 'active' class must be applied when EXPANDED, not when SQUISHED.
+
+        The handler uses classList.toggle('active', !displaySquished) so the
+        button is highlighted when the user switches to expanded view.
+        This is the semantically correct UX (button lit = non-default state).
+        """
+        self.assertIn(
+            "toggleDisplayModeBtn.classList.toggle(\"active\", !displaySquished);",
+            self.html,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
