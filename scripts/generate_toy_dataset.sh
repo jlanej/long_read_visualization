@@ -89,7 +89,19 @@ done
 [[ -z "${CRAM}" ]]            && { echo "ERROR: --cram is required" >&2; usage; }
 [[ -z "${REFERENCE}" ]]       && { echo "ERROR: --reference is required" >&2; usage; }
 [[ -z "${OUTPUT_DIR}" ]]      && { echo "ERROR: --output-dir is required" >&2; usage; }
-[[ -f "${CRAM}" ]] || { echo "ERROR: --cram file not found: ${CRAM}" >&2; exit 1; }
+
+if [[ ! -f "${CRAM}" ]]; then
+    CRAM_BASENAME="$(basename "${CRAM}")"
+    CRAM_CANDIDATE="${PIPELINE_OUTPUT}/${CRAM_BASENAME}"
+    if [[ -f "${CRAM_CANDIDATE}" ]]; then
+        echo "WARNING: --cram file not found: ${CRAM}" >&2
+        echo "         Using ${CRAM_CANDIDATE} instead." >&2
+        CRAM="${CRAM_CANDIDATE}"
+    else
+        echo "ERROR: --cram file not found: ${CRAM}" >&2
+        exit 1
+    fi
+fi
 
 # ── Derive sample name if not provided ──────────────────────────────────────
 if [[ -z "${SAMPLE_NAME}" ]]; then

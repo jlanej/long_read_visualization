@@ -590,6 +590,33 @@ class TestGenerateToyDatasetScriptIndexDiscovery(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("--cram file not found", result.stderr)
 
+    def test_falls_back_to_pipeline_output_cram_basename(self):
+        """If --cram path is wrong but basename exists in pipeline output, use it."""
+        self._touch(os.path.join(self.tmpdir, "sample_hap1_to_ref.mapping.json.gz"))
+        self._touch(os.path.join(self.tmpdir, "sample_hap2_to_ref.mapping.json.gz"))
+        cram_basename = "sample_reads.hp.cram"
+        self._touch(os.path.join(self.tmpdir, cram_basename))
+        cmd = [
+            "bash",
+            self.script,
+            "--pipeline-output", self.tmpdir,
+            "--hap1", "/dev/null",
+            "--hap2", "/dev/null",
+            "--reference", "/dev/null",
+            "--cram", os.path.join(self.tmpdir, "wrong_dir", cram_basename),
+            "--output-dir", os.path.join(self.tmpdir, "toy"),
+            "--vcf", os.path.join(self.tmpdir, "missing.vcf.gz"),
+        ]
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, cwd=self.repo_root, check=False
+        )
+        self.assertIn("WARNING: --cram file not found", result.stderr)
+        self.assertIn(
+            f"Using {os.path.join(self.tmpdir, cram_basename)} instead.",
+            result.stderr,
+        )
+        self.assertIn("VCF not found", result.stderr)
+
     def test_example_output_paths_computed_correctly(self):
         """Example command paths are computed via EXAMPLE_OUT logic."""
         with open(self.script, encoding="utf-8") as fh:
