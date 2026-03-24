@@ -590,8 +590,8 @@ class TestGenerateToyDatasetScriptIndexDiscovery(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("--cram file not found", result.stderr)
 
-    def test_script_no_longer_hardcodes_work_prefix_in_examples(self):
-        """Example command uses computed prefix instead of '/work/${OUTPUT_DIR}'."""
+    def test_example_output_paths_computed_correctly(self):
+        """Example command paths are computed via EXAMPLE_OUT logic."""
         with open(self.script, encoding="utf-8") as fh:
             script_text = fh.read()
         self.assertIn('EXAMPLE_OUT="${OUTPUT_DIR}"', script_text)
