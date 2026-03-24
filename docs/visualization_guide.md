@@ -1,6 +1,6 @@
 # Long Read Visualization — User Guide
 
-> Auto-generated on 2026-03-24 00:44 UTC
+> Auto-generated on 2026-03-24 01:37 UTC
 
 ## Overview
 
@@ -33,9 +33,7 @@ The toolbar provides quick-access toggle buttons:
 - **🔴 Mismatches / ⚪ Mismatches** — Toggle base-level mismatch display; hide to see only large SVs
 - **Sync panels** — Enable/disable cross-panel coordinate synchronization
 
-> **Note:** Haplotype 1 and Haplotype 2 panels are navigation-locked — zoom and
-> pan are driven exclusively through the Reference panel to prevent accidental
-> drag or scroll that can unload reads.
+> **Note:** Haplotype 1 and Haplotype 2 panels are navigation-locked — zoom and pan are driven exclusively through the Reference panel to prevent accidental drag or scroll that can unload reads.
 
 ## Keyboard Shortcuts
 
