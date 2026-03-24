@@ -460,7 +460,7 @@
     /* ── Inline dot plot panel ─────────────────────────────────────────── */
     .inline-dotplot-panel {
         background: var(--surface);
-        border-top: 1px solid var(--border);
+        border-bottom: 1px solid var(--border);
         padding: 8px 12px;
         overflow-x: auto;
         flex: 0 0 auto;
@@ -568,7 +568,7 @@
         <button id="dotPlotBtn" class="toolbar-btn" title="Generate k-mer dot plots comparing sequences across panels">
             <span class="btn-icon">🔵</span> Dot Plots
         </button>
-        <button id="inlineDotPlotToggle" class="toolbar-btn" title="Show auto-refreshing dot plots below IGV panels">
+        <button id="inlineDotPlotToggle" class="toolbar-btn" title="Show auto-refreshing dot plots above IGV panels">
             <span class="btn-icon">📈</span> Inline Dots
         </button>
     </div>
@@ -576,6 +576,14 @@
 
 <!-- Panels -->
 <div class="panels">
+    <!-- Inline dot plot panel (toggled via toolbar) — shown above IGV tracks -->
+    <div class="inline-dotplot-panel hidden" id="inlineDotPlotPanel">
+        <div class="inline-dp-header">
+            <strong>📈 Inline Dot Plots</strong>
+            <span class="dp-status" id="inlineDpStatus">Waiting for region…</span>
+        </div>
+        <div id="inlineDotPlotBody"></div>
+    </div>
     <div class="panel ref">
         <div class="panel-header">
             <span>Reference</span>
@@ -598,14 +606,6 @@
             <span class="locus" id="hap2Locus"></span>
         </div>
         <div class="panel-body"><div id="igv-hap2"></div></div>
-    </div>
-    <!-- Inline dot plot panel (toggled via toolbar) -->
-    <div class="inline-dotplot-panel hidden" id="inlineDotPlotPanel">
-        <div class="inline-dp-header">
-            <strong>📈 Inline Dot Plots</strong>
-            <span class="dp-status" id="inlineDpStatus">Waiting for region…</span>
-        </div>
-        <div id="inlineDotPlotBody"></div>
     </div>
 </div>
 
@@ -2378,12 +2378,33 @@
             if (hap2Locus) params.set("hap2", hap2Locus);
         }
 
-        // Send SV event coordinates for the reference-axis highlight
+        // Send SV event coordinates for the reference-axis highlight.
+        // In the toy-dataset (fasta_region) case the IGV browser treats the
+        // fasta_region string (e.g. "chr1:112064095-112277008") as the
+        // chromosome name, so its locus is "chr1:112064095-112277008:0-N".
+        // region.start/end are in real genomic space and must be converted
+        // to fasta-local offsets so the server can compute the correct
+        // on-canvas highlight position.
         if (currentRegionIdx >= 0 && currentRegionIdx < regions.length) {
             const r = regions[currentRegionIdx];
             if (r.start != null && r.end != null) {
-                params.set("event_start", String(r.start));
-                params.set("event_end", String(r.end));
+                let evStart = r.start;
+                let evEnd = r.end;
+                if (r.fasta_region && refLocus &&
+                        refLocus.startsWith(r.fasta_region + ":")) {
+                    const fm = r.fasta_region.match(/^(.+):(\d+)-(\d+)$/);
+                    if (fm) {
+                        const fastaStart = parseInt(fm[2], 10);
+                        evStart = r.start - fastaStart;
+                        evEnd = r.end - fastaStart;
+                    }
+                }
+                if (evStart < evEnd) {
+                    params.set("event_start", String(evStart));
+                    params.set("event_end", String(evEnd));
+                } else if (evStart >= evEnd) {
+                    console.warn("[LRV] Skipping event highlight: evStart >= evEnd", evStart, evEnd);
+                }
             }
         }
 
