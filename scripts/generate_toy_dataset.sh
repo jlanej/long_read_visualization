@@ -89,6 +89,7 @@ done
 [[ -z "${CRAM}" ]]            && { echo "ERROR: --cram is required" >&2; usage; }
 [[ -z "${REFERENCE}" ]]       && { echo "ERROR: --reference is required" >&2; usage; }
 [[ -z "${OUTPUT_DIR}" ]]      && { echo "ERROR: --output-dir is required" >&2; usage; }
+[[ -f "${CRAM}" ]] || { echo "ERROR: --cram file not found: ${CRAM}" >&2; exit 1; }
 
 # ── Derive sample name if not provided ──────────────────────────────────────
 if [[ -z "${SAMPLE_NAME}" ]]; then
@@ -191,13 +192,19 @@ python3 "${SRC_DIR}/generate_toy_dataset.py" \
 echo ""
 echo "Toy dataset ready in ${OUTPUT_DIR}/"
 echo ""
+
+EXAMPLE_OUT="${OUTPUT_DIR}"
+if [[ "${EXAMPLE_OUT}" != /* ]]; then
+    EXAMPLE_OUT="/work/${EXAMPLE_OUT}"
+fi
+
 echo "Run the pipeline on the toy dataset:"
 echo "  apptainer run \\"
 echo "      --bind \"\${PWD}:/work\" \\"
 echo "      docker://ghcr.io/jlanej/long_read_visualization:main \\"
-echo "      --hap1       /work/${OUTPUT_DIR}/toy_hap1.fa.gz \\"
-echo "      --hap2       /work/${OUTPUT_DIR}/toy_hap2.fa.gz \\"
-echo "      --reference  /work/${OUTPUT_DIR}/toy_reference.fa.gz \\"
-echo "      --cram       /work/${OUTPUT_DIR}/toy_reads.bam \\"
-echo "      --output-dir /work/${OUTPUT_DIR}/pipeline_output \\"
+echo "      --hap1       ${EXAMPLE_OUT}/toy_hap1.fa.gz \\"
+echo "      --hap2       ${EXAMPLE_OUT}/toy_hap2.fa.gz \\"
+echo "      --reference  ${EXAMPLE_OUT}/toy_reference.fa.gz \\"
+echo "      --cram       ${EXAMPLE_OUT}/toy_reads.bam \\"
+echo "      --output-dir ${EXAMPLE_OUT}/pipeline_output \\"
 echo "      --ont"

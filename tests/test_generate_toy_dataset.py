@@ -526,7 +526,10 @@ class TestGenerateToyDatasetScriptIndexDiscovery(unittest.TestCase):
     def _touch(self, path):
         open(path, "a", encoding="utf-8").close()
 
-    def _run_script(self, cram_name):
+    def _run_script(self, cram_name, create_cram=True):
+        cram_path = os.path.join(self.tmpdir, cram_name)
+        if create_cram:
+            self._touch(cram_path)
         cmd = [
             "bash",
             self.script,
@@ -534,7 +537,7 @@ class TestGenerateToyDatasetScriptIndexDiscovery(unittest.TestCase):
             "--hap1", "/dev/null",
             "--hap2", "/dev/null",
             "--reference", "/dev/null",
-            "--cram", os.path.join(self.tmpdir, cram_name),
+            "--cram", cram_path,
             "--output-dir", os.path.join(self.tmpdir, "toy"),
             "--vcf", os.path.join(self.tmpdir, "missing.vcf.gz"),
         ]
@@ -578,6 +581,22 @@ class TestGenerateToyDatasetScriptIndexDiscovery(unittest.TestCase):
             result.stderr,
         )
         self.assertIn("Use --sample-name to select one of:", result.stderr)
+
+    def test_errors_when_cram_file_is_missing(self):
+        """Script should fail fast when --cram path does not exist."""
+        self._touch(os.path.join(self.tmpdir, "sample_hap1_to_ref.mapping.json.gz"))
+        self._touch(os.path.join(self.tmpdir, "sample_hap2_to_ref.mapping.json.gz"))
+        result = self._run_script("sample.cram", create_cram=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--cram file not found", result.stderr)
+
+    def test_script_no_longer_hardcodes_work_prefix_in_examples(self):
+        """Example command uses computed prefix instead of '/work/${OUTPUT_DIR}'."""
+        with open(self.script, encoding="utf-8") as fh:
+            script_text = fh.read()
+        self.assertIn('EXAMPLE_OUT="${OUTPUT_DIR}"', script_text)
+        self.assertIn('if [[ "${EXAMPLE_OUT}" != /* ]]; then', script_text)
+        self.assertNotIn('/work/${OUTPUT_DIR}/toy_hap1.fa.gz', script_text)
 
 
 if __name__ == "__main__":
