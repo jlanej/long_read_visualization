@@ -134,6 +134,40 @@
     }
     .btn-icon { font-size: 12px; }
 
+    /* ── Indel threshold widget ─────────────────────────────────────────── */
+    .indel-threshold-widget {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        font-size: 11px;
+        color: var(--text-muted);
+        white-space: nowrap;
+    }
+    .indel-threshold-widget label {
+        font-size: 10px;
+        color: var(--text-muted);
+    }
+    .indel-threshold-widget input[type="number"] {
+        width: 44px;
+        font-size: 11px;
+        padding: 2px 4px;
+        border-radius: 4px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--text);
+        text-align: center;
+        /* hide browser spinner arrows for a cleaner look */
+        -moz-appearance: textfield;
+    }
+    .indel-threshold-widget input[type="number"]::-webkit-inner-spin-button,
+    .indel-threshold-widget input[type="number"]::-webkit-outer-spin-button {
+        -webkit-appearance: none;
+    }
+    .indel-threshold-widget input[type="number"]:focus {
+        outline: 1px solid var(--accent);
+        border-color: var(--accent);
+    }
+
     /* ── Panel layout ────────────────────────────────────────────────────── */
     .panels {
         display: flex;
@@ -514,9 +548,14 @@
         <button id="toggleDisplayMode" class="toolbar-btn" title="Toggle read display density">
             <span class="btn-icon">☰</span> Squished
         </button>
-        <button id="toggleSmallIndels" class="toolbar-btn active" title="Filter sequencing-error indels &lt;50 bp (PacBio/ONT 3rd-gen best practice — toggle off to see all indels)">
+        <button id="toggleSmallIndels" class="toolbar-btn active" title="3rd gen view: hide sequencing-error indels below the bp threshold (PacBio/ONT long-read convention; threshold is adjustable)">
             <span class="btn-icon">🧬</span> 3rd gen view
         </button>
+        <span class="indel-threshold-widget" title="Indels shorter than this many bp are hidden in 3rd gen view (community convention: 50 bp for raw ONT/PacBio; lower for HiFi)">
+            <label for="indelThresholdInput">&lt;</label>
+            <input type="number" id="indelThresholdInput" min="1" max="999" value="50" step="1">
+            <label for="indelThresholdInput">bp</label>
+        </span>
         <button id="toggleSoftClips" class="toolbar-btn" title="Show/hide soft-clipped bases on reads">
             <span class="btn-icon">✂️</span> Show clips
         </button>
@@ -622,11 +661,14 @@
     let hideSmallIndels = true;          // default: hide spurious indels (long-read mode)
     let showSoftClips = false;           // default: hide soft-clipped bases
     let showMismatches = true;           // default: show base mismatches (SNVs)
-    // PacBio / ONT reads carry many sequencing-error indels in the 1–50 bp
-    // range.  Hiding indels below this threshold dramatically reduces noise
-    // while preserving structural variants (which are always much larger).
-    // Recommended threshold for third-generation sequencing: ≥ 50 bp.
-    const LONG_READ_INDEL_THRESHOLD = 50;
+    // The indel threshold default (50 bp) follows community convention for
+    // suppressing sequencing-error noise in raw PacBio / ONT long reads.
+    // There is no single authoritative reference; the range 10–100 bp is
+    // commonly cited on Biostars, the IGV GitHub issues tracker, and the
+    // PacBio blog (e.g. "IGV 3 Improves Support for PacBio Long Reads").
+    // For HiFi (high-accuracy) reads a lower value (10–20 bp) may be more
+    // appropriate.  The input field lets each user tune it to their data.
+    const LONG_READ_INDEL_THRESHOLD_DEFAULT = 50;
     let opGeneration = 0;               // increments on sample/region change to invalidate stale ops
     let hasMappingIndex = false;         // true when server has loaded PAF-based coordinate indices
     let inlineDotPlotsEnabled = false;   // toggle for inline dot plots below IGV panels
@@ -662,6 +704,7 @@
     const statusBar = document.getElementById("statusBar");
     const toggleDisplayModeBtn = document.getElementById("toggleDisplayMode");
     const toggleSmallIndelsBtn = document.getElementById("toggleSmallIndels");
+    const indelThresholdInput = document.getElementById("indelThresholdInput");
     const toggleSoftClipsBtn = document.getElementById("toggleSoftClips");
     const toggleMismatchesBtn = document.getElementById("toggleMismatches");
     const compareReadsBtn = document.getElementById("compareReads");
@@ -1056,7 +1099,7 @@
                 showSoftClips: showSoftClips,
                 showMismatches: showMismatches,
                 hideSmallIndels: hideSmallIndels,
-                smallIndelThreshold: LONG_READ_INDEL_THRESHOLD,
+                smallIndelThreshold: getIndelThreshold(),
                 colorBy: "tag:HP",
                 colorTable: {
                     "HP": {
@@ -1106,7 +1149,7 @@
                 showSoftClips: showSoftClips,
                 showMismatches: showMismatches,
                 hideSmallIndels: hideSmallIndels,
-                smallIndelThreshold: LONG_READ_INDEL_THRESHOLD,
+                smallIndelThreshold: getIndelThreshold(),
             };
         }
 
@@ -1667,17 +1710,26 @@
         }
     }
 
+    function getIndelThreshold() {
+        // Read the user-set threshold from the toolbar input.
+        // Falls back to the default if the input contains an invalid or
+        // out-of-range value.
+        const raw = parseInt(indelThresholdInput.value, 10);
+        return (Number.isFinite(raw) && raw >= 1) ? raw : LONG_READ_INDEL_THRESHOLD_DEFAULT;
+    }
+
     function updateAllTrackIndelDisplay() {
+        const threshold = getIndelThreshold();
         for (const browser of [refBrowser, hap1Browser, hap2Browser]) {
             if (!browser) continue;
             for (const tv of browser.trackViews) {
                 const t = tv.track;
                 if (t && t.type === "alignment") {
                     t.hideSmallIndels = hideSmallIndels;
-                    t.smallIndelThreshold = LONG_READ_INDEL_THRESHOLD;
+                    t.smallIndelThreshold = threshold;
                     if (t.config) {
                         t.config.hideSmallIndels = hideSmallIndels;
-                        t.config.smallIndelThreshold = LONG_READ_INDEL_THRESHOLD;
+                        t.config.smallIndelThreshold = threshold;
                     }
                 }
             }
@@ -1729,6 +1781,17 @@
             ? '<span class="btn-icon">🧬</span> 3rd gen view'
             : '<span class="btn-icon">🔬</span> All indels';
         updateAllTrackIndelDisplay();
+    });
+
+    // When the user edits the threshold number, apply it immediately if the
+    // filter is currently active.  This lets users live-tune the cutoff.
+    indelThresholdInput.addEventListener("change", () => {
+        // Clamp the input to valid range and write back the clamped value.
+        const v = parseInt(indelThresholdInput.value, 10);
+        indelThresholdInput.value = (Number.isFinite(v) && v >= 1) ? v : LONG_READ_INDEL_THRESHOLD_DEFAULT;
+        if (hideSmallIndels) {
+            updateAllTrackIndelDisplay();
+        }
     });
 
     toggleSoftClipsBtn.addEventListener("click", () => {

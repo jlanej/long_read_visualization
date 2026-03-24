@@ -1651,41 +1651,70 @@ class TestFrontendDisplayToggles(unittest.TestCase):
 
     # ── 3rd gen view (hide small indels) ──────────────────────────────────
 
-    def test_indel_threshold_constant_is_fifty(self):
-        """LONG_READ_INDEL_THRESHOLD must be 50 bp.
+    def test_indel_threshold_default_constant_is_fifty(self):
+        """LONG_READ_INDEL_THRESHOLD_DEFAULT must be 50 bp.
 
-        PacBio/ONT reads carry many sequencing-error indels in the 1–50 bp
-        range.  A threshold of 3 bp (the short-read default) hides almost
-        nothing on long reads, making the toggle visually ineffective.
-        50 bp suppresses most noise while preserving true structural variants.
+        50 bp is a practical community convention for filtering sequencing-error
+        noise in raw PacBio / ONT long reads (discussed on Biostars, IGV GitHub
+        issues, and the PacBio blog "IGV 3 Improves Support for PacBio Long
+        Reads").  There is no single authoritative paper — the threshold is
+        technology-dependent (HiFi data benefits from 10–20 bp instead), so the
+        value is exposed as a user-adjustable input.
         """
-        self.assertIn("const LONG_READ_INDEL_THRESHOLD = 50;", self.html)
+        self.assertIn("const LONG_READ_INDEL_THRESHOLD_DEFAULT = 50;", self.html)
 
     def test_indel_threshold_not_hardcoded_to_three(self):
-        """smallIndelThreshold must use the named constant, not the literal '3'.
+        """smallIndelThreshold must not use the literal '3'.
 
-        Hardcoding '3' obscures intent and makes the value trivially easy to
-        overlook when reviewing long-read best practices.
+        3 bp (the IGV.js default for short reads) hides essentially nothing on
+        long reads and makes the toggle visually ineffective.
         """
         self.assertNotIn("smallIndelThreshold: 3,", self.html)
 
-    def test_read_track_uses_indel_threshold_constant(self):
-        """makeReadTrack must use LONG_READ_INDEL_THRESHOLD for smallIndelThreshold."""
-        self.assertIn("smallIndelThreshold: LONG_READ_INDEL_THRESHOLD,", self.html)
+    def test_indel_threshold_input_exists_with_default_50(self):
+        """indelThresholdInput must be present in the toolbar with value=\"50\".
 
-    def test_update_indels_sets_track_property_with_constant(self):
-        """updateAllTrackIndelDisplay must set t.smallIndelThreshold using the constant."""
-        self.assertIn("t.smallIndelThreshold = LONG_READ_INDEL_THRESHOLD;", self.html)
+        The threshold is exposed as a numeric input so users can tune it to
+        their data (e.g. 10–20 bp for HiFi, 50+ bp for raw ONT reads).
+        """
+        self.assertIn('id="indelThresholdInput"', self.html)
+        self.assertIn('value="50"', self.html)
 
-    def test_update_indels_sets_config_property_with_constant(self):
+    def test_get_indel_threshold_function_exists(self):
+        """getIndelThreshold() helper must exist and read from indelThresholdInput."""
+        self.assertIn("function getIndelThreshold()", self.html)
+        self.assertIn("indelThresholdInput.value", self.html)
+
+    def test_read_track_uses_get_indel_threshold(self):
+        """makeReadTrack must use getIndelThreshold(), not a hardcoded literal."""
+        self.assertIn("smallIndelThreshold: getIndelThreshold(),", self.html)
+
+    def test_update_indels_reads_threshold_via_helper(self):
+        """updateAllTrackIndelDisplay must set t.smallIndelThreshold from getIndelThreshold().
+
+        Reading the value from the DOM input (via getIndelThreshold) ensures
+        the user-adjusted threshold is applied immediately on every toggle or
+        change event, and persists across pan/zoom re-renders via config update.
+        """
+        self.assertIn("const threshold = getIndelThreshold();", self.html)
+        self.assertIn("t.smallIndelThreshold = threshold;", self.html)
+
+    def test_update_indels_sets_config_property_with_threshold(self):
         """updateAllTrackIndelDisplay must also update t.config.smallIndelThreshold.
 
         Without the config update, the threshold reverts on pan/zoom re-renders
         (same async-overwrite problem as soft clips/mismatches).
         """
-        self.assertIn(
-            "t.config.smallIndelThreshold = LONG_READ_INDEL_THRESHOLD;", self.html
-        )
+        self.assertIn("t.config.smallIndelThreshold = threshold;", self.html)
+
+    def test_indel_threshold_input_change_event_calls_update(self):
+        """Changing the threshold input must call updateAllTrackIndelDisplay().
+
+        The change event handler lets users live-tune the cutoff without having
+        to reload the page or toggle the filter off and back on.
+        """
+        self.assertIn('indelThresholdInput.addEventListener("change"', self.html)
+        self.assertIn("updateAllTrackIndelDisplay();", self.html)
 
     def test_indels_button_labeled_3rd_gen_view_when_active(self):
         """When hideSmallIndels=true (active), the button must say '3rd gen view'.
