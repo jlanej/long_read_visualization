@@ -1472,16 +1472,19 @@ class TestFrontendMemoryGuards(unittest.TestCase):
 
 
 class TestFrontendDisplayToggles(unittest.TestCase):
-    """Tests for soft-clip and mismatch display toggles.
+    """Tests for alignment display toggles: soft clips, mismatches, display mode, and 3rd gen view.
 
     These verify the implementation pattern rather than just code presence:
     - State variables are declared with correct defaults.
     - Track configs use the state variables (not hardcoded values).
     - Update functions apply the double-set pattern: both the live track
-      property (t.showSoftClips / t.showMismatches) AND the config object
-      property (t.config.showSoftClips / t.config.showMismatches) are updated
-      so the setting persists across pan/zoom re-renders.
+      property (t.showSoftClips / t.showMismatches / etc.) AND the config
+      object property (t.config.*) are updated so the setting persists across
+      pan/zoom re-renders.
     - Buttons have the correct initial active/inactive CSS class.
+    - The indel threshold is set to LONG_READ_INDEL_THRESHOLD (50 bp) —
+      the 3-bp default is meaningless for PacBio/ONT, which have many
+      sequencing-error indels in the 1–50 bp range.
     """
 
     @classmethod
@@ -1645,6 +1648,86 @@ class TestFrontendDisplayToggles(unittest.TestCase):
             "toggleDisplayModeBtn.classList.toggle(\"active\", !displaySquished);",
             self.html,
         )
+
+    # ── 3rd gen view (hide small indels) ──────────────────────────────────
+
+    def test_indel_threshold_constant_is_fifty(self):
+        """LONG_READ_INDEL_THRESHOLD must be 50 bp.
+
+        PacBio/ONT reads carry many sequencing-error indels in the 1–50 bp
+        range.  A threshold of 3 bp (the short-read default) hides almost
+        nothing on long reads, making the toggle visually ineffective.
+        50 bp suppresses most noise while preserving true structural variants.
+        """
+        self.assertIn("const LONG_READ_INDEL_THRESHOLD = 50;", self.html)
+
+    def test_indel_threshold_not_hardcoded_to_three(self):
+        """smallIndelThreshold must use the named constant, not the literal '3'.
+
+        Hardcoding '3' obscures intent and makes the value trivially easy to
+        overlook when reviewing long-read best practices.
+        """
+        self.assertNotIn("smallIndelThreshold: 3,", self.html)
+
+    def test_read_track_uses_indel_threshold_constant(self):
+        """makeReadTrack must use LONG_READ_INDEL_THRESHOLD for smallIndelThreshold."""
+        self.assertIn("smallIndelThreshold: LONG_READ_INDEL_THRESHOLD,", self.html)
+
+    def test_update_indels_sets_track_property_with_constant(self):
+        """updateAllTrackIndelDisplay must set t.smallIndelThreshold using the constant."""
+        self.assertIn("t.smallIndelThreshold = LONG_READ_INDEL_THRESHOLD;", self.html)
+
+    def test_update_indels_sets_config_property_with_constant(self):
+        """updateAllTrackIndelDisplay must also update t.config.smallIndelThreshold.
+
+        Without the config update, the threshold reverts on pan/zoom re-renders
+        (same async-overwrite problem as soft clips/mismatches).
+        """
+        self.assertIn(
+            "t.config.smallIndelThreshold = LONG_READ_INDEL_THRESHOLD;", self.html
+        )
+
+    def test_indels_button_labeled_3rd_gen_view_when_active(self):
+        """When hideSmallIndels=true (active), the button must say '3rd gen view'.
+
+        '3rd gen view' clearly signals that this setting is optimised for
+        third-generation (long-read) sequencing noise filtering, which is
+        more informative than the generic 'Hide indels' label.
+        """
+        self.assertIn("3rd gen view", self.html)
+
+    def test_indels_button_labeled_all_indels_when_inactive(self):
+        """When hideSmallIndels=false (inactive), the button must say 'All indels'."""
+        self.assertIn("All indels", self.html)
+
+    def test_indels_button_initially_active(self):
+        """toggleSmallIndels button must carry 'active' class initially.
+
+        The default is hideSmallIndels=true (filter on by default) so the
+        button should appear active (pressed) to reflect the enabled state.
+        """
+        import re
+        btn_match = re.search(
+            r'<button[^>]+id="toggleSmallIndels"[^>]*>', self.html
+        )
+        self.assertIsNotNone(btn_match, "toggleSmallIndels button not found")
+        self.assertIn("active", btn_match.group())
+
+    def test_indels_handler_calls_update_function(self):
+        """The 3rd-gen-view click handler must call updateAllTrackIndelDisplay()."""
+        self.assertIn("updateAllTrackIndelDisplay();", self.html)
+
+    def test_hide_small_indels_state_variable_initialised_true(self):
+        """hideSmallIndels must default to true (filter on for long-read mode)."""
+        self.assertIn("let hideSmallIndels = true;", self.html)
+
+    def test_update_indels_sets_hide_small_indels_track_property(self):
+        """updateAllTrackIndelDisplay must set t.hideSmallIndels on the live track."""
+        self.assertIn("t.hideSmallIndels = hideSmallIndels;", self.html)
+
+    def test_update_indels_sets_hide_small_indels_config_property(self):
+        """updateAllTrackIndelDisplay must also update t.config.hideSmallIndels."""
+        self.assertIn("t.config.hideSmallIndels = hideSmallIndels;", self.html)
 
 
 if __name__ == "__main__":

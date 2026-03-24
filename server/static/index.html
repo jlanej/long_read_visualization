@@ -514,8 +514,8 @@
         <button id="toggleDisplayMode" class="toolbar-btn" title="Toggle read display density">
             <span class="btn-icon">☰</span> Squished
         </button>
-        <button id="toggleSmallIndels" class="toolbar-btn active" title="Hide spurious small indels (long-read mode)">
-            <span class="btn-icon">🧹</span> Hide indels
+        <button id="toggleSmallIndels" class="toolbar-btn active" title="Filter sequencing-error indels &lt;50 bp (PacBio/ONT 3rd-gen best practice — toggle off to see all indels)">
+            <span class="btn-icon">🧬</span> 3rd gen view
         </button>
         <button id="toggleSoftClips" class="toolbar-btn" title="Show/hide soft-clipped bases on reads">
             <span class="btn-icon">✂️</span> Show clips
@@ -622,6 +622,11 @@
     let hideSmallIndels = true;          // default: hide spurious indels (long-read mode)
     let showSoftClips = false;           // default: hide soft-clipped bases
     let showMismatches = true;           // default: show base mismatches (SNVs)
+    // PacBio / ONT reads carry many sequencing-error indels in the 1–50 bp
+    // range.  Hiding indels below this threshold dramatically reduces noise
+    // while preserving structural variants (which are always much larger).
+    // Recommended threshold for third-generation sequencing: ≥ 50 bp.
+    const LONG_READ_INDEL_THRESHOLD = 50;
     let opGeneration = 0;               // increments on sample/region change to invalidate stale ops
     let hasMappingIndex = false;         // true when server has loaded PAF-based coordinate indices
     let inlineDotPlotsEnabled = false;   // toggle for inline dot plots below IGV panels
@@ -1051,7 +1056,7 @@
                 showSoftClips: showSoftClips,
                 showMismatches: showMismatches,
                 hideSmallIndels: hideSmallIndels,
-                smallIndelThreshold: 3,
+                smallIndelThreshold: LONG_READ_INDEL_THRESHOLD,
                 colorBy: "tag:HP",
                 colorTable: {
                     "HP": {
@@ -1101,7 +1106,7 @@
                 showSoftClips: showSoftClips,
                 showMismatches: showMismatches,
                 hideSmallIndels: hideSmallIndels,
-                smallIndelThreshold: 3,
+                smallIndelThreshold: LONG_READ_INDEL_THRESHOLD,
             };
         }
 
@@ -1669,10 +1674,10 @@
                 const t = tv.track;
                 if (t && t.type === "alignment") {
                     t.hideSmallIndels = hideSmallIndels;
-                    t.smallIndelThreshold = 3;
+                    t.smallIndelThreshold = LONG_READ_INDEL_THRESHOLD;
                     if (t.config) {
                         t.config.hideSmallIndels = hideSmallIndels;
-                        t.config.smallIndelThreshold = 3;
+                        t.config.smallIndelThreshold = LONG_READ_INDEL_THRESHOLD;
                     }
                 }
             }
@@ -1721,8 +1726,8 @@
         hideSmallIndels = !hideSmallIndels;
         toggleSmallIndelsBtn.classList.toggle("active", hideSmallIndels);
         toggleSmallIndelsBtn.innerHTML = hideSmallIndels
-            ? '<span class="btn-icon">🧹</span> Hide indels'
-            : '<span class="btn-icon">🔍</span> Show indels';
+            ? '<span class="btn-icon">🧬</span> 3rd gen view'
+            : '<span class="btn-icon">🔬</span> All indels';
         updateAllTrackIndelDisplay();
     });
 
