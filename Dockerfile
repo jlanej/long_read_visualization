@@ -64,7 +64,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libxcb-xfixes0 \
         libxkbcommon0 \
         libxkbcommon-x11-0 \
+        libegl1 \
+        libgl1 \
+        libgles2 \
+        libgl1-mesa-dri \
     && rm -rf /var/lib/apt/lists/*
+
+# Enable Mesa software rendering by default so the GUI works in containers
+# without GPU access (e.g. Apptainer on HPC login nodes, Docker without
+# --gpus).  When a real GPU is available the driver will be used instead.
+ENV LIBGL_ALWAYS_SOFTWARE=1
 
 # ── minimap2 ────────────────────────────────────────────────────────────────
 RUN curl -fsSL \
