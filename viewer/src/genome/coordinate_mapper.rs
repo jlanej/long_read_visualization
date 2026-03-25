@@ -102,6 +102,7 @@ impl std::fmt::Display for EventType {
 
 /// Result of a coordinate query.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct QueryResult {
     pub ref_chrom: String,
     pub ref_start: u64,
@@ -163,10 +164,10 @@ pub fn parse_cigar(cigar_str: &str) -> Vec<CigarOp> {
                 num_start = Some(i);
             }
         } else if is_valid_cigar_op(c) {
-            if let Some(start) = num_start {
-                if let Ok(len) = cigar_str[start..i].parse::<u64>() {
-                    ops.push(CigarOp { len, op: c });
-                }
+            if let Some(start) = num_start
+                && let Ok(len) = cigar_str[start..i].parse::<u64>()
+            {
+                ops.push(CigarOp { len, op: c });
             }
             num_start = None;
         }
@@ -215,27 +216,26 @@ pub fn project_cigar(
     let mut asm_cur: u64 = 0;
 
     // Fast path: binary-search into pre-computed cumulative offsets.
-    if let Some(idx) = cigar_index {
-        if ref_offset_start > 0 && !ops.is_empty() {
-            // partition_point returns the first index where ref_cumul > ref_offset_start
-            let bisect_pos = idx
-                .ref_cumul
-                .partition_point(|&v| v <= ref_offset_start);
-            // Step back to the operation that contains ref_offset_start
-            let adjusted = if bisect_pos > 0 { bisect_pos - 1 } else { 0 };
-            let clamped = adjusted.min(ops.len() - 1);
-            start_op = clamped;
-            ref_cur = idx.ref_cumul[clamped];
-            asm_cur = idx.asm_cumul[clamped];
-        }
+    if let Some(idx) = cigar_index
+        && ref_offset_start > 0
+        && !ops.is_empty()
+    {
+        // partition_point returns the first index where ref_cumul > ref_offset_start
+        let bisect_pos = idx.ref_cumul.partition_point(|&v| v <= ref_offset_start);
+        // Step back to the operation that contains ref_offset_start
+        let adjusted = if bisect_pos > 0 { bisect_pos - 1 } else { 0 };
+        let clamped = adjusted.min(ops.len() - 1);
+        start_op = clamped;
+        ref_cur = idx.ref_cumul[clamped];
+        asm_cur = idx.asm_cumul[clamped];
     }
 
     let mut asm_q_start: Option<u64> = None;
     let mut asm_q_end: Option<u64> = None;
 
-    for i in start_op..ops.len() {
-        let length = ops[i].len;
-        let op = ops[i].op;
+    for op_entry in &ops[start_op..] {
+        let length = op_entry.len;
+        let op = op_entry.op;
         let consumes_ref = is_ref_consuming(op);
         let consumes_asm = is_asm_consuming(op);
 
@@ -267,15 +267,9 @@ pub fn project_cigar(
     let asm_q_end = asm_q_end.unwrap_or(asm_cur);
 
     if strand == "+" {
-        (
-            asm_block_start + asm_q_start,
-            asm_block_start + asm_q_end,
-        )
+        (asm_block_start + asm_q_start, asm_block_start + asm_q_end)
     } else {
-        (
-            asm_block_end - asm_q_end,
-            asm_block_end - asm_q_start,
-        )
+        (asm_block_end - asm_q_end, asm_block_end - asm_q_start)
     }
 }
 
@@ -522,9 +516,7 @@ pub fn query(
 
         if overlap_start >= overlap_end {
             // No actual overlap; still track high-water mark.
-            if prev_block_idx.is_none()
-                || block.re > blocks[prev_block_idx.unwrap()].re
-            {
+            if prev_block_idx.is_none() || block.re > blocks[prev_block_idx.unwrap()].re {
                 prev_block_idx = Some(block_i);
             }
             continue;
@@ -569,9 +561,7 @@ pub fn query(
         });
 
         // High-water mark.
-        if prev_block_idx.is_none()
-            || block.re > blocks[prev_block_idx.unwrap()].re
-        {
+        if prev_block_idx.is_none() || block.re > blocks[prev_block_idx.unwrap()].re {
             prev_block_idx = Some(block_i);
         }
     }
@@ -586,8 +576,8 @@ pub fn query(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flate2::write::GzEncoder;
     use flate2::Compression;
+    use flate2::write::GzEncoder;
     use std::io::Write;
 
     // Helper: write a gzipped JSON index to a temp file, load it.
@@ -602,6 +592,7 @@ mod tests {
     }
 
     // Helper: build a JSON value from block specs.
+    #[allow(clippy::type_complexity)]
     fn make_index_json(
         blocks: &[(&str, u64, u64, &str, u64, u64, &str, u64, Option<&str>)],
     ) -> serde_json::Value {
@@ -814,8 +805,14 @@ mod tests {
         re: u64,
     ) -> AlignmentBlock {
         AlignmentBlock {
-            rs, re, ac: ac.to_string(), as_, ae,
-            st: st.to_string(), mq, cg: None,
+            rs,
+            re,
+            ac: ac.to_string(),
+            as_,
+            ae,
+            st: st.to_string(),
+            mq,
+            cg: None,
         }
     }
 
@@ -903,7 +900,14 @@ mod tests {
         // CIGAR: 100M5D95M
         let dir = tempfile::tempdir().unwrap();
         let data = make_index_json(&[(
-            "chr1", 10000, 10200, "asm_chr1", 1000, 1195, "+", 60,
+            "chr1",
+            10000,
+            10200,
+            "asm_chr1",
+            1000,
+            1195,
+            "+",
+            60,
             Some("100M5D95M"),
         )]);
         let path = write_gz_json(&dir, &data);
@@ -923,7 +927,14 @@ mod tests {
         // CIGAR: 100M10I100M
         let dir = tempfile::tempdir().unwrap();
         let data = make_index_json(&[(
-            "chr1", 20000, 20200, "asm_chr1", 2000, 2210, "+", 60,
+            "chr1",
+            20000,
+            20200,
+            "asm_chr1",
+            2000,
+            2210,
+            "+",
+            60,
             Some("100M10I100M"),
         )]);
         let path = write_gz_json(&dir, &data);
@@ -941,7 +952,14 @@ mod tests {
         // CIGAR: 100M5D95M
         let dir = tempfile::tempdir().unwrap();
         let data = make_index_json(&[(
-            "chr2", 50000, 50200, "asm_chr2", 3000, 3195, "-", 50,
+            "chr2",
+            50000,
+            50200,
+            "asm_chr2",
+            3000,
+            3195,
+            "-",
+            50,
             Some("100M5D95M"),
         )]);
         let path = write_gz_json(&dir, &data);
@@ -961,27 +979,177 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let data = make_index_json(&[
             // Scenario 1: het deletion (5kb)
-            ("chr1", 1000000, 1005000, "ctg1_hap1", 500000, 505000, "+", 60, Some("5000=")),
-            ("chr1", 1010000, 1015000, "ctg1_hap1", 505000, 510000, "+", 60, Some("5000=")),
+            (
+                "chr1",
+                1000000,
+                1005000,
+                "ctg1_hap1",
+                500000,
+                505000,
+                "+",
+                60,
+                Some("5000="),
+            ),
+            (
+                "chr1",
+                1010000,
+                1015000,
+                "ctg1_hap1",
+                505000,
+                510000,
+                "+",
+                60,
+                Some("5000="),
+            ),
             // Scenario 2: het insertion (3kb)
-            ("chr1", 2000000, 2005000, "ctg1_hap1", 600000, 605000, "+", 60, Some("5000=")),
-            ("chr1", 2005000, 2010000, "ctg1_hap1", 608000, 613000, "+", 60, Some("5000=")),
+            (
+                "chr1",
+                2000000,
+                2005000,
+                "ctg1_hap1",
+                600000,
+                605000,
+                "+",
+                60,
+                Some("5000="),
+            ),
+            (
+                "chr1",
+                2005000,
+                2010000,
+                "ctg1_hap1",
+                608000,
+                613000,
+                "+",
+                60,
+                Some("5000="),
+            ),
             // Scenario 3: inversion
-            ("chr2", 3000000, 3005000, "ctg2_hap1", 700000, 705000, "+", 60, Some("5000=")),
-            ("chr2", 3005000, 3015000, "ctg2_hap1", 705000, 715000, "-", 60, Some("10000=")),
-            ("chr2", 3015000, 3020000, "ctg2_hap1", 715000, 720000, "+", 60, Some("5000=")),
+            (
+                "chr2",
+                3000000,
+                3005000,
+                "ctg2_hap1",
+                700000,
+                705000,
+                "+",
+                60,
+                Some("5000="),
+            ),
+            (
+                "chr2",
+                3005000,
+                3015000,
+                "ctg2_hap1",
+                705000,
+                715000,
+                "-",
+                60,
+                Some("10000="),
+            ),
+            (
+                "chr2",
+                3015000,
+                3020000,
+                "ctg2_hap1",
+                715000,
+                720000,
+                "+",
+                60,
+                Some("5000="),
+            ),
             // Scenario 4: tandem dup
-            ("chr3", 4000000, 4002000, "ctg3_hap1", 800000, 802000, "+", 60, Some("2000=")),
-            ("chr3", 4000000, 4002000, "ctg3_hap1", 802000, 804000, "+", 60, Some("2000=")),
+            (
+                "chr3",
+                4000000,
+                4002000,
+                "ctg3_hap1",
+                800000,
+                802000,
+                "+",
+                60,
+                Some("2000="),
+            ),
+            (
+                "chr3",
+                4000000,
+                4002000,
+                "ctg3_hap1",
+                802000,
+                804000,
+                "+",
+                60,
+                Some("2000="),
+            ),
             // Scenario 5: minus-strand deletion
-            ("chr5", 5000000, 5003000, "ctg5_hap2", 900000, 903000, "-", 60, Some("3000=")),
-            ("chr5", 5008000, 5011000, "ctg5_hap2", 895000, 898000, "-", 60, Some("3000=")),
+            (
+                "chr5",
+                5000000,
+                5003000,
+                "ctg5_hap2",
+                900000,
+                903000,
+                "-",
+                60,
+                Some("3000="),
+            ),
+            (
+                "chr5",
+                5008000,
+                5011000,
+                "ctg5_hap2",
+                895000,
+                898000,
+                "-",
+                60,
+                Some("3000="),
+            ),
             // Scenario 6: minus-strand insertion
-            ("chr5", 6000000, 6003000, "ctg5_hap2", 1000000, 1003000, "-", 60, Some("3000=")),
-            ("chr5", 6003000, 6006000, "ctg5_hap2", 993000, 996000, "-", 60, Some("3000=")),
+            (
+                "chr5",
+                6000000,
+                6003000,
+                "ctg5_hap2",
+                1000000,
+                1003000,
+                "-",
+                60,
+                Some("3000="),
+            ),
+            (
+                "chr5",
+                6003000,
+                6006000,
+                "ctg5_hap2",
+                993000,
+                996000,
+                "-",
+                60,
+                Some("3000="),
+            ),
             // Scenario 7: translocation
-            ("chr6", 7000000, 7005000, "ctg6a", 100000, 105000, "+", 60, Some("5000=")),
-            ("chr6", 7006000, 7011000, "ctg6b", 200000, 205000, "+", 60, Some("5000=")),
+            (
+                "chr6",
+                7000000,
+                7005000,
+                "ctg6a",
+                100000,
+                105000,
+                "+",
+                60,
+                Some("5000="),
+            ),
+            (
+                "chr6",
+                7006000,
+                7011000,
+                "ctg6b",
+                200000,
+                205000,
+                "+",
+                60,
+                Some("5000="),
+            ),
         ]);
         let path = write_gz_json(&dir, &data);
         let index = load_index(&path).unwrap();
@@ -995,7 +1163,11 @@ mod tests {
         let types: Vec<_> = results.iter().map(|r| &r.event_type).collect();
         assert_eq!(
             types,
-            vec![&EventType::Alignment, &EventType::Deletion, &EventType::Alignment]
+            vec![
+                &EventType::Alignment,
+                &EventType::Deletion,
+                &EventType::Alignment
+            ]
         );
     }
 
@@ -1003,7 +1175,10 @@ mod tests {
     fn test_het_deletion_gap_sizes() {
         let (_dir, index) = bio_index();
         let results = query(&index, "chr1", 999000, 1016000, 0);
-        let gap = results.iter().find(|r| r.event_type == EventType::Deletion).unwrap();
+        let gap = results
+            .iter()
+            .find(|r| r.event_type == EventType::Deletion)
+            .unwrap();
         assert_eq!(gap.ref_gap_size, Some(5000));
         assert_eq!(gap.asm_gap_size, Some(0));
     }
@@ -1012,7 +1187,10 @@ mod tests {
     fn test_het_deletion_asm_coords() {
         let (_dir, index) = bio_index();
         let results = query(&index, "chr1", 999000, 1016000, 0);
-        let gap = results.iter().find(|r| r.event_type == EventType::Deletion).unwrap();
+        let gap = results
+            .iter()
+            .find(|r| r.event_type == EventType::Deletion)
+            .unwrap();
         assert_eq!(gap.asm_start, 505000);
         assert_eq!(gap.asm_end, 505000);
     }
@@ -1021,7 +1199,10 @@ mod tests {
     fn test_het_deletion_flanking_alignments() {
         let (_dir, index) = bio_index();
         let results = query(&index, "chr1", 999000, 1016000, 0);
-        let alns: Vec<_> = results.iter().filter(|r| r.event_type == EventType::Alignment).collect();
+        let alns: Vec<_> = results
+            .iter()
+            .filter(|r| r.event_type == EventType::Alignment)
+            .collect();
         assert_eq!(alns.len(), 2);
         assert_eq!(alns[0].ref_start, 1000000);
         assert_eq!(alns[0].ref_end, 1005000);
@@ -1040,7 +1221,11 @@ mod tests {
         let types: Vec<_> = results.iter().map(|r| &r.event_type).collect();
         assert_eq!(
             types,
-            vec![&EventType::Alignment, &EventType::Insertion, &EventType::Alignment]
+            vec![
+                &EventType::Alignment,
+                &EventType::Insertion,
+                &EventType::Alignment
+            ]
         );
     }
 
@@ -1048,7 +1233,10 @@ mod tests {
     fn test_het_insertion_gap_sizes() {
         let (_dir, index) = bio_index();
         let results = query(&index, "chr1", 1999000, 2011000, 0);
-        let gap = results.iter().find(|r| r.event_type == EventType::Insertion).unwrap();
+        let gap = results
+            .iter()
+            .find(|r| r.event_type == EventType::Insertion)
+            .unwrap();
         assert_eq!(gap.ref_gap_size, Some(0));
         assert_eq!(gap.asm_gap_size, Some(3000));
     }
@@ -1057,7 +1245,10 @@ mod tests {
     fn test_het_insertion_asm_coords() {
         let (_dir, index) = bio_index();
         let results = query(&index, "chr1", 1999000, 2011000, 0);
-        let gap = results.iter().find(|r| r.event_type == EventType::Insertion).unwrap();
+        let gap = results
+            .iter()
+            .find(|r| r.event_type == EventType::Insertion)
+            .unwrap();
         assert_eq!(gap.asm_start, 605000);
         assert_eq!(gap.asm_end, 608000);
     }
@@ -1083,7 +1274,10 @@ mod tests {
     fn test_inversion_flanking_strands() {
         let (_dir, index) = bio_index();
         let results = query(&index, "chr2", 2999000, 3021000, 0);
-        let alns: Vec<_> = results.iter().filter(|r| r.event_type == EventType::Alignment).collect();
+        let alns: Vec<_> = results
+            .iter()
+            .filter(|r| r.event_type == EventType::Alignment)
+            .collect();
         assert_eq!(alns.len(), 3);
         assert_eq!(alns[0].strand, "+");
         assert_eq!(alns[1].strand, "-");
@@ -1138,7 +1332,10 @@ mod tests {
     fn test_minus_strand_deletion_gap_sizes() {
         let (_dir, index) = bio_index();
         let results = query(&index, "chr5", 4999000, 5012000, 0);
-        let gap = results.iter().find(|r| r.event_type == EventType::Deletion).unwrap();
+        let gap = results
+            .iter()
+            .find(|r| r.event_type == EventType::Deletion)
+            .unwrap();
         assert_eq!(gap.ref_gap_size, Some(5000));
         assert_eq!(gap.asm_gap_size, Some(2000));
     }
@@ -1147,7 +1344,10 @@ mod tests {
     fn test_minus_strand_deletion_asm_coords() {
         let (_dir, index) = bio_index();
         let results = query(&index, "chr5", 4999000, 5012000, 0);
-        let gap = results.iter().find(|r| r.event_type == EventType::Deletion).unwrap();
+        let gap = results
+            .iter()
+            .find(|r| r.event_type == EventType::Deletion)
+            .unwrap();
         assert_eq!(gap.asm_start, 898000);
         assert_eq!(gap.asm_end, 900000);
     }
@@ -1164,7 +1364,10 @@ mod tests {
     fn test_minus_strand_insertion_gap_sizes() {
         let (_dir, index) = bio_index();
         let results = query(&index, "chr5", 5999000, 6007000, 0);
-        let gap = results.iter().find(|r| r.event_type == EventType::Insertion).unwrap();
+        let gap = results
+            .iter()
+            .find(|r| r.event_type == EventType::Insertion)
+            .unwrap();
         assert_eq!(gap.ref_gap_size, Some(0));
         assert_eq!(gap.asm_gap_size, Some(4000));
     }
@@ -1173,7 +1376,10 @@ mod tests {
     fn test_minus_strand_insertion_asm_coords() {
         let (_dir, index) = bio_index();
         let results = query(&index, "chr5", 5999000, 6007000, 0);
-        let gap = results.iter().find(|r| r.event_type == EventType::Insertion).unwrap();
+        let gap = results
+            .iter()
+            .find(|r| r.event_type == EventType::Insertion)
+            .unwrap();
         assert_eq!(gap.asm_start, 996000);
         assert_eq!(gap.asm_end, 1000000);
     }
@@ -1185,7 +1391,11 @@ mod tests {
         let types: Vec<_> = results.iter().map(|r| &r.event_type).collect();
         assert_eq!(
             types,
-            vec![&EventType::Alignment, &EventType::Translocation, &EventType::Alignment]
+            vec![
+                &EventType::Alignment,
+                &EventType::Translocation,
+                &EventType::Alignment
+            ]
         );
     }
 
@@ -1193,7 +1403,10 @@ mod tests {
     fn test_translocation_different_contigs() {
         let (_dir, index) = bio_index();
         let results = query(&index, "chr6", 6999000, 7012000, 0);
-        let alns: Vec<_> = results.iter().filter(|r| r.event_type == EventType::Alignment).collect();
+        let alns: Vec<_> = results
+            .iter()
+            .filter(|r| r.event_type == EventType::Alignment)
+            .collect();
         assert_eq!(alns[0].asm_chrom, "ctg6a");
         assert_eq!(alns[1].asm_chrom, "ctg6b");
     }
@@ -1242,7 +1455,10 @@ mod tests {
     fn test_query_just_past_block_end() {
         let (_dir, index) = bio_index();
         let results = query(&index, "chr1", 1005000, 1005001, 0);
-        let alns: Vec<_> = results.iter().filter(|r| r.event_type == EventType::Alignment).collect();
+        let alns: Vec<_> = results
+            .iter()
+            .filter(|r| r.event_type == EventType::Alignment)
+            .collect();
         assert_eq!(alns.len(), 0);
     }
 
@@ -1276,7 +1492,13 @@ mod tests {
         let (_dir, index) = bio_index();
         let results = query(&index, "chr1", 999000, 2011000, 0);
         let types: Vec<_> = results.iter().map(|r| &r.event_type).collect();
-        assert_eq!(types.iter().filter(|t| ***t == EventType::Alignment).count(), 4);
+        assert_eq!(
+            types
+                .iter()
+                .filter(|t| ***t == EventType::Alignment)
+                .count(),
+            4
+        );
         assert!(types.contains(&&EventType::Deletion));
         assert!(types.contains(&&EventType::Insertion));
     }
@@ -1302,7 +1524,10 @@ mod tests {
     fn test_mapq_default_no_filtering() {
         let (_dir, index) = mapq_index();
         let results = query(&index, "chr1", 99000, 126000, 0);
-        let alns: Vec<_> = results.iter().filter(|r| r.event_type == EventType::Alignment).collect();
+        let alns: Vec<_> = results
+            .iter()
+            .filter(|r| r.event_type == EventType::Alignment)
+            .collect();
         assert_eq!(alns.len(), 4);
     }
 
@@ -1310,7 +1535,10 @@ mod tests {
     fn test_mapq_1_excludes_zero() {
         let (_dir, index) = mapq_index();
         let results = query(&index, "chr1", 99000, 126000, 1);
-        let alns: Vec<_> = results.iter().filter(|r| r.event_type == EventType::Alignment).collect();
+        let alns: Vec<_> = results
+            .iter()
+            .filter(|r| r.event_type == EventType::Alignment)
+            .collect();
         assert_eq!(alns.len(), 3);
         for a in &alns {
             assert!(a.mapq >= 1);
@@ -1321,7 +1549,10 @@ mod tests {
     fn test_mapq_30_excludes_low_quality() {
         let (_dir, index) = mapq_index();
         let results = query(&index, "chr1", 99000, 126000, 30);
-        let alns: Vec<_> = results.iter().filter(|r| r.event_type == EventType::Alignment).collect();
+        let alns: Vec<_> = results
+            .iter()
+            .filter(|r| r.event_type == EventType::Alignment)
+            .collect();
         assert_eq!(alns.len(), 2);
         for a in &alns {
             assert!(a.mapq >= 30);
@@ -1332,7 +1563,10 @@ mod tests {
     fn test_mapq_60_only_primary() {
         let (_dir, index) = mapq_index();
         let results = query(&index, "chr1", 99000, 126000, 60);
-        let alns: Vec<_> = results.iter().filter(|r| r.event_type == EventType::Alignment).collect();
+        let alns: Vec<_> = results
+            .iter()
+            .filter(|r| r.event_type == EventType::Alignment)
+            .collect();
         assert_eq!(alns.len(), 2);
         for a in &alns {
             assert_eq!(a.mapq, 60);
@@ -1350,7 +1584,10 @@ mod tests {
     fn test_mapq_filtering_with_gaps() {
         let (_dir, index) = mapq_index();
         let results = query(&index, "chr1", 99000, 126000, 30);
-        let gaps: Vec<_> = results.iter().filter(|r| r.event_type != EventType::Alignment).collect();
+        let gaps: Vec<_> = results
+            .iter()
+            .filter(|r| r.event_type != EventType::Alignment)
+            .collect();
         assert_eq!(gaps.len(), 1);
         assert_eq!(gaps[0].ref_start, 105000);
         assert_eq!(gaps[0].ref_end, 120000);
@@ -1364,13 +1601,53 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let data = make_index_json(&[
             // Block 1: large deletion inside single block (1000=5000D1000=)
-            ("chr7", 100000, 107000, "ctg7", 200000, 202000, "+", 60, Some("1000=5000D1000=")),
+            (
+                "chr7",
+                100000,
+                107000,
+                "ctg7",
+                200000,
+                202000,
+                "+",
+                60,
+                Some("1000=5000D1000="),
+            ),
             // Block 2: multiple small indels (100=3I50=2D100=5I50=100=)
-            ("chr7", 200000, 200402, "ctg7", 300000, 300408, "+", 60, Some("100=3I50=2D100=5I50=100=")),
+            (
+                "chr7",
+                200000,
+                200402,
+                "ctg7",
+                300000,
+                300408,
+                "+",
+                60,
+                Some("100=3I50=2D100=5I50=100="),
+            ),
             // Block 3: extended CIGAR (500=10X490=5D500=10I500=)
-            ("chr7", 300000, 302005, "ctg7", 400000, 402010, "+", 60, Some("500=10X490=5D500=10I500=")),
+            (
+                "chr7",
+                300000,
+                302005,
+                "ctg7",
+                400000,
+                402010,
+                "+",
+                60,
+                Some("500=10X490=5D500=10I500="),
+            ),
             // Block 4: minus strand with insertion (2000=500I3000=)
-            ("chr8", 400000, 405000, "ctg8", 500000, 505500, "-", 60, Some("2000=500I3000=")),
+            (
+                "chr8",
+                400000,
+                405000,
+                "ctg8",
+                500000,
+                505500,
+                "-",
+                60,
+                Some("2000=500I3000="),
+            ),
         ]);
         let path = write_gz_json(&dir, &data);
         let index = load_index(&path).unwrap();
@@ -1609,12 +1886,22 @@ mod tests {
     // project_cigar with/without index produce identical results
     // -----------------------------------------------------------------------
 
-    fn assert_same_result(cigar: &str, ref_start: u64, ref_end: u64, strand: &str, asm_s: u64, asm_e: u64) {
+    fn assert_same_result(
+        cigar: &str,
+        ref_start: u64,
+        ref_end: u64,
+        strand: &str,
+        asm_s: u64,
+        asm_e: u64,
+    ) {
         let ops = parse_cigar(cigar);
         let idx = build_cigar_index(&ops);
         let r_linear = project_cigar(&ops, ref_start, ref_end, strand, asm_s, asm_e, None);
         let r_indexed = project_cigar(&ops, ref_start, ref_end, strand, asm_s, asm_e, Some(&idx));
-        assert_eq!(r_linear, r_indexed, "CIGAR={cigar} ref=[{ref_start},{ref_end}) strand={strand}");
+        assert_eq!(
+            r_linear, r_indexed,
+            "CIGAR={cigar} ref=[{ref_start},{ref_end}) strand={strand}"
+        );
     }
 
     #[test]
@@ -1722,7 +2009,10 @@ mod tests {
     fn test_no_phantom_gap_from_nested_supplementary() {
         let (_dir, index) = phantom_gap_index();
         let results = query(&index, "chr11", 0, 600, 0);
-        let gaps: Vec<_> = results.iter().filter(|r| r.event_type != EventType::Alignment).collect();
+        let gaps: Vec<_> = results
+            .iter()
+            .filter(|r| r.event_type != EventType::Alignment)
+            .collect();
         assert_eq!(gaps.len(), 0, "Unexpected gap events: {gaps:?}");
     }
 
@@ -1730,7 +2020,10 @@ mod tests {
     fn test_genuine_gap_still_detected() {
         let (_dir, index) = phantom_gap_index();
         let results = query(&index, "chr11", 0, 1500, 0);
-        let gaps: Vec<_> = results.iter().filter(|r| r.event_type != EventType::Alignment).collect();
+        let gaps: Vec<_> = results
+            .iter()
+            .filter(|r| r.event_type != EventType::Alignment)
+            .collect();
         assert_eq!(gaps.len(), 1, "Expected 1 gap event, got: {gaps:?}");
         assert_eq!(gaps[0].ref_start, 1000);
         assert_eq!(gaps[0].ref_end, 1200);
@@ -1740,7 +2033,10 @@ mod tests {
     fn test_genuine_gap_classified_as_deletion() {
         let (_dir, index) = phantom_gap_index();
         let results = query(&index, "chr11", 0, 1500, 0);
-        let gap = results.iter().find(|r| r.event_type != EventType::Alignment).unwrap();
+        let gap = results
+            .iter()
+            .find(|r| r.event_type != EventType::Alignment)
+            .unwrap();
         assert_eq!(gap.event_type, EventType::Deletion);
         assert_eq!(gap.ref_gap_size, Some(200));
     }
@@ -1749,7 +2045,10 @@ mod tests {
     fn test_all_alignment_blocks_returned() {
         let (_dir, index) = phantom_gap_index();
         let results = query(&index, "chr11", 0, 1500, 0);
-        let alns: Vec<_> = results.iter().filter(|r| r.event_type == EventType::Alignment).collect();
+        let alns: Vec<_> = results
+            .iter()
+            .filter(|r| r.event_type == EventType::Alignment)
+            .collect();
         assert_eq!(alns.len(), 4);
     }
 
@@ -1757,7 +2056,10 @@ mod tests {
     fn test_no_phantom_gap_with_mapq_filter() {
         let (_dir, index) = phantom_gap_index();
         let results = query(&index, "chr11", 0, 600, 10);
-        let gaps: Vec<_> = results.iter().filter(|r| r.event_type != EventType::Alignment).collect();
+        let gaps: Vec<_> = results
+            .iter()
+            .filter(|r| r.event_type != EventType::Alignment)
+            .collect();
         assert_eq!(gaps.len(), 0, "Unexpected gap events: {gaps:?}");
     }
 
@@ -1781,7 +2083,10 @@ mod tests {
     fn test_interleaving_all_blocks_returned() {
         let (_dir, index) = interleaving_index();
         let results = query(&index, "chr12", 0, 1500, 0);
-        let alns: Vec<_> = results.iter().filter(|r| r.event_type == EventType::Alignment).collect();
+        let alns: Vec<_> = results
+            .iter()
+            .filter(|r| r.event_type == EventType::Alignment)
+            .collect();
         assert_eq!(alns.len(), 3);
     }
 
@@ -1789,7 +2094,10 @@ mod tests {
     fn test_interleaving_gap_uses_high_water_mark() {
         let (_dir, index) = interleaving_index();
         let results = query(&index, "chr12", 0, 1500, 0);
-        let gaps: Vec<_> = results.iter().filter(|r| r.event_type != EventType::Alignment).collect();
+        let gaps: Vec<_> = results
+            .iter()
+            .filter(|r| r.event_type != EventType::Alignment)
+            .collect();
         assert_eq!(gaps.len(), 1);
         assert_eq!(gaps[0].ref_start, 800);
         assert_eq!(gaps[0].ref_end, 1000);
@@ -1799,7 +2107,10 @@ mod tests {
     fn test_interleaving_gap_classified_as_translocation() {
         let (_dir, index) = interleaving_index();
         let results = query(&index, "chr12", 0, 1500, 0);
-        let gaps: Vec<_> = results.iter().filter(|r| r.event_type != EventType::Alignment).collect();
+        let gaps: Vec<_> = results
+            .iter()
+            .filter(|r| r.event_type != EventType::Alignment)
+            .collect();
         assert_eq!(gaps[0].event_type, EventType::Translocation);
     }
 
@@ -1807,7 +2118,10 @@ mod tests {
     fn test_no_phantom_gap_in_overlap_zone() {
         let (_dir, index) = interleaving_index();
         let results = query(&index, "chr12", 300, 500, 0);
-        let gaps: Vec<_> = results.iter().filter(|r| r.event_type != EventType::Alignment).collect();
+        let gaps: Vec<_> = results
+            .iter()
+            .filter(|r| r.event_type != EventType::Alignment)
+            .collect();
         assert_eq!(gaps.len(), 0);
     }
 
@@ -1817,9 +2131,17 @@ mod tests {
 
     fn insertion_boundary_index() -> (tempfile::TempDir, MappingIndex) {
         let dir = tempfile::tempdir().unwrap();
-        let data = make_index_json(&[
-            ("chr13", 100, 115, "ctg_ins", 200, 265, "+", 60, Some("10=50I5=")),
-        ]);
+        let data = make_index_json(&[(
+            "chr13",
+            100,
+            115,
+            "ctg_ins",
+            200,
+            265,
+            "+",
+            60,
+            Some("10=50I5="),
+        )]);
         let path = write_gz_json(&dir, &data);
         let index = load_index(&path).unwrap();
         (dir, index)
@@ -1876,7 +2198,10 @@ mod tests {
         let index = load_index(&path).unwrap();
 
         let results = query(&index, "chr14", 4500, 7500, 0);
-        let gaps: Vec<_> = results.iter().filter(|r| r.event_type != EventType::Alignment).collect();
+        let gaps: Vec<_> = results
+            .iter()
+            .filter(|r| r.event_type != EventType::Alignment)
+            .collect();
         assert_eq!(gaps.len(), 1);
         assert_eq!(gaps[0].event_type, EventType::Complex);
         assert_eq!(gaps[0].asm_gap_size, Some(-500));
@@ -1898,9 +2223,15 @@ mod tests {
         let index = load_index(&path).unwrap();
 
         let results = query(&index, "chr15", 7500, 9500, 0);
-        let gaps: Vec<_> = results.iter().filter(|r| r.event_type != EventType::Alignment).collect();
+        let gaps: Vec<_> = results
+            .iter()
+            .filter(|r| r.event_type != EventType::Alignment)
+            .collect();
         assert_eq!(gaps.len(), 0);
-        let alns: Vec<_> = results.iter().filter(|r| r.event_type == EventType::Alignment).collect();
+        let alns: Vec<_> = results
+            .iter()
+            .filter(|r| r.event_type == EventType::Alignment)
+            .collect();
         assert_eq!(alns.len(), 2);
         let mut asm_starts: Vec<u64> = alns.iter().map(|r| r.asm_start).collect();
         asm_starts.sort();
@@ -1916,8 +2247,12 @@ mod tests {
         let data = make_index_json(&[
             ("chr9", 1000, 3000, "ctg9", 10000, 12000, "+", 60, None),
             ("chr9", 2500, 5000, "ctg9", 12000, 14500, "+", 5, None),
-            ("chr10", 100000, 102000, "ctg10a", 200000, 202000, "+", 60, None),
-            ("chr10", 100000, 102000, "ctg10b", 300000, 302000, "+", 60, None),
+            (
+                "chr10", 100000, 102000, "ctg10a", 200000, 202000, "+", 60, None,
+            ),
+            (
+                "chr10", 100000, 102000, "ctg10b", 300000, 302000, "+", 60, None,
+            ),
         ]);
         let path = write_gz_json(&dir, &data);
         let index = load_index(&path).unwrap();
@@ -1928,7 +2263,10 @@ mod tests {
     fn test_overlapping_blocks_both_returned() {
         let (_dir, index) = overlap_index();
         let results = query(&index, "chr9", 1000, 5000, 0);
-        let alns: Vec<_> = results.iter().filter(|r| r.event_type == EventType::Alignment).collect();
+        let alns: Vec<_> = results
+            .iter()
+            .filter(|r| r.event_type == EventType::Alignment)
+            .collect();
         assert_eq!(alns.len(), 2);
     }
 
@@ -1936,7 +2274,10 @@ mod tests {
     fn test_overlapping_blocks_ref_overlap_region() {
         let (_dir, index) = overlap_index();
         let results = query(&index, "chr9", 2600, 2900, 0);
-        let alns: Vec<_> = results.iter().filter(|r| r.event_type == EventType::Alignment).collect();
+        let alns: Vec<_> = results
+            .iter()
+            .filter(|r| r.event_type == EventType::Alignment)
+            .collect();
         assert_eq!(alns.len(), 2);
         for a in &alns {
             assert_eq!(a.ref_start, 2600);
@@ -1948,7 +2289,10 @@ mod tests {
     fn test_overlapping_blocks_different_asm_coords() {
         let (_dir, index) = overlap_index();
         let results = query(&index, "chr9", 2600, 2900, 0);
-        let alns: Vec<_> = results.iter().filter(|r| r.event_type == EventType::Alignment).collect();
+        let alns: Vec<_> = results
+            .iter()
+            .filter(|r| r.event_type == EventType::Alignment)
+            .collect();
         let asm_starts: Vec<u64> = alns.iter().map(|r| r.asm_start).collect();
         assert_eq!(asm_starts.len(), 2);
         assert_ne!(asm_starts[0], asm_starts[1]);
@@ -1958,7 +2302,10 @@ mod tests {
     fn test_overlapping_filtered_by_mapq() {
         let (_dir, index) = overlap_index();
         let results = query(&index, "chr9", 2600, 2900, 10);
-        let alns: Vec<_> = results.iter().filter(|r| r.event_type == EventType::Alignment).collect();
+        let alns: Vec<_> = results
+            .iter()
+            .filter(|r| r.event_type == EventType::Alignment)
+            .collect();
         assert_eq!(alns.len(), 1);
         assert_eq!(alns[0].mapq, 60);
     }
@@ -1967,7 +2314,10 @@ mod tests {
     fn test_segdup_two_contigs_same_ref() {
         let (_dir, index) = overlap_index();
         let results = query(&index, "chr10", 100000, 102000, 0);
-        let alns: Vec<_> = results.iter().filter(|r| r.event_type == EventType::Alignment).collect();
+        let alns: Vec<_> = results
+            .iter()
+            .filter(|r| r.event_type == EventType::Alignment)
+            .collect();
         assert_eq!(alns.len(), 2);
         let mut contigs: Vec<_> = alns.iter().map(|r| r.asm_chrom.as_str()).collect();
         contigs.sort();
@@ -1978,7 +2328,10 @@ mod tests {
     fn test_segdup_different_asm_ranges() {
         let (_dir, index) = overlap_index();
         let results = query(&index, "chr10", 100500, 101500, 0);
-        let alns: Vec<_> = results.iter().filter(|r| r.event_type == EventType::Alignment).collect();
+        let alns: Vec<_> = results
+            .iter()
+            .filter(|r| r.event_type == EventType::Alignment)
+            .collect();
         assert_eq!(alns.len(), 2);
         let mut asm_ranges: Vec<_> = alns.iter().map(|r| (r.asm_start, r.asm_end)).collect();
         asm_ranges.sort();

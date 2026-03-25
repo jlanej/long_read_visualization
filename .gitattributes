@@ -1,0 +1,12 @@
+# Bioinformatics index files are binary / fixed-format and must not
+# have line endings converted by Git (CRLF on Windows breaks parsers).
+*.fai    binary
+*.gzi    binary
+*.bai    binary
+*.csi    binary
+*.tbi    binary
+
+# Compressed files are already binary but be explicit
+*.gz     binary
+*.bam    binary
+*.cram   binary

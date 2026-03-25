@@ -1,8 +1,8 @@
 use std::io;
 use std::path::Path;
 
-use noodles::core::{Position, Region};
 use noodles::core::region::Interval;
+use noodles::core::{Position, Region};
 use noodles::fasta as noodles_fasta;
 
 use super::{FastaSequence, GenomeError};
@@ -80,9 +80,7 @@ fn query_fasta_with_region(
     let mut reader = noodles_fasta::io::indexed_reader::Builder::default()
         .build_from_path(fasta_path)
         .map_err(|e| match e.kind() {
-            io::ErrorKind::NotFound => {
-                GenomeError::IndexNotFound(fai_path_for(fasta_path))
-            }
+            io::ErrorKind::NotFound => GenomeError::IndexNotFound(fai_path_for(fasta_path)),
             _ => GenomeError::Io(e),
         })?;
 
@@ -118,10 +116,7 @@ fn fai_path_for(fasta_path: &Path) -> std::path::PathBuf {
 fn region_bounds(region: &Region) -> (u64, u64) {
     let interval = region.interval();
 
-    let start = interval
-        .start()
-        .map(|p| usize::from(p) as u64)
-        .unwrap_or(1);
+    let start = interval.start().map(|p| usize::from(p) as u64).unwrap_or(1);
 
     let end = interval
         .end()
@@ -146,8 +141,7 @@ mod tests {
     }
 
     fn toy_hap1() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../resources/toy_dataset/toy_hap1.fa.gz")
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../resources/toy_dataset/toy_hap1.fa.gz")
     }
 
     // -- query_fasta_region tests (exact sequence name) --
@@ -161,12 +155,7 @@ mod tests {
         }
         // The toy reference has sequence named "chr1:112064095-112277008".
         // Query local positions 1-100 within that sequence.
-        let result = query_fasta_region(
-            &fa,
-            "chr1:112064095-112277008",
-            1,
-            100,
-        );
+        let result = query_fasta_region(&fa, "chr1:112064095-112277008", 1, 100);
         match result {
             Ok(seq) => {
                 assert_eq!(seq.sequence.len(), 100);
@@ -187,12 +176,7 @@ mod tests {
             return;
         }
         // First hap1 sequence
-        let result = query_fasta_region(
-            &fa,
-            "NA21110#1#CM089663.1:111967298-112167366",
-            1,
-            100,
-        );
+        let result = query_fasta_region(&fa, "NA21110#1#CM089663.1:111967298-112167366", 1, 100);
         match result {
             Ok(seq) => {
                 assert_eq!(seq.sequence.len(), 100);
@@ -207,12 +191,7 @@ mod tests {
         if !fa.exists() {
             return;
         }
-        let result = query_fasta_region(
-            &fa,
-            "chr1:112064095-112277008",
-            500,
-            599,
-        );
+        let result = query_fasta_region(&fa, "chr1:112064095-112277008", 500, 599);
         match result {
             Ok(seq) => {
                 assert_eq!(

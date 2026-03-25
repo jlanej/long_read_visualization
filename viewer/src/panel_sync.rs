@@ -21,11 +21,7 @@ pub enum PanelId {
 
 impl PanelId {
     /// All panels in display order.
-    pub const ALL: [PanelId; 3] = [
-        PanelId::Reference,
-        PanelId::Haplotype1,
-        PanelId::Haplotype2,
-    ];
+    pub const ALL: [PanelId; 3] = [PanelId::Reference, PanelId::Haplotype1, PanelId::Haplotype2];
 }
 
 /// View state for a single panel.
@@ -103,6 +99,7 @@ impl PanelSyncManager {
     }
 
     /// Get a mutable reference to the view state for a panel.
+    #[allow(dead_code)]
     pub fn view_mut(&mut self, panel: PanelId) -> &mut PanelView {
         &mut self.panels[Self::idx(panel)]
     }

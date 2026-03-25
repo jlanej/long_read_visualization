@@ -87,12 +87,9 @@ fn extract_bam_read(record: &bam::Record) -> Result<Option<AlignedRead>, GenomeE
 
     let indels = extract_indels_from_bam_cigar(&cigar, start)?;
 
-    let name = record
-        .name()
-        .map(|n| format!("{n}"))
-        .unwrap_or_default();
+    let name = record.name().map(|n| format!("{n}")).unwrap_or_default();
 
-    let mq = record.mapping_quality().map(|q| u8::from(q));
+    let mq = record.mapping_quality().map(u8::from);
     let hp = hp_from_bam(record);
 
     Ok(Some(AlignedRead {
@@ -242,21 +239,16 @@ fn extract_cram_read(record: &sam::alignment::RecordBuf) -> Option<AlignedRead> 
         return None;
     }
 
-    let start = record
-        .alignment_start()
-        .map(|p| usize::from(p) as u64)?;
+    let start = record.alignment_start().map(|p| usize::from(p) as u64)?;
 
     let end = record
         .alignment_end()
         .map(|p| usize::from(p) as u64)
         .unwrap_or(start);
 
-    let name = record
-        .name()
-        .map(|n| n.to_string())
-        .unwrap_or_default();
+    let name = record.name().map(|n| n.to_string()).unwrap_or_default();
 
-    let mq = record.mapping_quality().map(|q| u8::from(q));
+    let mq = record.mapping_quality().map(u8::from);
     let hp = hp_from_record_buf(record);
 
     let indels = extract_indels_from_cigar_buf(record.cigar(), start);
@@ -339,8 +331,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn toy_bam() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../resources/toy_dataset/toy_reads.bam")
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../resources/toy_dataset/toy_reads.bam")
     }
 
     // -- BAM unit tests --
@@ -431,11 +422,10 @@ mod tests {
         }
         // Query a region with no reads (chrUn doesn't exist in the BAM)
         let result = query_bam(&bam, "chrUn:1-100");
-        match result {
-            Ok(reads) => assert!(reads.is_empty(), "no reads expected in chrUn"),
-            // Either empty or error is acceptable for non-existent contig
-            Err(_) => {}
+        if let Ok(reads) = result {
+            assert!(reads.is_empty(), "no reads expected in chrUn");
         }
+        // Either empty or error is acceptable for non-existent contig
     }
 
     // -- Error handling tests --
