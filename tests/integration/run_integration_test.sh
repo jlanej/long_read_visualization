@@ -78,6 +78,12 @@ else
     echo "ERROR: missing GUI runtime library /usr/lib/x86_64-linux-gnu/libX11-xcb.so.1" >&2
     exit 1
 fi
+if docker_run test -e /usr/lib/x86_64-linux-gnu/libxkbcommon-x11.so.0; then
+    echo "  ✓ /usr/lib/x86_64-linux-gnu/libxkbcommon-x11.so.0"
+else
+    echo "ERROR: missing GUI runtime library /usr/lib/x86_64-linux-gnu/libxkbcommon-x11.so.0" >&2
+    exit 1
+fi
 echo ""
 
 # ── 1c. Shared-library and GLIBC compatibility checks ────────────────────────
