@@ -64,9 +64,12 @@ pub struct ChromData {
     pub starts: Vec<u64>,
     pub ends: Vec<u64>,
     pub max_block_len: u64,
-    /// Pre-parsed CIGAR ops per block (empty vec if no CIGAR).
+    /// Pre-parsed CIGAR ops for each block, indexed in parallel with `blocks`.
+    /// Empty vec when the block has no CIGAR string.
     cigar_ops: Vec<Vec<CigarOp>>,
-    /// Pre-built CIGAR index per block (None for short CIGARs).
+    /// Pre-built cumulative-offset CIGAR index for each block (parallel with
+    /// `blocks`).  `None` for blocks whose CIGAR has fewer than
+    /// [`CIGAR_INDEX_THRESHOLD`] operations (a linear scan is fast enough).
     cigar_indices: Vec<Option<CigarIndex>>,
 }
 
@@ -120,11 +123,22 @@ pub struct QueryResult {
 // ---------------------------------------------------------------------------
 
 /// Minimum number of CIGAR operations before building a binary-search index.
+/// Below this threshold a linear scan through the CIGAR ops is fast enough;
+/// above it the cumulative-offset index enables O(log n) lookup which pays
+/// off for the typical long-read alignments that contain hundreds of ops.
 const CIGAR_INDEX_THRESHOLD: usize = 64;
 
 // ---------------------------------------------------------------------------
 // CIGAR helpers
 // ---------------------------------------------------------------------------
+
+/// Set of all valid CIGAR operation characters (SAM/PAF).
+const VALID_CIGAR_OPS: [char; 9] = ['M', 'I', 'D', 'N', 'S', 'H', 'P', 'X', '='];
+
+#[inline]
+fn is_valid_cigar_op(op: char) -> bool {
+    VALID_CIGAR_OPS.contains(&op)
+}
 
 #[inline]
 fn is_ref_consuming(op: char) -> bool {
@@ -148,7 +162,7 @@ pub fn parse_cigar(cigar_str: &str) -> Vec<CigarOp> {
             if num_start.is_none() {
                 num_start = Some(i);
             }
-        } else if matches!(c, 'M' | 'I' | 'D' | 'N' | 'S' | 'H' | 'P' | 'X' | '=') {
+        } else if is_valid_cigar_op(c) {
             if let Some(start) = num_start {
                 if let Ok(len) = cigar_str[start..i].parse::<u64>() {
                     ops.push(CigarOp { len, op: c });
@@ -203,14 +217,16 @@ pub fn project_cigar(
     // Fast path: binary-search into pre-computed cumulative offsets.
     if let Some(idx) = cigar_index {
         if ref_offset_start > 0 && !ops.is_empty() {
-            let pos = idx
+            // partition_point returns the first index where ref_cumul > ref_offset_start
+            let bisect_pos = idx
                 .ref_cumul
                 .partition_point(|&v| v <= ref_offset_start);
-            let pos = if pos > 0 { pos - 1 } else { 0 };
-            let pos = pos.min(ops.len() - 1);
-            start_op = pos;
-            ref_cur = idx.ref_cumul[pos];
-            asm_cur = idx.asm_cumul[pos];
+            // Step back to the operation that contains ref_offset_start
+            let adjusted = if bisect_pos > 0 { bisect_pos - 1 } else { 0 };
+            let clamped = adjusted.min(ops.len() - 1);
+            start_op = clamped;
+            ref_cur = idx.ref_cumul[clamped];
+            asm_cur = idx.asm_cumul[clamped];
         }
     }
 
