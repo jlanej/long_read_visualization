@@ -46,6 +46,30 @@ docker_run bash     --version | head -1
 echo "All packaged tools are available and linked correctly."
 echo ""
 
+# ── 1b. Verify packaged scripts and viewer binary exist ──────────────────────
+echo "--- 1b. Verifying packaged scripts and viewer binary ---"
+MISSING=0
+check_path() {
+    local path="$1"
+    if docker_run test -f "${path}"; then
+        echo "  ✓ ${path}"
+    else
+        echo "  ✗ ${path}  (MISSING)"
+        MISSING=$((MISSING + 1))
+    fi
+}
+check_path /opt/long_read_visualization/scripts/launch_viewer.sh
+check_path /opt/long_read_visualization/scripts/launch_server.sh
+check_path /opt/long_read_visualization/scripts/preprocess.sh
+check_path /opt/long_read_visualization/scripts/generate_server_config.py
+check_path /usr/local/bin/long_read_viewer
+if [[ "${MISSING}" -gt 0 ]]; then
+    echo "ERROR: ${MISSING} required file(s) are missing from the container." >&2
+    exit 1
+fi
+echo "All required scripts and binaries are present."
+echo ""
+
 # ── 2. Generate minimal synthetic test data ──────────────────────────────────
 echo "--- 2. Generating test data ---"
 python3 "${SCRIPT_DIR}/generate_test_data.py" "${TESTDIR}"
