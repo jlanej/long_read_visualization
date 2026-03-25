@@ -1,12 +1,27 @@
 # ===========================================================================
 # Stage 1 — Build the Rust native viewer binary
 # ===========================================================================
-FROM rust:latest AS rust-builder
+# Use the same Ubuntu 22.04 base as the runtime image so the compiled binary
+# only requires glibc 2.35 (the version shipped with Ubuntu 22.04).  Using a
+# newer base image (e.g. rust:latest on Debian Trixie) produces a binary that
+# requires GLIBC_2.39 which is not present in the Ubuntu 22.04 runtime, causing
+# the "version `GLIBC_2.39' not found" error seen in containers / Apptainer.
+FROM ubuntu:22.04 AS rust-builder
+
+ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        build-essential \
         libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
         libxkbcommon-dev libgtk-3-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# Install the Rust toolchain via rustup so we stay on the Ubuntu 22.04 glibc.
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --default-toolchain stable --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
 
 WORKDIR /build
 COPY viewer/ ./viewer/
