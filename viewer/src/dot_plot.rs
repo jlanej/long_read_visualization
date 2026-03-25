@@ -203,19 +203,20 @@ pub fn compute_dotplot(seq1: &str, seq2: &str, k: usize) -> DotPlotResult {
         }
 
         // Reverse-complement matches (skip if palindrome to avoid double-counting)
-        if !is_palindrome && !truncated {
-            if let Some(positions) = kmer_positions.get(rc_bytes) {
-                for &j in positions {
-                    reverse.push(DotMatch { x: i, y: j });
-                    total += 1;
-                    if total >= MAX_MATCHES {
-                        truncated = true;
-                        break;
-                    }
-                }
-                if truncated {
+        if !is_palindrome
+            && !truncated
+            && let Some(positions) = kmer_positions.get(rc_bytes)
+        {
+            for &j in positions {
+                reverse.push(DotMatch { x: i, y: j });
+                total += 1;
+                if total >= MAX_MATCHES {
+                    truncated = true;
                     break;
                 }
+            }
+            if truncated {
+                break;
             }
         }
     }
@@ -327,7 +328,7 @@ mod tests {
         let result = compute_dotplot(seq1, seq2, 4);
         // At least one forward match should be found for the AAAA kmer
         assert!(
-            result.forward.len() > 0 || result.palindrome.len() > 0,
+            !result.forward.is_empty() || !result.palindrome.is_empty(),
             "expected at least one match"
         );
     }
@@ -342,7 +343,7 @@ mod tests {
         let result = compute_dotplot(seq1, seq2, 3);
         // There should be at least one reverse-complement match
         assert!(
-            result.reverse.len() > 0,
+            !result.reverse.is_empty(),
             "expected reverse-complement matches, got {:?}",
             result
         );
@@ -430,7 +431,10 @@ mod tests {
             .chain(ref_vs_hap1.palindrome.iter())
             .filter(|m| m.x == m.y)
             .count();
-        assert!(on_diagonal > 0, "identical sequences should have diagonal matches");
+        assert!(
+            on_diagonal > 0,
+            "identical sequences should have diagonal matches"
+        );
 
         // ref vs hap2: different sequences → different match pattern
         // (the exact counts will differ from ref_vs_hap1)
@@ -462,7 +466,7 @@ mod tests {
         // Sequences with no shared k-mers
         let seq1 = "AAAAAAAAAA";
         let seq2 = "CCCCCCCCCC";
-        let result = compute_dotplot(&seq1, &seq2, 5);
+        let result = compute_dotplot(seq1, seq2, 5);
         assert_eq!(result.forward.len(), 0);
         // But reverse complement of AAAAA = TTTTT, not CCCCC, so no RC match either
         assert_eq!(result.reverse.len(), 0);
@@ -476,6 +480,6 @@ mod tests {
         let result = compute_dotplot(&seq1, &seq2, 4);
         // "AAAA" matches everywhere against itself, and RC("AAAA")="TTTT"
         // so no RC matches with seq2
-        assert!(result.forward.len() > 0 || result.palindrome.len() > 0);
+        assert!(!result.forward.is_empty() || !result.palindrome.is_empty());
     }
 }

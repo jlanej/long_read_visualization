@@ -102,8 +102,8 @@ impl RegionNavigator {
 
     /// Load regions from a manifest JSON file.
     pub fn load_manifest(&mut self, path: &Path) -> Result<(), String> {
-        let data = std::fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read manifest: {e}"))?;
+        let data =
+            std::fs::read_to_string(path).map_err(|e| format!("Failed to read manifest: {e}"))?;
         self.load_manifest_str(&data)
     }
 

@@ -91,9 +91,7 @@ pub fn pack_reads(mut reads: Vec<AlignedRead>) -> Vec<PileupRow> {
     let mut rows: Vec<Vec<AlignedRead>> = Vec::new();
 
     for read in reads {
-        let assigned = row_ends
-            .iter()
-            .position(|&end| read.start > end + READ_GAP);
+        let assigned = row_ends.iter().position(|&end| read.start > end + READ_GAP);
 
         match assigned {
             Some(idx) => {
@@ -169,9 +167,7 @@ pub fn layout_read_rects(
                 let ix = (indel.ref_pos - view_start) as f32 * bp_per_px;
                 let iw = match indel.kind {
                     super::IndelKind::Insertion => 2.0_f32.max(bp_per_px),
-                    super::IndelKind::Deletion => {
-                        (indel.length as f32 * bp_per_px).max(1.0)
-                    }
+                    super::IndelKind::Deletion => (indel.length as f32 * bp_per_px).max(1.0),
                 };
                 let ic = match indel.kind {
                     super::IndelKind::Insertion => [180, 80, 220], // purple
@@ -367,7 +363,11 @@ mod tests {
             })
             .collect();
         let rows = pack_reads(reads);
-        assert_eq!(rows.len(), 1, "10k non-overlapping reads should share 1 row");
+        assert_eq!(
+            rows.len(),
+            1,
+            "10k non-overlapping reads should share 1 row"
+        );
         assert_eq!(rows[0].reads.len(), 10_000);
     }
 
@@ -485,9 +485,21 @@ mod tests {
     fn test_visible_indels_all_shown_when_disabled() {
         let mut read = make_read("r1", 100, 500);
         read.indels = vec![
-            Indel { ref_pos: 150, length: 1, kind: IndelKind::Insertion },
-            Indel { ref_pos: 200, length: 2, kind: IndelKind::Deletion },
-            Indel { ref_pos: 300, length: 10, kind: IndelKind::Insertion },
+            Indel {
+                ref_pos: 150,
+                length: 1,
+                kind: IndelKind::Insertion,
+            },
+            Indel {
+                ref_pos: 200,
+                length: 2,
+                kind: IndelKind::Deletion,
+            },
+            Indel {
+                ref_pos: 300,
+                length: 10,
+                kind: IndelKind::Insertion,
+            },
         ];
         let config = PileupDisplayConfig {
             hide_small_indels: false,
@@ -501,10 +513,26 @@ mod tests {
     fn test_visible_indels_small_hidden() {
         let mut read = make_read("r1", 100, 500);
         read.indels = vec![
-            Indel { ref_pos: 150, length: 1, kind: IndelKind::Insertion },
-            Indel { ref_pos: 200, length: 3, kind: IndelKind::Deletion },
-            Indel { ref_pos: 300, length: 4, kind: IndelKind::Insertion },
-            Indel { ref_pos: 400, length: 10, kind: IndelKind::Deletion },
+            Indel {
+                ref_pos: 150,
+                length: 1,
+                kind: IndelKind::Insertion,
+            },
+            Indel {
+                ref_pos: 200,
+                length: 3,
+                kind: IndelKind::Deletion,
+            },
+            Indel {
+                ref_pos: 300,
+                length: 4,
+                kind: IndelKind::Insertion,
+            },
+            Indel {
+                ref_pos: 400,
+                length: 10,
+                kind: IndelKind::Deletion,
+            },
         ];
         let config = PileupDisplayConfig {
             hide_small_indels: true,
@@ -521,8 +549,16 @@ mod tests {
     fn test_visible_indels_threshold_boundary() {
         let mut read = make_read("r1", 100, 500);
         read.indels = vec![
-            Indel { ref_pos: 150, length: 3, kind: IndelKind::Insertion },
-            Indel { ref_pos: 200, length: 4, kind: IndelKind::Insertion },
+            Indel {
+                ref_pos: 150,
+                length: 3,
+                kind: IndelKind::Insertion,
+            },
+            Indel {
+                ref_pos: 200,
+                length: 4,
+                kind: IndelKind::Insertion,
+            },
         ];
         let config = PileupDisplayConfig {
             hide_small_indels: true,
@@ -597,11 +633,20 @@ mod tests {
     #[test]
     fn test_layout_squished_vs_expanded_height() {
         let rows = pack_reads(vec![make_read("r1", 100, 200)]);
-        let squished_cfg = PileupDisplayConfig { squished: true, ..Default::default() };
-        let expanded_cfg = PileupDisplayConfig { squished: false, ..Default::default() };
+        let squished_cfg = PileupDisplayConfig {
+            squished: true,
+            ..Default::default()
+        };
+        let expanded_cfg = PileupDisplayConfig {
+            squished: false,
+            ..Default::default()
+        };
         let sq_rects = layout_read_rects(&rows, &squished_cfg, 100, 200, 800.0);
         let ex_rects = layout_read_rects(&rows, &expanded_cfg, 100, 200, 800.0);
-        assert!(sq_rects[0].height < ex_rects[0].height, "squished should be shorter");
+        assert!(
+            sq_rects[0].height < ex_rects[0].height,
+            "squished should be shorter"
+        );
         assert_eq!(sq_rects[0].height, SQUISHED_ROW_HEIGHT);
         assert_eq!(ex_rects[0].height, EXPANDED_ROW_HEIGHT);
     }
@@ -629,9 +674,11 @@ mod tests {
     #[test]
     fn test_layout_indel_markers_shown() {
         let mut read = make_read_hp("r1", 100, 500, Some(1));
-        read.indels = vec![
-            Indel { ref_pos: 200, length: 10, kind: IndelKind::Insertion },
-        ];
+        read.indels = vec![Indel {
+            ref_pos: 200,
+            length: 10,
+            kind: IndelKind::Insertion,
+        }];
         let rows = pack_reads(vec![read]);
         let config = PileupDisplayConfig {
             hide_small_indels: true,
@@ -646,9 +693,11 @@ mod tests {
     #[test]
     fn test_layout_small_indels_hidden() {
         let mut read = make_read_hp("r1", 100, 500, Some(1));
-        read.indels = vec![
-            Indel { ref_pos: 200, length: 2, kind: IndelKind::Insertion },
-        ];
+        read.indels = vec![Indel {
+            ref_pos: 200,
+            length: 2,
+            kind: IndelKind::Insertion,
+        }];
         let rows = pack_reads(vec![read]);
         let config = PileupDisplayConfig {
             hide_small_indels: true,

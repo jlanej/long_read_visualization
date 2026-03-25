@@ -21,11 +21,7 @@ pub enum PanelId {
 
 impl PanelId {
     /// All panels in display order.
-    pub const ALL: [PanelId; 3] = [
-        PanelId::Reference,
-        PanelId::Haplotype1,
-        PanelId::Haplotype2,
-    ];
+    pub const ALL: [PanelId; 3] = [PanelId::Reference, PanelId::Haplotype1, PanelId::Haplotype2];
 }
 
 /// View state for a single panel.

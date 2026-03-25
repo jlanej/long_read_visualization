@@ -1,7 +1,7 @@
 use eframe::egui;
 
 use crate::genome::pileup::{
-    self, PileupDisplayConfig, PileupRow, ReadRect, EXPANDED_ROW_HEIGHT, ROW_SPACING,
+    self, EXPANDED_ROW_HEIGHT, PileupDisplayConfig, PileupRow, ROW_SPACING, ReadRect,
     SQUISHED_ROW_HEIGHT,
 };
 use crate::panel_sync::{PanelId, PanelSyncManager};
@@ -58,8 +58,9 @@ impl Default for ViewerApp {
     fn default() -> Self {
         Self {
             navigator: RegionNavigator::new(),
-            status_message: "No regions loaded. Use File > Load Manifest to open a region manifest JSON."
-                .to_string(),
+            status_message:
+                "No regions loaded. Use File > Load Manifest to open a region manifest JSON."
+                    .to_string(),
             display_config: PileupDisplayConfig::default(),
             sync_manager: PanelSyncManager::new(),
             demo_rows: Vec::new(),
@@ -68,9 +69,24 @@ impl Default for ViewerApp {
 }
 
 impl ViewerApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, manifest_path: Option<&std::path::Path>) -> Self {
         configure_fonts(&cc.egui_ctx);
-        Self::default()
+        let mut app = Self::default();
+        if let Some(path) = manifest_path {
+            match app.navigator.load_manifest(path) {
+                Ok(()) => {
+                    app.status_message = format!(
+                        "Loaded {} regions from {}",
+                        app.navigator.len(),
+                        path.display()
+                    );
+                }
+                Err(e) => {
+                    app.status_message = format!("Error loading manifest: {e}");
+                }
+            }
+        }
+        app
     }
 
     /// Render the top toolbar with navigation controls.
@@ -162,7 +178,11 @@ impl ViewerApp {
             } else {
                 "Expanded"
             };
-            if ui.button(squish_label).on_hover_text("Toggle squished/expanded read display").clicked() {
+            if ui
+                .button(squish_label)
+                .on_hover_text("Toggle squished/expanded read display")
+                .clicked()
+            {
                 self.display_config.squished = !self.display_config.squished;
             }
 
@@ -172,7 +192,11 @@ impl ViewerApp {
             } else {
                 "Indels: shown".to_string()
             };
-            if ui.button(&indel_label).on_hover_text("Toggle small indel display").clicked() {
+            if ui
+                .button(&indel_label)
+                .on_hover_text("Toggle small indel display")
+                .clicked()
+            {
                 self.display_config.hide_small_indels = !self.display_config.hide_small_indels;
             }
 
@@ -245,7 +269,8 @@ impl ViewerApp {
             } else {
                 // Render pileup using egui canvas primitives
                 let panel_width = ui.available_width();
-                let rects = pileup::layout_read_rects(rows, config, view_start, view_end, panel_width);
+                let rects =
+                    pileup::layout_read_rects(rows, config, view_start, view_end, panel_width);
                 Self::paint_pileup(ui, &rects);
             }
         });
@@ -258,14 +283,13 @@ impl ViewerApp {
         }
 
         // Compute the total height needed
-        let max_y = rects
-            .iter()
-            .map(|r| r.y + r.height)
-            .fold(0.0_f32, f32::max);
+        let max_y = rects.iter().map(|r| r.y + r.height).fold(0.0_f32, f32::max);
         let total_height = max_y + 4.0; // small padding
 
-        let (response, painter) =
-            ui.allocate_painter(egui::vec2(ui.available_width(), total_height), egui::Sense::hover());
+        let (response, painter) = ui.allocate_painter(
+            egui::vec2(ui.available_width(), total_height),
+            egui::Sense::hover(),
+        );
 
         let origin = response.rect.left_top();
 
@@ -307,9 +331,8 @@ impl ViewerApp {
         let next = ctx.input(|i| {
             i.key_pressed(egui::Key::ArrowRight) || i.key_pressed(egui::Key::CloseBracket)
         });
-        let zoom_in = ctx.input(|i| {
-            i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals)
-        });
+        let zoom_in =
+            ctx.input(|i| i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals));
         let zoom_out = ctx.input(|i| i.key_pressed(egui::Key::Minus));
         let toggle_sync = ctx.input(|i| i.key_pressed(egui::Key::S));
 
@@ -387,19 +410,43 @@ impl eframe::App for ViewerApp {
             let rows = &self.demo_rows;
 
             ui.allocate_ui(egui::vec2(ui.available_width(), panel_height), |ui| {
-                Self::show_panel(ui, Panel::Reference, &ref_text, rows, &config, ref_start, ref_end);
+                Self::show_panel(
+                    ui,
+                    Panel::Reference,
+                    &ref_text,
+                    rows,
+                    &config,
+                    ref_start,
+                    ref_end,
+                );
             });
 
             ui.add_space(4.0);
 
             ui.allocate_ui(egui::vec2(ui.available_width(), panel_height), |ui| {
-                Self::show_panel(ui, Panel::Haplotype1, &hap1_text, rows, &config, h1_start, h1_end);
+                Self::show_panel(
+                    ui,
+                    Panel::Haplotype1,
+                    &hap1_text,
+                    rows,
+                    &config,
+                    h1_start,
+                    h1_end,
+                );
             });
 
             ui.add_space(4.0);
 
             ui.allocate_ui(egui::vec2(ui.available_width(), panel_height), |ui| {
-                Self::show_panel(ui, Panel::Haplotype2, &hap2_text, rows, &config, h2_start, h2_end);
+                Self::show_panel(
+                    ui,
+                    Panel::Haplotype2,
+                    &hap2_text,
+                    rows,
+                    &config,
+                    h2_start,
+                    h2_end,
+                );
             });
         });
     }
@@ -408,14 +455,12 @@ impl eframe::App for ViewerApp {
 /// Configure default fonts/styles.
 fn configure_fonts(ctx: &egui::Context) {
     let mut style = (*ctx.style()).clone();
-    style.text_styles.insert(
-        egui::TextStyle::Body,
-        egui::FontId::proportional(14.0),
-    );
-    style.text_styles.insert(
-        egui::TextStyle::Button,
-        egui::FontId::proportional(13.0),
-    );
+    style
+        .text_styles
+        .insert(egui::TextStyle::Body, egui::FontId::proportional(14.0));
+    style
+        .text_styles
+        .insert(egui::TextStyle::Button, egui::FontId::proportional(13.0));
     ctx.set_style(style);
 }
 

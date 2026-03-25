@@ -1,3 +1,20 @@
+# ===========================================================================
+# Stage 1 — Build the Rust native viewer binary
+# ===========================================================================
+FROM rust:1.85-bookworm AS rust-builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+        libxkbcommon-dev libgtk-3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY viewer/ ./viewer/
+RUN cargo build --manifest-path viewer/Cargo.toml --release
+
+# ===========================================================================
+# Stage 2 — Final image with pipeline tools + Rust binary
+# ===========================================================================
 FROM ubuntu:22.04
 
 LABEL maintainer="long_read_visualization"
@@ -61,6 +78,9 @@ RUN curl -fsSL \
 RUN HTSLIB_LIBRARY_DIR=/usr/local/lib \
     HTSLIB_INCLUDE_DIR=/usr/local/include \
     pip3 install --no-cache-dir pysam
+
+# ── Rust binary from builder stage ──────────────────────────────────────────
+COPY --from=rust-builder /build/viewer/target/release/long_read_viewer /usr/local/bin/long_read_viewer
 
 # ── Pipeline scripts ────────────────────────────────────────────────────────
 COPY src/ /opt/long_read_visualization/src/
