@@ -724,12 +724,8 @@ mod tests {
             return;
         }
 
-        let reads = match query_bam(&bam, "chr1:112164095-112177007") {
+        let reads = match query_bam(&bam, "chr1:112064095-112277008:1-212914") {
             Ok(r) => r,
-            Err(crate::genome::GenomeError::ParseError(_)) => {
-                eprintln!("skipping: header parse error");
-                return;
-            }
             Err(e) => panic!("unexpected error: {e}"),
         };
 
@@ -763,12 +759,8 @@ mod tests {
             return;
         }
 
-        let reads = match query_bam(&bam, "chr1:112164095-112177007") {
+        let reads = match query_bam(&bam, "chr1:112064095-112277008:1-212914") {
             Ok(r) => r,
-            Err(crate::genome::GenomeError::ParseError(_)) => {
-                eprintln!("skipping: header parse error");
-                return;
-            }
             Err(e) => panic!("unexpected error: {e}"),
         };
 
@@ -785,7 +777,7 @@ mod tests {
 
         let rows = pack_reads(reads);
         let config = PileupDisplayConfig::default();
-        let rects = layout_read_rects(&rows, &config, 112164095, 112177007, 1000.0);
+        let rects = layout_read_rects(&rows, &config, 1, 212914, 1000.0);
 
         // Every read should appear in the layout with the correct color
         for (name, expected_color) in &expected_colors {
