@@ -4,6 +4,7 @@ use crate::genome::pileup::{
     self, PileupDisplayConfig, PileupRow, ReadRect, EXPANDED_ROW_HEIGHT, ROW_SPACING,
     SQUISHED_ROW_HEIGHT,
 };
+use crate::panel_sync::{PanelId, PanelSyncManager};
 use crate::region::RegionNavigator;
 
 /// Panel identifiers for the 3-panel layout.
@@ -30,6 +31,15 @@ impl Panel {
             Panel::Haplotype2 => egui::Color32::from_rgb(180, 100, 60),
         }
     }
+
+    /// Convert to the panel_sync PanelId.
+    pub fn sync_id(self) -> PanelId {
+        match self {
+            Panel::Reference => PanelId::Reference,
+            Panel::Haplotype1 => PanelId::Haplotype1,
+            Panel::Haplotype2 => PanelId::Haplotype2,
+        }
+    }
 }
 
 /// Main application state.
@@ -38,6 +48,8 @@ pub struct ViewerApp {
     pub status_message: String,
     /// Display configuration (shared across panels).
     pub display_config: PileupDisplayConfig,
+    /// Synchronized per-panel view state (pan/zoom).
+    pub sync_manager: PanelSyncManager,
     /// Demo pileup rows for rendering (populated when a manifest is loaded).
     demo_rows: Vec<PileupRow>,
 }
@@ -49,6 +61,7 @@ impl Default for ViewerApp {
             status_message: "No regions loaded. Use File > Load Manifest to open a region manifest JSON."
                 .to_string(),
             display_config: PileupDisplayConfig::default(),
+            sync_manager: PanelSyncManager::new(),
             demo_rows: Vec::new(),
         }
     }
@@ -162,6 +175,30 @@ impl ViewerApp {
             if ui.button(&indel_label).on_hover_text("Toggle small indel display").clicked() {
                 self.display_config.hide_small_indels = !self.display_config.hide_small_indels;
             }
+
+            ui.separator();
+
+            // Sync toggle
+            let sync_label = if self.sync_manager.sync_enabled {
+                "🔗 Sync"
+            } else {
+                "🔗̸ Unsync"
+            };
+            if ui
+                .button(sync_label)
+                .on_hover_text("Toggle cross-panel synchronization (S)")
+                .clicked()
+            {
+                self.sync_manager.sync_enabled = !self.sync_manager.sync_enabled;
+            }
+
+            // Zoom controls
+            if ui.button("🔍+").on_hover_text("Zoom in (+)").clicked() {
+                self.sync_manager.zoom(PanelId::Reference, 2.0);
+            }
+            if ui.button("🔍−").on_hover_text("Zoom out (-)").clicked() {
+                self.sync_manager.zoom(PanelId::Reference, 0.5);
+            }
         });
     }
 
@@ -240,7 +277,7 @@ impl ViewerApp {
         }
     }
 
-    /// Update status message to reflect the current region.
+    /// Update status message to reflect the current region and sync panel views.
     fn update_status_for_current_region(&mut self) {
         if let Some(entry) = self.navigator.current() {
             self.status_message = format!(
@@ -249,10 +286,16 @@ impl ViewerApp {
                 entry.label,
                 entry.ref_region
             );
+            // Sync all panel views to the new region
+            self.sync_manager.set_regions(
+                &entry.ref_region,
+                entry.hap1_region.as_ref(),
+                entry.hap2_region.as_ref(),
+            );
         }
     }
 
-    /// Handle keyboard shortcuts for region navigation.
+    /// Handle keyboard shortcuts for region navigation and zoom.
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
         if ctx.wants_keyboard_input() {
             return; // Don't capture keys when a text field is focused
@@ -264,6 +307,11 @@ impl ViewerApp {
         let next = ctx.input(|i| {
             i.key_pressed(egui::Key::ArrowRight) || i.key_pressed(egui::Key::CloseBracket)
         });
+        let zoom_in = ctx.input(|i| {
+            i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals)
+        });
+        let zoom_out = ctx.input(|i| i.key_pressed(egui::Key::Minus));
+        let toggle_sync = ctx.input(|i| i.key_pressed(egui::Key::S));
 
         if prev && !self.navigator.is_empty() {
             self.navigator.prev();
@@ -272,6 +320,15 @@ impl ViewerApp {
         if next && !self.navigator.is_empty() {
             self.navigator.next();
             self.update_status_for_current_region();
+        }
+        if zoom_in {
+            self.sync_manager.zoom(PanelId::Reference, 2.0);
+        }
+        if zoom_out {
+            self.sync_manager.zoom(PanelId::Reference, 0.5);
+        }
+        if toggle_sync {
+            self.sync_manager.sync_enabled = !self.sync_manager.sync_enabled;
         }
     }
 }
@@ -314,13 +371,14 @@ impl eframe::App for ViewerApp {
                 .map(|r| r.to_string())
                 .unwrap_or_else(|| "—".to_string());
 
-            // Determine view range from the current region (or use defaults)
-            let (view_start, view_end) = current
-                .map(|e| {
-                    let r = &e.ref_region;
-                    (r.start, r.end)
-                })
-                .unwrap_or((0, 1000));
+            // Use per-panel view ranges from sync manager
+            let ref_view = self.sync_manager.view(PanelId::Reference);
+            let h1_view = self.sync_manager.view(PanelId::Haplotype1);
+            let h2_view = self.sync_manager.view(PanelId::Haplotype2);
+
+            let (ref_start, ref_end) = (ref_view.view_start, ref_view.view_end);
+            let (h1_start, h1_end) = (h1_view.view_start, h1_view.view_end);
+            let (h2_start, h2_end) = (h2_view.view_start, h2_view.view_end);
 
             // Use vertical layout with equal panel sizes
             let available = ui.available_height();
@@ -329,19 +387,19 @@ impl eframe::App for ViewerApp {
             let rows = &self.demo_rows;
 
             ui.allocate_ui(egui::vec2(ui.available_width(), panel_height), |ui| {
-                Self::show_panel(ui, Panel::Reference, &ref_text, rows, &config, view_start, view_end);
+                Self::show_panel(ui, Panel::Reference, &ref_text, rows, &config, ref_start, ref_end);
             });
 
             ui.add_space(4.0);
 
             ui.allocate_ui(egui::vec2(ui.available_width(), panel_height), |ui| {
-                Self::show_panel(ui, Panel::Haplotype1, &hap1_text, rows, &config, view_start, view_end);
+                Self::show_panel(ui, Panel::Haplotype1, &hap1_text, rows, &config, h1_start, h1_end);
             });
 
             ui.add_space(4.0);
 
             ui.allocate_ui(egui::vec2(ui.available_width(), panel_height), |ui| {
-                Self::show_panel(ui, Panel::Haplotype2, &hap2_text, rows, &config, view_start, view_end);
+                Self::show_panel(ui, Panel::Haplotype2, &hap2_text, rows, &config, h2_start, h2_end);
             });
         });
     }
@@ -383,12 +441,20 @@ mod tests {
     }
 
     #[test]
+    fn test_panel_sync_ids() {
+        assert_eq!(Panel::Reference.sync_id(), PanelId::Reference);
+        assert_eq!(Panel::Haplotype1.sync_id(), PanelId::Haplotype1);
+        assert_eq!(Panel::Haplotype2.sync_id(), PanelId::Haplotype2);
+    }
+
+    #[test]
     fn test_viewer_app_default() {
         let app = ViewerApp::default();
         assert!(app.navigator.is_empty());
         assert!(app.status_message.contains("No regions loaded"));
         assert!(app.display_config.squished);
         assert!(app.display_config.hide_small_indels);
+        assert!(app.sync_manager.sync_enabled);
     }
 
     #[test]
@@ -404,6 +470,9 @@ mod tests {
         app.update_status_for_current_region();
         assert!(app.status_message.contains("1/1"));
         assert!(app.status_message.contains("chr1:100-150"));
+        // Verify sync manager was updated
+        assert_eq!(app.sync_manager.view(PanelId::Reference).view_start, 100);
+        assert_eq!(app.sync_manager.view(PanelId::Reference).view_end, 150);
     }
 
     #[test]
@@ -416,5 +485,92 @@ mod tests {
         assert!(app.display_config.hide_small_indels);
         app.display_config.hide_small_indels = false;
         assert!(!app.display_config.hide_small_indels);
+    }
+
+    // -- Integration: navigation updates sync_manager -----------------------
+
+    #[test]
+    fn test_navigation_updates_sync_manager() {
+        let mut app = ViewerApp::default();
+        let json = r#"{
+          "variants": [
+            {
+              "chrom": "chr1", "pos": 1000, "size": 500,
+              "ref_region": "chr1:1000-1500",
+              "hap1_regions": ["ctg1:5000-5500"],
+              "hap2_regions": ["ctg2:8000-8500"]
+            },
+            {
+              "chrom": "chr2", "pos": 2000, "size": 300,
+              "ref_region": "chr2:2000-2300",
+              "hap1_regions": ["ctg3:6000-6300"],
+              "hap2_regions": ["ctg4:9000-9300"]
+            }
+          ]
+        }"#;
+        app.navigator.load_manifest_str(json).unwrap();
+        app.update_status_for_current_region();
+
+        // Verify region 1
+        assert_eq!(app.sync_manager.view(PanelId::Reference).view_start, 1000);
+        assert_eq!(app.sync_manager.view(PanelId::Haplotype1).view_start, 5000);
+        assert_eq!(app.sync_manager.view(PanelId::Haplotype2).view_start, 8000);
+
+        // Navigate to next region
+        app.navigator.next();
+        app.update_status_for_current_region();
+
+        // Verify region 2 — all panels updated
+        assert_eq!(app.sync_manager.view(PanelId::Reference).view_start, 2000);
+        assert_eq!(app.sync_manager.view(PanelId::Reference).view_end, 2300);
+        assert_eq!(app.sync_manager.view(PanelId::Haplotype1).view_start, 6000);
+        assert_eq!(app.sync_manager.view(PanelId::Haplotype1).view_end, 6300);
+        assert_eq!(app.sync_manager.view(PanelId::Haplotype2).view_start, 9000);
+        assert_eq!(app.sync_manager.view(PanelId::Haplotype2).view_end, 9300);
+    }
+
+    #[test]
+    fn test_zoom_updates_all_panels_synced() {
+        let mut app = ViewerApp::default();
+        let json = r#"{
+          "variants": [{
+            "chrom": "chr1", "pos": 1000, "size": 1000,
+            "ref_region": "chr1:1000-2000",
+            "hap1_regions": ["ctg1:5000-6000"],
+            "hap2_regions": ["ctg2:8000-9000"]
+          }]
+        }"#;
+        app.navigator.load_manifest_str(json).unwrap();
+        app.update_status_for_current_region();
+
+        // Zoom in on reference panel
+        app.sync_manager.zoom(PanelId::Reference, 2.0);
+
+        // All panels should have matching spans
+        assert!(app.sync_manager.all_spans_match());
+        assert_eq!(app.sync_manager.view(PanelId::Reference).span(), 500);
+    }
+
+    #[test]
+    fn test_pan_updates_all_panels_synced() {
+        let mut app = ViewerApp::default();
+        let json = r#"{
+          "variants": [{
+            "chrom": "chr1", "pos": 1000, "size": 1000,
+            "ref_region": "chr1:1000-2000",
+            "hap1_regions": ["ctg1:5000-6000"],
+            "hap2_regions": ["ctg2:8000-9000"]
+          }]
+        }"#;
+        app.navigator.load_manifest_str(json).unwrap();
+        app.update_status_for_current_region();
+
+        // Pan right from reference
+        app.sync_manager.pan(PanelId::Reference, 200);
+
+        // All panels moved
+        assert_eq!(app.sync_manager.view(PanelId::Reference).view_start, 1200);
+        assert_eq!(app.sync_manager.view(PanelId::Haplotype1).view_start, 5200);
+        assert_eq!(app.sync_manager.view(PanelId::Haplotype2).view_start, 8200);
     }
 }

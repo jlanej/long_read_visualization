@@ -1,5 +1,7 @@
 mod app;
+mod dot_plot;
 mod genome;
+mod panel_sync;
 mod region;
 
 use app::ViewerApp;
