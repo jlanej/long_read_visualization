@@ -58,6 +58,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-pip \
         zlib1g-dev \
         libgtk-3-0 \
+        libx11-xcb1 \
         libxcb-render0 \
         libxcb-shape0 \
         libxcb-xfixes0 \

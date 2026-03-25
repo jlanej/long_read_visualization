@@ -70,6 +70,16 @@ fi
 echo "All required scripts and binaries are present."
 echo ""
 
+# ── 1b2. Verify GUI runtime libraries needed by winit/eframe ─────────────────
+echo "--- 1b2. Verifying GUI runtime libraries ---"
+if docker_run test -e /usr/lib/x86_64-linux-gnu/libX11-xcb.so.1; then
+    echo "  ✓ /usr/lib/x86_64-linux-gnu/libX11-xcb.so.1"
+else
+    echo "ERROR: missing GUI runtime library /usr/lib/x86_64-linux-gnu/libX11-xcb.so.1" >&2
+    exit 1
+fi
+echo ""
+
 # ── 1c. Shared-library and GLIBC compatibility checks ────────────────────────
 # Verify that every compiled binary in the image can be loaded by the runtime
 # dynamic linker.  This catches glibc version mismatches like:
