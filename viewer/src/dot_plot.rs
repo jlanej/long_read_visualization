@@ -263,7 +263,7 @@ mod tests {
     }
 
     #[test]
-    fn test_reverse_complement_lowercase() {
+    fn test_reverse_complement_lowercase_input() {
         assert_eq!(reverse_complement("acgt"), "ACGT");
     }
 
