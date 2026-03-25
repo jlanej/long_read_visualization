@@ -298,7 +298,6 @@ impl eframe::App for ViewerApp {
 
         // Clone display_config for immutable borrow inside closure
         let config = self.display_config.clone();
-        let demo_rows = self.demo_rows.clone();
 
         // Central area: 3 panels stacked vertically
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -327,20 +326,22 @@ impl eframe::App for ViewerApp {
             let available = ui.available_height();
             let panel_height = (available - 16.0) / 3.0; // 16px for spacing
 
+            let rows = &self.demo_rows;
+
             ui.allocate_ui(egui::vec2(ui.available_width(), panel_height), |ui| {
-                Self::show_panel(ui, Panel::Reference, &ref_text, &demo_rows, &config, view_start, view_end);
+                Self::show_panel(ui, Panel::Reference, &ref_text, rows, &config, view_start, view_end);
             });
 
             ui.add_space(4.0);
 
             ui.allocate_ui(egui::vec2(ui.available_width(), panel_height), |ui| {
-                Self::show_panel(ui, Panel::Haplotype1, &hap1_text, &demo_rows, &config, view_start, view_end);
+                Self::show_panel(ui, Panel::Haplotype1, &hap1_text, rows, &config, view_start, view_end);
             });
 
             ui.add_space(4.0);
 
             ui.allocate_ui(egui::vec2(ui.available_width(), panel_height), |ui| {
-                Self::show_panel(ui, Panel::Haplotype2, &hap2_text, &demo_rows, &config, view_start, view_end);
+                Self::show_panel(ui, Panel::Haplotype2, &hap2_text, rows, &config, view_start, view_end);
             });
         });
     }

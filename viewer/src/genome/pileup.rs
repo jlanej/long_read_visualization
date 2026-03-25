@@ -161,7 +161,8 @@ pub fn layout_read_rects(
             });
 
             // Draw indel markers
-            for indel in &visible_indels(read, config) {
+            let vis_indels = visible_indels(read, config);
+            for indel in &vis_indels {
                 if indel.ref_pos < view_start || indel.ref_pos > view_end {
                     continue;
                 }
