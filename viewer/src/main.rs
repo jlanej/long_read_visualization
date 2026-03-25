@@ -19,7 +19,7 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
 
-    eframe::run_native(
+    let result = eframe::run_native(
         "Long Read Viewer",
         options,
         Box::new(move |cc| {
@@ -29,7 +29,28 @@ fn main() -> eframe::Result<()> {
                 args.data_paths,
             )))
         }),
-    )
+    );
+
+    if let Err(ref e) = result {
+        let msg = e.to_string();
+        if msg.contains("NoGlutinConfigs") || msg.contains("NotFound") {
+            eprintln!("Error: {e}\n");
+            eprintln!("The viewer could not find a suitable OpenGL/EGL configuration.");
+            eprintln!("This usually means one or more of the following:");
+            eprintln!("  1. Required GPU/OpenGL libraries are not installed.");
+            eprintln!("     On Ubuntu/Debian, install: libegl1 libgl1 libgles2 libgl1-mesa-dri");
+            eprintln!("  2. No display server is available (DISPLAY or WAYLAND_DISPLAY not set).");
+            eprintln!("     For Apptainer: apptainer exec --env DISPLAY=$DISPLAY ...");
+            eprintln!("     For SSH:       ssh -X user@host  (enable X11 forwarding)");
+            eprintln!("  3. Software rendering is not enabled.");
+            eprintln!("     Set:  export LIBGL_ALWAYS_SOFTWARE=1");
+            eprintln!(
+                "  4. Running inside a container without GPU passthrough or X11 forwarding."
+            );
+        }
+    }
+
+    result
 }
 
 /// Parsed command-line arguments.

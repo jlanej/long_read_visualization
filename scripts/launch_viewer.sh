@@ -124,5 +124,24 @@ fi
 echo "Starting viewer..."
 echo "  Config:  ${CONFIG}"
 echo "  Binary:  ${VIEWER_BIN}"
+
+# Enable Mesa software rendering when no GPU is available (typical in
+# containers / Apptainer on HPC login nodes).  Users with a real GPU can
+# override by setting LIBGL_ALWAYS_SOFTWARE=0.
+if [[ -z "${LIBGL_ALWAYS_SOFTWARE:-}" ]]; then
+    export LIBGL_ALWAYS_SOFTWARE=1
+    echo "  Note:    LIBGL_ALWAYS_SOFTWARE=1 (set automatically)"
+    echo "           Override with: export LIBGL_ALWAYS_SOFTWARE=0"
+fi
+
+# Warn early if no display is available — the viewer needs X11 or Wayland.
+if [[ -z "${DISPLAY:-}" ]] && [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
+    echo ""
+    echo "WARNING: Neither DISPLAY nor WAYLAND_DISPLAY is set."
+    echo "  The viewer requires an X11 or Wayland display server."
+    echo "  For Apptainer on HPC: apptainer exec --env DISPLAY=\$DISPLAY ..."
+    echo "  For SSH:              ssh -X user@host  (X11 forwarding)"
+fi
+
 echo ""
 exec "${VIEWER_BIN}" --config "${CONFIG}"

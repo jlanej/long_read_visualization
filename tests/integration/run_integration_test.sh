@@ -72,16 +72,33 @@ echo ""
 
 # ── 1b2. Verify GUI runtime libraries needed by winit/eframe ─────────────────
 echo "--- 1b2. Verifying GUI runtime libraries ---"
-if docker_run test -e /usr/lib/x86_64-linux-gnu/libX11-xcb.so.1; then
-    echo "  ✓ /usr/lib/x86_64-linux-gnu/libX11-xcb.so.1"
+GUI_FAIL=0
+check_gui_lib() {
+    local lib="$1"
+    if docker_run test -e "${lib}"; then
+        echo "  ✓ ${lib}"
+    else
+        echo "  ✗ ${lib}  (MISSING)" >&2
+        GUI_FAIL=$((GUI_FAIL + 1))
+    fi
+}
+# X11/XCB libraries (windowing)
+check_gui_lib /usr/lib/x86_64-linux-gnu/libX11-xcb.so.1
+check_gui_lib /usr/lib/x86_64-linux-gnu/libxkbcommon-x11.so.0
+# EGL/OpenGL libraries (glutin context creation — NoGlutinConfigs without these)
+check_gui_lib /usr/lib/x86_64-linux-gnu/libEGL.so.1
+check_gui_lib /usr/lib/x86_64-linux-gnu/libGL.so.1
+check_gui_lib /usr/lib/x86_64-linux-gnu/libGLESv2.so.2
+# Mesa DRI drivers (software rendering in containers without GPU)
+if docker_run test -d /usr/lib/x86_64-linux-gnu/dri; then
+    echo "  ✓ /usr/lib/x86_64-linux-gnu/dri/ (Mesa DRI drivers)"
 else
-    echo "ERROR: missing GUI runtime library /usr/lib/x86_64-linux-gnu/libX11-xcb.so.1" >&2
-    exit 1
+    echo "  ✗ /usr/lib/x86_64-linux-gnu/dri/ (MISSING — no software rendering)" >&2
+    GUI_FAIL=$((GUI_FAIL + 1))
 fi
-if docker_run test -e /usr/lib/x86_64-linux-gnu/libxkbcommon-x11.so.0; then
-    echo "  ✓ /usr/lib/x86_64-linux-gnu/libxkbcommon-x11.so.0"
-else
-    echo "ERROR: missing GUI runtime library /usr/lib/x86_64-linux-gnu/libxkbcommon-x11.so.0" >&2
+if [[ "${GUI_FAIL}" -gt 0 ]]; then
+    echo "ERROR: ${GUI_FAIL} required GUI runtime library check(s) failed." >&2
+    echo "The viewer will fail with NoGlutinConfigs without these." >&2
     exit 1
 fi
 echo ""
