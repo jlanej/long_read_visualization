@@ -1,4 +1,5 @@
 pub mod bam;
+pub mod coordinate_mapper;
 pub mod fasta;
 pub mod pileup;
 
