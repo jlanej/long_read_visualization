@@ -42,6 +42,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-dev \
         python3-pip \
         zlib1g-dev \
+        libgtk-3-0 \
+        libxcb-render0 \
+        libxcb-shape0 \
+        libxcb-xfixes0 \
+        libxkbcommon0 \
     && rm -rf /var/lib/apt/lists/*
 
 # ── minimap2 ────────────────────────────────────────────────────────────────
