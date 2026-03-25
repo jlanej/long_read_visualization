@@ -10,7 +10,7 @@ use noodles::sam;
 use noodles::sam::alignment::record::cigar::Cigar as _;
 use noodles::sam::alignment::record::data::field::tag::Tag;
 
-use super::{AlignedRead, GenomeError};
+use super::{AlignedRead, GenomeError, Indel, IndelKind};
 
 // ---------------------------------------------------------------------------
 // BAM
@@ -75,8 +75,8 @@ fn extract_bam_read(record: &bam::Record) -> Result<Option<AlignedRead>, GenomeE
         _ => return Ok(None),
     };
 
-    let span = record
-        .cigar()
+    let cigar = record.cigar();
+    let span = cigar
         .alignment_span()
         .map_err(|e| GenomeError::ParseError(format!("CIGAR: {e}")))?;
     let end = if span > 0 {
@@ -84,6 +84,8 @@ fn extract_bam_read(record: &bam::Record) -> Result<Option<AlignedRead>, GenomeE
     } else {
         start
     };
+
+    let indels = extract_indels_from_bam_cigar(&cigar, start)?;
 
     let name = record
         .name()
@@ -101,7 +103,54 @@ fn extract_bam_read(record: &bam::Record) -> Result<Option<AlignedRead>, GenomeE
         mapping_quality: mq,
         haplotype: hp,
         flags: u16::from(flags),
+        indels,
     }))
+}
+
+/// Walk a BAM CIGAR string and collect insertion/deletion events with their
+/// reference positions and lengths.
+fn extract_indels_from_bam_cigar(
+    cigar: &noodles::bam::record::Cigar<'_>,
+    alignment_start: u64,
+) -> Result<Vec<Indel>, GenomeError> {
+    use noodles::sam::alignment::record::cigar::op::Kind;
+
+    let mut indels = Vec::new();
+    let mut ref_pos = alignment_start;
+
+    for result in cigar.iter() {
+        let op = result.map_err(|e| GenomeError::ParseError(format!("CIGAR op: {e}")))?;
+        let len = op.len();
+        match op.kind() {
+            Kind::Match | Kind::SequenceMatch | Kind::SequenceMismatch => {
+                ref_pos += len as u64;
+            }
+            Kind::Insertion => {
+                indels.push(Indel {
+                    ref_pos,
+                    length: len as u32,
+                    kind: IndelKind::Insertion,
+                });
+                // Insertions don't consume reference bases
+            }
+            Kind::Deletion => {
+                indels.push(Indel {
+                    ref_pos,
+                    length: len as u32,
+                    kind: IndelKind::Deletion,
+                });
+                ref_pos += len as u64;
+            }
+            Kind::SoftClip | Kind::HardClip | Kind::Pad => {
+                // Soft/hard clips and pads don't consume reference positions
+            }
+            Kind::Skip => {
+                ref_pos += len as u64;
+            }
+        }
+    }
+
+    Ok(indels)
 }
 
 /// Read the HP (haplotype) auxiliary tag from a BAM record.
@@ -210,6 +259,8 @@ fn extract_cram_read(record: &sam::alignment::RecordBuf) -> Option<AlignedRead> 
     let mq = record.mapping_quality().map(|q| u8::from(q));
     let hp = hp_from_record_buf(record);
 
+    let indels = extract_indels_from_cigar_buf(record.cigar(), start);
+
     Some(AlignedRead {
         name,
         start,
@@ -218,7 +269,49 @@ fn extract_cram_read(record: &sam::alignment::RecordBuf) -> Option<AlignedRead> 
         mapping_quality: mq,
         haplotype: hp,
         flags: u16::from(flags),
+        indels,
     })
+}
+
+/// Walk a CIGAR from a RecordBuf and collect insertion/deletion events.
+fn extract_indels_from_cigar_buf(
+    cigar: &noodles::sam::alignment::record_buf::Cigar,
+    alignment_start: u64,
+) -> Vec<Indel> {
+    use noodles::sam::alignment::record::cigar::op::Kind;
+
+    let mut indels = Vec::new();
+    let mut ref_pos = alignment_start;
+
+    for op in cigar.as_ref() {
+        let len = op.len();
+        match op.kind() {
+            Kind::Match | Kind::SequenceMatch | Kind::SequenceMismatch => {
+                ref_pos += len as u64;
+            }
+            Kind::Insertion => {
+                indels.push(Indel {
+                    ref_pos,
+                    length: len as u32,
+                    kind: IndelKind::Insertion,
+                });
+            }
+            Kind::Deletion => {
+                indels.push(Indel {
+                    ref_pos,
+                    length: len as u32,
+                    kind: IndelKind::Deletion,
+                });
+                ref_pos += len as u64;
+            }
+            Kind::SoftClip | Kind::HardClip | Kind::Pad => {}
+            Kind::Skip => {
+                ref_pos += len as u64;
+            }
+        }
+    }
+
+    indels
 }
 
 /// Read the HP tag from a fully-parsed `RecordBuf`.

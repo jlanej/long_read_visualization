@@ -39,6 +39,26 @@ impl From<io::Error> for GenomeError {
     }
 }
 
+/// Type of insertion or deletion in a read alignment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndelKind {
+    /// Insertion into the read (bases present in read but not reference).
+    Insertion,
+    /// Deletion from the reference (bases present in reference but not read).
+    Deletion,
+}
+
+/// A single insertion or deletion event within an aligned read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Indel {
+    /// Reference position (1-based) where the indel occurs.
+    pub ref_pos: u64,
+    /// Length of the indel in base pairs.
+    pub length: u32,
+    /// Whether this is an insertion or deletion.
+    pub kind: IndelKind,
+}
+
 /// A single aligned read extracted from a BAM or CRAM file.
 #[derive(Debug, Clone)]
 pub struct AlignedRead {
@@ -56,6 +76,8 @@ pub struct AlignedRead {
     pub haplotype: Option<u8>,
     /// Raw SAM flag bits.
     pub flags: u16,
+    /// Indels extracted from the CIGAR string.
+    pub indels: Vec<Indel>,
 }
 
 /// A reference or assembly sequence extracted from a FASTA file.
