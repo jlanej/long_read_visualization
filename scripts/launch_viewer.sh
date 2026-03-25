@@ -130,7 +130,8 @@ echo "  Binary:  ${VIEWER_BIN}"
 # override by setting LIBGL_ALWAYS_SOFTWARE=0.
 if [[ -z "${LIBGL_ALWAYS_SOFTWARE:-}" ]]; then
     export LIBGL_ALWAYS_SOFTWARE=1
-    echo "  Note:    LIBGL_ALWAYS_SOFTWARE=1 (set automatically; override with export LIBGL_ALWAYS_SOFTWARE=0 if you have a GPU)"
+    echo "  Note:    LIBGL_ALWAYS_SOFTWARE=1 (set automatically)"
+    echo "           Override with: export LIBGL_ALWAYS_SOFTWARE=0"
 fi
 
 # Warn early if no display is available — the viewer needs X11 or Wayland.

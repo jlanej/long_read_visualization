@@ -32,7 +32,7 @@ fn main() -> eframe::Result<()> {
     );
 
     if let Err(ref e) = result {
-        let msg = format!("{e}");
+        let msg = e.to_string();
         if msg.contains("NoGlutinConfigs") || msg.contains("NotFound") {
             eprintln!("Error: {e}\n");
             eprintln!("The viewer could not find a suitable OpenGL/EGL configuration.");
