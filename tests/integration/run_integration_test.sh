@@ -70,6 +70,88 @@ fi
 echo "All required scripts and binaries are present."
 echo ""
 
+# ── 1c. Shared-library and GLIBC compatibility checks ────────────────────────
+# Verify that every compiled binary in the image can be loaded by the runtime
+# dynamic linker.  This catches glibc version mismatches like:
+#   "version `GLIBC_2.39' not found"
+# which occur when a binary is compiled on a host with a newer glibc than the
+# runtime image provides.  We check all binaries that originate from outside
+# the runtime image (Rust build stage, pre-compiled upstream releases).
+echo "--- 1c. Shared-library and GLIBC compatibility checks ---"
+docker_run bash -c '
+    set -euo pipefail
+    fail=0
+
+    # Determine the glibc version provided by the runtime image.
+    # The first line of "ldd --version" ends with the version number, e.g.:
+    #   ldd (Ubuntu GLIBC 2.35-0ubuntu3.8) 2.35
+    runtime_glibc=$(ldd --version 2>&1 | head -1 | grep -oP "[0-9]+\.[0-9]+")
+    if [[ -z "${runtime_glibc}" ]]; then
+        echo "ERROR: could not determine runtime glibc version from ldd --version" >&2
+        exit 1
+    fi
+    echo "Runtime glibc: ${runtime_glibc}"
+    echo ""
+
+    check_binary() {
+        local bin="$1"
+        echo "  Checking ${bin}..."
+
+        # ldd: confirm every shared library dependency is resolved.
+        # A "not found" line means the linker cannot satisfy a dependency —
+        # this is exactly the symptom of the GLIBC_2.39 mismatch.
+        if ldd "${bin}" 2>&1 | grep -q "not found"; then
+            echo "    ✗ Unresolved shared libraries:"
+            ldd "${bin}" 2>&1 | grep "not found" | sed "s/^/      /"
+            fail=$((fail + 1))
+            return
+        fi
+        echo "    ✓ All shared libraries resolved"
+
+        # readelf -V lists all versioned symbol requirements from the
+        # .gnu.version_r ELF section.  We extract every GLIBC_x.y entry
+        # and take the highest — that is the minimum glibc the runtime
+        # must provide for the binary to load successfully.
+        required=$(readelf -V "${bin}" 2>/dev/null \
+            | grep -oP "GLIBC_[0-9]+\.[0-9]+" \
+            | sort -V | tail -1 | sed "s/GLIBC_//" || true)
+        if [[ -z "${required}" ]]; then
+            echo "    ✓ No versioned GLIBC symbols required"
+            return
+        fi
+        echo "    Required GLIBC: ${required}"
+
+        # The binary is compatible only when runtime_glibc >= required.
+        # sort -V places the higher version last; if runtime_glibc is last
+        # (or equal) then runtime_glibc >= required.
+        if [[ "$(printf "%s\n" "${required}" "${runtime_glibc}" \
+                  | sort -V | tail -1)" == "${runtime_glibc}" ]]; then
+            echo "    ✓ GLIBC version compatible"
+        else
+            echo "    ✗ Requires GLIBC_${required} but runtime only provides ${runtime_glibc}"
+            fail=$((fail + 1))
+        fi
+    }
+
+    # Rust binary compiled in the builder stage — the primary regression target.
+    check_binary /usr/local/bin/long_read_viewer
+    # Pre-compiled upstream binaries downloaded during the Docker build.
+    check_binary /usr/local/bin/minimap2
+    # Binaries compiled inside the runtime image (should always pass).
+    check_binary /usr/local/bin/samtools
+    check_binary /usr/local/bin/bgzip
+    check_binary /usr/local/bin/tabix
+
+    if [[ "${fail}" -gt 0 ]]; then
+        echo ""
+        echo "ERROR: ${fail} binary check(s) failed." >&2
+        exit 1
+    fi
+    echo ""
+    echo "All binaries passed shared-library compatibility checks."
+'
+echo ""
+
 # ── 2. Generate minimal synthetic test data ──────────────────────────────────
 echo "--- 2. Generating test data ---"
 python3 "${SCRIPT_DIR}/generate_test_data.py" "${TESTDIR}"
