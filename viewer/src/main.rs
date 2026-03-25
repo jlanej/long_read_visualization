@@ -1,4 +1,5 @@
 mod app;
+mod genome;
 mod region;
 
 use app::ViewerApp;
