@@ -1,0 +1,75 @@
+name: Rust Viewer CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Native cargo build & test (fast, with caching) ─────────────────────────
+  cargo-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux GUI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libssl-dev \
+            pkg-config
+
+      - name: Cache Cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            viewer/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('viewer/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build viewer (release)
+        working-directory: viewer
+        run: cargo build --release
+
+      - name: Run all tests
+        working-directory: viewer
+        run: cargo test
+
+  # ── Docker image build (verifies Dockerfile + binary packaging) ─────────────
+  docker-build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build viewer Docker image (compile + test)
+        run: |
+          docker build \
+            -f viewer/Dockerfile \
+            --target tester \
+            -t long_read_viewer:test \
+            .
+
+      - name: Build runtime image and verify binary
+        run: |
+          docker build \
+            -f viewer/Dockerfile \
+            --target runtime \
+            -t long_read_viewer:runtime \
+            .
+          docker run --rm long_read_viewer:runtime \
+            sh -c 'test -x /usr/local/bin/long_read_viewer && echo "Binary OK"'
