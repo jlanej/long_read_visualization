@@ -730,7 +730,7 @@ mod tests {
     }
 
     #[test]
-    fn test_coordinator_translator_basic() {
+    fn test_coordinate_translator_basic() {
         let translator = CoordinateTranslator::new();
         assert!(!translator.has_index("sample1", "hap1"));
 
