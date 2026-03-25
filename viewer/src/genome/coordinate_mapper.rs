@@ -202,7 +202,7 @@ pub fn project_cigar(
 
     // Fast path: binary-search into pre-computed cumulative offsets.
     if let Some(idx) = cigar_index {
-        if ref_offset_start > 0 {
+        if ref_offset_start > 0 && !ops.is_empty() {
             let pos = idx
                 .ref_cumul
                 .partition_point(|&v| v <= ref_offset_start);
@@ -362,9 +362,9 @@ pub fn classify_sv_gap(
 /// Pre-parses CIGARs and builds cumulative-offset indices for large CIGARs.
 pub fn load_index(path: &str) -> Result<MappingIndex, io::Error> {
     let file = File::open(path)?;
-    let reader = BufReader::new(GzDecoder::new(file));
+    let mut reader = BufReader::new(GzDecoder::new(file));
     let mut buf = String::new();
-    { let mut r = reader; r.read_to_string(&mut buf)?; }
+    reader.read_to_string(&mut buf)?;
     let data: HashMap<String, Vec<AlignmentBlock>> =
         serde_json::from_str(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
