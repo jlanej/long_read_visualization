@@ -1,7 +1,7 @@
 # ===========================================================================
 # Stage 1 — Build the Rust native viewer binary
 # ===========================================================================
-FROM rust:1.85-bookworm AS rust-builder
+FROM rust:latest AS rust-builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
