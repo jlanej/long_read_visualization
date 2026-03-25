@@ -31,3 +31,6 @@ toy_example_config.tsv
 
 # IGV.js is downloaded at server startup (see server/app.py)
 server/static/igv.min.js
+
+# Rust build artifacts
+viewer/target/
