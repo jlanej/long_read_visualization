@@ -1,7 +1,19 @@
 use std::fmt;
+use std::io::Read;
 use std::path::Path;
 
 use serde::Deserialize;
+
+/// Format a base-pair count as a human-readable string.
+fn format_bp(bp: u64) -> String {
+    if bp >= 1_000_000 {
+        format!("{:.1} Mb", bp as f64 / 1_000_000.0)
+    } else if bp >= 1000 {
+        format!("{:.1} kb", bp as f64 / 1000.0)
+    } else {
+        format!("{bp} bp")
+    }
+}
 
 /// A genomic region: chrom:start-end (1-based, inclusive).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,7 +112,37 @@ impl RegionNavigator {
         }
     }
 
+    /// Load regions from a file, dispatching by extension.
+    ///
+    /// Supported formats:
+    /// - `.json` — manifest JSON (existing format)
+    /// - `.vcf` — plain-text VCF
+    /// - `.vcf.gz` — bgzip/gzip-compressed VCF
+    pub fn load_regions(&mut self, path: &Path) -> Result<(), String> {
+        let path_str = path.to_string_lossy();
+        if path_str.ends_with(".vcf.gz") {
+            let file = std::fs::File::open(path)
+                .map_err(|e| format!("Failed to open VCF: {e}"))?;
+            let mut decoder = flate2::read::MultiGzDecoder::new(file);
+            let mut text = String::new();
+            decoder
+                .read_to_string(&mut text)
+                .map_err(|e| format!("Failed to decompress VCF: {e}"))?;
+            self.load_vcf_str(&text)
+        } else if path_str.ends_with(".vcf") {
+            let text = std::fs::read_to_string(path)
+                .map_err(|e| format!("Failed to read VCF: {e}"))?;
+            self.load_vcf_str(&text)
+        } else {
+            // Default: treat as manifest JSON
+            let data = std::fs::read_to_string(path)
+                .map_err(|e| format!("Failed to read manifest: {e}"))?;
+            self.load_manifest_str(&data)
+        }
+    }
+
     /// Load regions from a manifest JSON file.
+    #[cfg(test)]
     pub fn load_manifest(&mut self, path: &Path) -> Result<(), String> {
         let data =
             std::fs::read_to_string(path).map_err(|e| format!("Failed to read manifest: {e}"))?;
@@ -156,6 +198,89 @@ impl RegionNavigator {
                 ref_region,
                 hap1_region,
                 hap2_region,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Load regions from VCF text content.
+    ///
+    /// Parses VCF lines for SV records. Determines SV size from the `SVLEN`
+    /// INFO field, falling back to `abs(len(REF) - len(ALT))`. Records with
+    /// size < 500 bp are skipped (matching the Python server behaviour).
+    pub fn load_vcf_str(&mut self, vcf_text: &str) -> Result<(), String> {
+        const MIN_SIZE: u64 = 500;
+
+        self.regions.clear();
+        self.current = 0;
+
+        for line in vcf_text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let cols: Vec<&str> = line.split('\t').collect();
+            if cols.len() < 8 {
+                continue;
+            }
+
+            let chrom = cols[0].to_string();
+            let pos: u64 = match cols[1].parse() {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let ref_allele = cols[3];
+            let alt_allele = cols[4];
+            let info = cols[7];
+
+            // Determine SV size: prefer SVLEN from INFO, then allele diff.
+            let mut sv_len: u64 = 0;
+            for field in info.split(';') {
+                if let Some(val) = field.strip_prefix("SVLEN=")
+                    && let Ok(v) = val.parse::<i64>()
+                {
+                    sv_len = v.unsigned_abs();
+                    break;
+                }
+            }
+            if sv_len == 0 {
+                let ref_len = ref_allele.len() as u64;
+                let alt_len = alt_allele.len() as u64;
+                sv_len = ref_len.abs_diff(alt_len);
+            }
+            if sv_len < MIN_SIZE {
+                continue;
+            }
+
+            let end = pos + sv_len;
+
+            // Parse genotype if available (column 10).
+            let gt = if cols.len() >= 10 {
+                cols[9]
+                    .split(':')
+                    .next()
+                    .unwrap_or("")
+                    .replace('/', "|")
+            } else {
+                String::new()
+            };
+
+            let mut label = format!("{chrom}:{pos}-{end} ({}", format_bp(sv_len));
+            if !gt.is_empty() {
+                label.push_str(&format!(", {gt}"));
+            }
+            label.push(')');
+
+            self.regions.push(RegionEntry {
+                label,
+                ref_region: GenomicRegion {
+                    chrom,
+                    start: pos,
+                    end,
+                },
+                hap1_region: None,
+                hap2_region: None,
             });
         }
 
@@ -520,5 +645,125 @@ mod tests {
         }
         // After 10 next() calls, we should wrap back to 0
         assert_eq!(nav.current_index(), 0);
+    }
+
+    // -- VCF loading tests --
+
+    fn sample_vcf() -> String {
+        [
+            "##fileformat=VCFv4.2",
+            "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE",
+            &format!(
+                "chr1\t460749\t.\t{}\tA\t.\t.\tSVLEN=834\tGT\t0|1",
+                "A".repeat(835)
+            ),
+            &format!(
+                "chr2\t100000\t.\t{}\tC\t.\t.\t.\tGT\t1/0",
+                "C".repeat(1501)
+            ),
+            // Small SV (< 500 bp) – should be skipped
+            "chr3\t200000\t.\tATCG\tA\t.\t.\tSVLEN=3\tGT\t0|1",
+        ]
+        .join("\n")
+    }
+
+    #[test]
+    fn test_load_vcf_str_basic() {
+        let mut nav = RegionNavigator::new();
+        nav.load_vcf_str(&sample_vcf()).unwrap();
+        // Two qualifying SVs (the 3-bp one is skipped)
+        assert_eq!(nav.len(), 2);
+
+        let e0 = nav.current().unwrap();
+        assert_eq!(e0.ref_region.chrom, "chr1");
+        assert_eq!(e0.ref_region.start, 460749);
+        assert_eq!(e0.ref_region.end, 460749 + 834);
+        assert!(e0.label.contains("0|1"));
+        assert!(e0.hap1_region.is_none());
+        assert!(e0.hap2_region.is_none());
+
+        nav.next();
+        let e1 = nav.current().unwrap();
+        assert_eq!(e1.ref_region.chrom, "chr2");
+        assert_eq!(e1.ref_region.start, 100000);
+        assert_eq!(e1.ref_region.end, 100000 + 1500);
+        // Genotype "/" should be normalised to "|"
+        assert!(e1.label.contains("1|0"));
+    }
+
+    #[test]
+    fn test_load_vcf_str_svlen_priority() {
+        // SVLEN takes priority over allele length diff
+        let vcf = "chr1\t1000\t.\tA\tA\t.\t.\tSVLEN=5000\tGT\t1|1\n";
+        let mut nav = RegionNavigator::new();
+        nav.load_vcf_str(vcf).unwrap();
+        assert_eq!(nav.len(), 1);
+        let e = nav.current().unwrap();
+        assert_eq!(e.ref_region.end, 1000 + 5000);
+    }
+
+    #[test]
+    fn test_load_vcf_str_empty() {
+        let mut nav = RegionNavigator::new();
+        nav.load_vcf_str("").unwrap();
+        assert!(nav.is_empty());
+    }
+
+    #[test]
+    fn test_load_vcf_str_only_comments() {
+        let mut nav = RegionNavigator::new();
+        nav.load_vcf_str("##fileformat=VCFv4.2\n#CHROM\tPOS\n")
+            .unwrap();
+        assert!(nav.is_empty());
+    }
+
+    #[test]
+    fn test_load_regions_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("manifest.json");
+        std::fs::write(&path, sample_manifest_json()).unwrap();
+
+        let mut nav = RegionNavigator::new();
+        nav.load_regions(&path).unwrap();
+        assert_eq!(nav.len(), 3);
+    }
+
+    #[test]
+    fn test_load_regions_vcf() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.vcf");
+        std::fs::write(&path, sample_vcf()).unwrap();
+
+        let mut nav = RegionNavigator::new();
+        nav.load_regions(&path).unwrap();
+        assert_eq!(nav.len(), 2);
+    }
+
+    #[test]
+    fn test_load_regions_vcf_gz() {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.vcf.gz");
+        let file = std::fs::File::create(&path).unwrap();
+        let mut enc = GzEncoder::new(file, Compression::default());
+        enc.write_all(sample_vcf().as_bytes()).unwrap();
+        enc.finish().unwrap();
+
+        let mut nav = RegionNavigator::new();
+        nav.load_regions(&path).unwrap();
+        assert_eq!(nav.len(), 2);
+    }
+
+    #[test]
+    fn test_format_bp_sizes() {
+        assert_eq!(format_bp(100), "100 bp");
+        assert_eq!(format_bp(999), "999 bp");
+        assert_eq!(format_bp(1000), "1.0 kb");
+        assert_eq!(format_bp(1500), "1.5 kb");
+        assert_eq!(format_bp(999_999), "1000.0 kb");
+        assert_eq!(format_bp(1_000_000), "1.0 Mb");
+        assert_eq!(format_bp(2_500_000), "2.5 Mb");
     }
 }

@@ -209,7 +209,7 @@ impl Default for ViewerApp {
         Self {
             navigator: RegionNavigator::new(),
             status_message:
-                "No regions loaded. Use File > Load Manifest to open a region manifest JSON."
+                "No regions loaded. Use File > Load Regions to open a manifest JSON or VCF."
                     .to_string(),
             display_config: PileupDisplayConfig::default(),
             sync_manager: PanelSyncManager::new(),
@@ -258,9 +258,9 @@ impl ViewerApp {
             }
         }
 
-        // Load manifest if provided.
+        // Load manifest/regions if provided.
         if let Some(path) = manifest_path {
-            match app.navigator.load_manifest(path) {
+            match app.navigator.load_regions(path) {
                 Ok(()) => {
                     app.status_message = format!(
                         "Loaded {} regions from {}",
@@ -395,12 +395,12 @@ impl ViewerApp {
         ui.horizontal(|ui| {
             // File menu
             ui.menu_button("File", |ui| {
-                if ui.button("Load Manifest…").clicked() {
+                if ui.button("Load Regions…").clicked() {
                     if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("JSON Manifest", &["json"])
+                        .add_filter("Regions", &["json", "vcf", "gz"])
                         .pick_file()
                     {
-                        match self.navigator.load_manifest(&path) {
+                        match self.navigator.load_regions(&path) {
                             Ok(()) => {
                                 self.status_message = format!(
                                     "Loaded {} regions from {}",
