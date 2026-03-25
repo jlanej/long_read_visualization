@@ -170,7 +170,7 @@ impl Panel {
     }
 
     /// Convert to the panel_sync PanelId.
-    #[allow(dead_code)] // Used in tests; will be used in per-panel interaction.
+    #[allow(dead_code)]
     pub fn sync_id(self) -> PanelId {
         match self {
             Panel::Reference => PanelId::Reference,
@@ -312,12 +312,15 @@ impl ViewerApp {
                     // Read field summary for status: count reads, note reverse-strand and MAPQ.
                     let n_reads = reads.len();
                     let n_reverse = reads.iter().filter(|r| r.is_reverse).count();
-                    let avg_mapq = reads
-                        .iter()
-                        .filter_map(|r| r.mapping_quality)
-                        .map(u64::from)
-                        .sum::<u64>()
-                        .checked_div(reads.len() as u64);
+                    let avg_mapq = {
+                        let mapq_iter: Vec<u64> = reads
+                            .iter()
+                            .filter_map(|r| r.mapping_quality)
+                            .map(u64::from)
+                            .collect();
+                        let n = mapq_iter.len() as u64;
+                        mapq_iter.into_iter().sum::<u64>().checked_div(n)
+                    };
                     let n_flagged = reads.iter().filter(|r| r.flags & 0x100 != 0).count();
 
                     self.ref_data.rows = pileup::pack_reads(reads);
@@ -1014,6 +1017,10 @@ fn load_fasta_for_region(
     fasta_path: &std::path::Path,
     region: &crate::region::GenomicRegion,
 ) -> Option<FastaSequence> {
+    if region.end < region.start {
+        return None;
+    }
+
     // First try: use the full "chrom:start-end" as a sequence name (for
     // extracted sub-FASTA files where the name includes coordinates).
     let full_name = region.to_string();
@@ -1026,7 +1033,7 @@ fn load_fasta_for_region(
                 return genome::fasta::query_fasta_region(fasta_path, name, 1, end).ok();
             }
             if *name == region.chrom {
-                // Standard case: chrom matches, use region coordinates.
+                // Standard case: chrom matches exactly, use region coordinates.
                 return genome::fasta::query_fasta_region(
                     fasta_path,
                     name,
@@ -1036,8 +1043,12 @@ fn load_fasta_for_region(
                 .ok();
             }
             // Handle assembly contig names (e.g., "NA21110#1#CM089663.1:111967298-112167366")
-            // where the region chrom is the full contig name.
-            if name.contains(&region.chrom) || region.chrom.contains(name.as_str()) {
+            // where the region chrom is the full contig name.  Use exact prefix
+            // match with a delimiter boundary to avoid false positives like
+            // "chr1" matching "chr10".
+            if name.starts_with(&region.chrom)
+                && name[region.chrom.len()..].starts_with(|c: char| !c.is_ascii_alphanumeric())
+            {
                 let end = (*len).min(region.end - region.start + 1);
                 return genome::fasta::query_fasta_region(fasta_path, name, 1, end).ok();
             }

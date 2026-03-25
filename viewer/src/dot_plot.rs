@@ -15,7 +15,7 @@ use std::collections::HashMap;
 // ---------------------------------------------------------------------------
 
 /// Match type codes following wotplot conventions.
-#[allow(dead_code)] // Part of the dot plot API; used for classification.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MatchType {
     /// K-mers are identical.
@@ -49,7 +49,7 @@ pub struct DotPlotResult {
     /// Length of seq2.
     pub seq2_len: usize,
     /// K-mer size used.
-    #[allow(dead_code)] // Metadata field; will be displayed in dot plot UI.
+    #[allow(dead_code)]
     pub k: usize,
     /// Whether the result was truncated due to hitting `MAX_MATCHES`.
     pub truncated: bool,
