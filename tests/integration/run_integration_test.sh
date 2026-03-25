@@ -85,7 +85,11 @@ docker_run bash -c '
     # Determine the glibc version provided by the runtime image.
     # The first line of "ldd --version" ends with the version number, e.g.:
     #   ldd (Ubuntu GLIBC 2.35-0ubuntu3.8) 2.35
-    runtime_glibc=$(ldd --version 2>&1 | head -1 | grep -oP "[0-9]+\.[0-9]+")
+    # Avoid `ldd | head -1` with pipefail enabled: head exits early and can
+    # trigger SIGPIPE (141) in ldd, which would abort this script under `set -e`.
+    IFS= read -r ldd_first_line < <(ldd --version 2>&1)
+    runtime_glibc=$(printf "%s\n" "${ldd_first_line}" \
+        | sed -nE "s/.* ([0-9]+(\.[0-9]+)*)$/\1/p")
     if [[ -z "${runtime_glibc}" ]]; then
         echo "ERROR: could not determine runtime glibc version from ldd --version" >&2
         exit 1
@@ -113,7 +117,7 @@ docker_run bash -c '
         # and take the highest — that is the minimum glibc the runtime
         # must provide for the binary to load successfully.
         required=$(readelf -V "${bin}" 2>/dev/null \
-            | grep -oP "GLIBC_[0-9]+\.[0-9]+" \
+            | grep -oE "GLIBC_[0-9]+(\.[0-9]+)*" \
             | sort -V | tail -1 | sed "s/GLIBC_//" || true)
         if [[ -z "${required}" ]]; then
             echo "    ✓ No versioned GLIBC symbols required"
