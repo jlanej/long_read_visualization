@@ -723,6 +723,54 @@ HG002	/work/output/HG002	/work/references/chm13v2.0.fa.gz	/work/HG002/HG002_hap1
 
 ---
 
+## Native Rust viewer
+
+The container image includes `long_read_viewer`, a native desktop GUI for
+browsing structural variants without a web browser.  It reads the same
+samples TSV used by the visualization server.
+
+### Running with Apptainer on HPC
+
+X11 forwarding is required (connect via `ssh -X` or use a VNC session):
+
+```bash
+cd /data/projects
+
+apptainer exec \
+    --bind "${PWD}:/work" \
+    --env DISPLAY="${DISPLAY}" \
+    docker://ghcr.io/jlanej/long_read_visualization:main \
+    /usr/local/bin/long_read_viewer \
+        --config /work/samples.tsv
+```
+
+Or use the helper script bundled in the image:
+
+```bash
+apptainer exec \
+    --bind "${PWD}:/work" \
+    --env DISPLAY="${DISPLAY}" \
+    docker://ghcr.io/jlanej/long_read_visualization:main \
+    bash /opt/long_read_visualization/scripts/launch_viewer.sh \
+        --config /work/samples.tsv
+```
+
+**Toy dataset quick-start:**
+
+```bash
+apptainer exec \
+    --bind "${PWD}:/work" \
+    --env DISPLAY="${DISPLAY}" \
+    docker://ghcr.io/jlanej/long_read_visualization:main \
+    bash /opt/long_read_visualization/scripts/launch_viewer.sh --toy
+```
+
+The `--toy` flag runs the pipeline on the bundled toy dataset (if not already
+done), generates the config TSV, and opens the viewer — all inside the
+container.
+
+---
+
 ## Running tests
 
 ```bash
