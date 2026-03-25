@@ -1901,6 +1901,7 @@ name = "long_read_viewer"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "flate2",
  "noodles",
  "rfd",
  "serde",
