@@ -86,8 +86,10 @@ pub struct FastaSequence {
     /// Sequence name (e.g., "chr1").
     pub name: String,
     /// 1-based start of the returned sequence.
+    #[allow(dead_code)] // Metadata for coordinate-aware rendering.
     pub start: u64,
     /// 1-based end of the returned sequence (inclusive).
+    #[allow(dead_code)] // Metadata for coordinate-aware rendering.
     pub end: u64,
     /// The nucleotide sequence as an uppercase ASCII string.
     pub sequence: String,

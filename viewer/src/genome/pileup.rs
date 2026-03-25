@@ -197,6 +197,7 @@ pub struct ReadRect {
     /// RGB color.
     pub color: [u8; 3],
     /// Source read name (for tooltips / identification).
+    #[allow(dead_code)] // Will be used for hover tooltips.
     pub read_name: String,
 }
 

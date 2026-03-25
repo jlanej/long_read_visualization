@@ -102,6 +102,7 @@ impl std::fmt::Display for EventType {
 
 /// Result of a coordinate query.
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // All fields populated by query(); subsets read by callers.
 pub struct QueryResult {
     pub ref_chrom: String,
     pub ref_start: u64,

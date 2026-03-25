@@ -1,11 +1,148 @@
+use std::path::PathBuf;
+
 use eframe::egui;
 
-use crate::genome::pileup::{
-    self, EXPANDED_ROW_HEIGHT, PileupDisplayConfig, PileupRow, ROW_SPACING, ReadRect,
-    SQUISHED_ROW_HEIGHT,
-};
+use crate::dot_plot::{self, DEFAULT_K, DotPlotComparison, DotPlotResult};
+use crate::genome::pileup::{self, PileupDisplayConfig, PileupRow, ReadRect};
+use crate::genome::{self, FastaSequence};
 use crate::panel_sync::{PanelId, PanelSyncManager};
 use crate::region::RegionNavigator;
+
+// ---------------------------------------------------------------------------
+// Data file paths
+// ---------------------------------------------------------------------------
+
+/// Paths to data files for the viewer.
+#[derive(Debug, Clone, Default)]
+pub struct DataPaths {
+    /// Reference genome FASTA (indexed, .fa.gz with .fai/.gzi).
+    pub reference_fasta: Option<PathBuf>,
+    /// Haplotype 1 assembly FASTA.
+    pub hap1_fasta: Option<PathBuf>,
+    /// Haplotype 2 assembly FASTA.
+    pub hap2_fasta: Option<PathBuf>,
+    /// Reads BAM/CRAM file (indexed).
+    pub reads_bam: Option<PathBuf>,
+    /// Optional coordinate mapping index (gzipped JSON).
+    pub coordinate_index: Option<PathBuf>,
+    /// Optional path to the manifest/regions JSON loaded from config.
+    pub regions: Option<PathBuf>,
+}
+
+impl DataPaths {
+    /// Load data paths from a server config TSV file (the format produced by
+    /// `generate_server_config.py` and consumed by the Python `app.py`).
+    ///
+    /// Expected TSV columns: `sample_id`, `output_dir`, `reference`,
+    /// `hap1_assembly`, `hap2_assembly`, `reads_bam` (optional),
+    /// `regions` (optional), `cram_ref` (optional).
+    ///
+    /// If the TSV contains multiple samples, only the first is loaded.
+    pub fn from_tsv(tsv_path: &std::path::Path) -> Result<Self, String> {
+        let content = std::fs::read_to_string(tsv_path)
+            .map_err(|e| format!("Failed to read config TSV: {e}"))?;
+
+        let mut header: Option<Vec<String>> = None;
+        let mut first_row: Option<std::collections::HashMap<String, String>> = None;
+
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if line.starts_with('#') {
+                if header.is_none() {
+                    // Header line starting with '#'
+                    header = Some(
+                        line.trim_start_matches('#')
+                            .trim()
+                            .split('\t')
+                            .map(|s| s.trim().to_string())
+                            .collect(),
+                    );
+                }
+                continue;
+            }
+            if header.is_none() {
+                // First non-comment line is the header
+                header = Some(line.split('\t').map(|s| s.trim().to_string()).collect());
+                continue;
+            }
+            // Data row
+            if first_row.is_none() {
+                let cols: Vec<&str> = line.split('\t').collect();
+                let h = header.as_ref().unwrap();
+                let mut row = std::collections::HashMap::new();
+                for (i, col_name) in h.iter().enumerate() {
+                    let val = cols.get(i).unwrap_or(&"").trim().to_string();
+                    row.insert(col_name.clone(), val);
+                }
+                first_row = Some(row);
+                break; // Only load first sample
+            }
+        }
+
+        let row = first_row.ok_or_else(|| "No data rows found in TSV".to_string())?;
+
+        let non_empty = |key: &str| -> Option<PathBuf> {
+            row.get(key).filter(|v| !v.is_empty()).map(PathBuf::from)
+        };
+
+        Ok(Self {
+            reference_fasta: non_empty("reference"),
+            hap1_fasta: non_empty("hap1_assembly"),
+            hap2_fasta: non_empty("hap2_assembly"),
+            reads_bam: non_empty("reads_bam"),
+            coordinate_index: None, // Not in TSV format; discovered via output_dir
+            regions: non_empty("regions"),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-panel loaded data
+// ---------------------------------------------------------------------------
+
+/// Data loaded for a single panel (reads and/or sequence).
+#[derive(Debug, Clone, Default)]
+struct PanelData {
+    /// Packed pileup rows from BAM query.
+    rows: Vec<PileupRow>,
+    /// FASTA sequence for this region.
+    sequence: Option<FastaSequence>,
+}
+
+// ---------------------------------------------------------------------------
+// Dot plot state
+// ---------------------------------------------------------------------------
+
+/// State for the dot plot comparison view.
+#[derive(Debug, Clone)]
+struct DotPlotState {
+    /// Which pair of sequences to compare.
+    comparison: DotPlotComparison,
+    /// Computed result (if sequences are available).
+    result: Option<DotPlotResult>,
+    /// Whether the dot plot panel is visible.
+    show: bool,
+    /// K-mer size for dot plot.
+    k: usize,
+}
+
+impl Default for DotPlotState {
+    fn default() -> Self {
+        Self {
+            comparison: DotPlotComparison::RefVsHap1,
+            result: None,
+            show: false,
+            k: DEFAULT_K,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Panel identifiers
+// ---------------------------------------------------------------------------
 
 /// Panel identifiers for the 3-panel layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +170,7 @@ impl Panel {
     }
 
     /// Convert to the panel_sync PanelId.
+    #[allow(dead_code)] // Used in tests; will be used in per-panel interaction.
     pub fn sync_id(self) -> PanelId {
         match self {
             Panel::Reference => PanelId::Reference,
@@ -42,6 +180,10 @@ impl Panel {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Main application
+// ---------------------------------------------------------------------------
+
 /// Main application state.
 pub struct ViewerApp {
     pub navigator: RegionNavigator,
@@ -50,8 +192,16 @@ pub struct ViewerApp {
     pub display_config: PileupDisplayConfig,
     /// Synchronized per-panel view state (pan/zoom).
     pub sync_manager: PanelSyncManager,
-    /// Demo pileup rows for rendering (populated when a manifest is loaded).
-    demo_rows: Vec<PileupRow>,
+    /// Paths to data files.
+    pub data_paths: DataPaths,
+    /// Per-panel loaded data.
+    ref_data: PanelData,
+    hap1_data: PanelData,
+    hap2_data: PanelData,
+    /// Dot plot comparison state.
+    dot_plot: DotPlotState,
+    /// Optional coordinate mapping index.
+    coord_index: Option<genome::coordinate_mapper::MappingIndex>,
 }
 
 impl Default for ViewerApp {
@@ -63,15 +213,52 @@ impl Default for ViewerApp {
                     .to_string(),
             display_config: PileupDisplayConfig::default(),
             sync_manager: PanelSyncManager::new(),
-            demo_rows: Vec::new(),
+            data_paths: DataPaths::default(),
+            ref_data: PanelData::default(),
+            hap1_data: PanelData::default(),
+            hap2_data: PanelData::default(),
+            dot_plot: DotPlotState::default(),
+            coord_index: None,
         }
     }
 }
 
+/// Parameters for rendering a single panel.
+struct PanelRenderParams<'a> {
+    panel: Panel,
+    region_text: &'a str,
+    data: &'a PanelData,
+    config: &'a PileupDisplayConfig,
+    view_start: u64,
+    view_end: u64,
+    coord_info: Option<&'a str>,
+}
+
 impl ViewerApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, manifest_path: Option<&std::path::Path>) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        manifest_path: Option<&std::path::Path>,
+        data_paths: DataPaths,
+    ) -> Self {
         configure_fonts(&cc.egui_ctx);
-        let mut app = Self::default();
+        let mut app = Self {
+            data_paths,
+            ..Self::default()
+        };
+
+        // Load coordinate mapping index if provided.
+        if let Some(idx_path) = &app.data_paths.coordinate_index {
+            match genome::coordinate_mapper::load_index(&idx_path.to_string_lossy()) {
+                Ok(index) => {
+                    app.coord_index = Some(index);
+                }
+                Err(e) => {
+                    app.status_message = format!("Warning: failed to load coord index: {e}");
+                }
+            }
+        }
+
+        // Load manifest if provided.
         if let Some(path) = manifest_path {
             match app.navigator.load_manifest(path) {
                 Ok(()) => {
@@ -80,6 +267,8 @@ impl ViewerApp {
                         app.navigator.len(),
                         path.display()
                     );
+                    // Load data for the first region.
+                    app.load_region_data();
                 }
                 Err(e) => {
                     app.status_message = format!("Error loading manifest: {e}");
@@ -88,6 +277,115 @@ impl ViewerApp {
         }
         app
     }
+
+    // -- Data loading -------------------------------------------------------
+
+    /// Load BAM reads and FASTA sequences for the current region.
+    fn load_region_data(&mut self) {
+        let entry = match self.navigator.current() {
+            Some(e) => e.clone(),
+            None => return,
+        };
+
+        // Sync panel views to the new region.
+        self.sync_manager.set_regions(
+            &entry.ref_region,
+            entry.hap1_region.as_ref(),
+            entry.hap2_region.as_ref(),
+        );
+
+        // -- Reference panel: BAM/CRAM reads + FASTA sequence --
+        self.ref_data = PanelData::default();
+        if let Some(reads_path) = &self.data_paths.reads_bam {
+            let region_str = entry.ref_region.to_string();
+            let result = if reads_path.extension().is_some_and(|e| e == "cram") {
+                genome::bam::query_cram(
+                    reads_path,
+                    self.data_paths.reference_fasta.as_deref(),
+                    &region_str,
+                )
+            } else {
+                genome::bam::query_bam(reads_path, &region_str)
+            };
+            match result {
+                Ok(reads) => {
+                    // Read field summary for status: count reads, note reverse-strand and MAPQ.
+                    let n_reads = reads.len();
+                    let n_reverse = reads.iter().filter(|r| r.is_reverse).count();
+                    let avg_mapq = reads
+                        .iter()
+                        .filter_map(|r| r.mapping_quality)
+                        .map(u64::from)
+                        .sum::<u64>()
+                        .checked_div(reads.len() as u64);
+                    let n_flagged = reads.iter().filter(|r| r.flags & 0x100 != 0).count();
+
+                    self.ref_data.rows = pileup::pack_reads(reads);
+
+                    self.status_message = format!(
+                        "{n_reads} reads ({n_reverse} rev, {n_flagged} secondary, avg MAPQ {})",
+                        avg_mapq.map_or("N/A".to_string(), |q| q.to_string()),
+                    );
+                }
+                Err(e) => {
+                    self.status_message = format!("Reads error: {e}");
+                }
+            }
+        }
+        if let Some(fasta_path) = &self.data_paths.reference_fasta {
+            self.ref_data.sequence = load_fasta_for_region(fasta_path, &entry.ref_region);
+        }
+
+        // -- Haplotype 1 panel: FASTA sequence --
+        self.hap1_data = PanelData::default();
+        if let Some(fasta_path) = &self.data_paths.hap1_fasta
+            && let Some(region) = &entry.hap1_region
+        {
+            self.hap1_data.sequence = load_fasta_for_region(fasta_path, region);
+        }
+
+        // -- Haplotype 2 panel: FASTA sequence --
+        self.hap2_data = PanelData::default();
+        if let Some(fasta_path) = &self.data_paths.hap2_fasta
+            && let Some(region) = &entry.hap2_region
+        {
+            self.hap2_data.sequence = load_fasta_for_region(fasta_path, region);
+        }
+
+        // -- Dot plot: recompute if visible --
+        if self.dot_plot.show {
+            self.recompute_dot_plot();
+        }
+    }
+
+    /// Recompute the dot plot from loaded FASTA sequences.
+    fn recompute_dot_plot(&mut self) {
+        let (seq1, seq2) = match self.dot_plot.comparison {
+            DotPlotComparison::RefVsHap1 => (
+                self.ref_data.sequence.as_ref(),
+                self.hap1_data.sequence.as_ref(),
+            ),
+            DotPlotComparison::RefVsHap2 => (
+                self.ref_data.sequence.as_ref(),
+                self.hap2_data.sequence.as_ref(),
+            ),
+            DotPlotComparison::Hap1VsHap2 => (
+                self.hap1_data.sequence.as_ref(),
+                self.hap2_data.sequence.as_ref(),
+            ),
+        };
+
+        self.dot_plot.result = match (seq1, seq2) {
+            (Some(s1), Some(s2)) => Some(dot_plot::compute_dotplot(
+                &s1.sequence,
+                &s2.sequence,
+                self.dot_plot.k,
+            )),
+            _ => None,
+        };
+    }
+
+    // -- Toolbar ------------------------------------------------------------
 
     /// Render the top toolbar with navigation controls.
     fn show_toolbar(&mut self, ui: &mut egui::Ui) {
@@ -106,6 +404,7 @@ impl ViewerApp {
                                     self.navigator.len(),
                                     path.display()
                                 );
+                                self.load_region_data();
                             }
                             Err(e) => {
                                 self.status_message = format!("Error: {e}");
@@ -114,6 +413,48 @@ impl ViewerApp {
                     }
                     ui.close_menu();
                 }
+                if ui.button("Load BAM…").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("BAM", &["bam"])
+                        .add_filter("CRAM", &["cram"])
+                        .pick_file()
+                    {
+                        self.data_paths.reads_bam = Some(path);
+                        self.load_region_data();
+                    }
+                    ui.close_menu();
+                }
+                if ui.button("Load Reference FASTA…").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("FASTA", &["fa", "fa.gz", "fasta", "fasta.gz"])
+                        .pick_file()
+                    {
+                        self.data_paths.reference_fasta = Some(path);
+                        self.load_region_data();
+                    }
+                    ui.close_menu();
+                }
+                if ui.button("Load Hap1 FASTA…").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("FASTA", &["fa", "fa.gz", "fasta", "fasta.gz"])
+                        .pick_file()
+                    {
+                        self.data_paths.hap1_fasta = Some(path);
+                        self.load_region_data();
+                    }
+                    ui.close_menu();
+                }
+                if ui.button("Load Hap2 FASTA…").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("FASTA", &["fa", "fa.gz", "fasta", "fasta.gz"])
+                        .pick_file()
+                    {
+                        self.data_paths.hap2_fasta = Some(path);
+                        self.load_region_data();
+                    }
+                    ui.close_menu();
+                }
+                ui.separator();
                 if ui.button("Quit").clicked() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
@@ -130,6 +471,7 @@ impl ViewerApp {
                 .clicked()
             {
                 self.navigator.prev();
+                self.load_region_data();
                 self.update_status_for_current_region();
             }
 
@@ -151,6 +493,7 @@ impl ViewerApp {
                                 .clicked()
                             {
                                 self.navigator.go_to(i);
+                                self.load_region_data();
                                 self.update_status_for_current_region();
                             }
                         }
@@ -165,6 +508,7 @@ impl ViewerApp {
                 .clicked()
             {
                 self.navigator.next();
+                self.load_region_data();
                 self.update_status_for_current_region();
             }
 
@@ -223,28 +567,55 @@ impl ViewerApp {
             if ui.button("🔍−").on_hover_text("Zoom out (-)").clicked() {
                 self.sync_manager.zoom(PanelId::Reference, 0.5);
             }
+
+            // Pan controls
+            let pan_delta = self.sync_manager.view(PanelId::Reference).span() as i64 / 4;
+            if ui.button("◀◀").on_hover_text("Pan left").clicked() {
+                self.sync_manager.pan(PanelId::Reference, -pan_delta);
+            }
+            if ui.button("▶▶").on_hover_text("Pan right").clicked() {
+                self.sync_manager.pan(PanelId::Reference, pan_delta);
+            }
+
+            ui.separator();
+
+            // Dot plot toggle
+            let dp_label = if self.dot_plot.show {
+                "Dot Plot ▼"
+            } else {
+                "Dot Plot ▶"
+            };
+            if ui
+                .button(dp_label)
+                .on_hover_text("Toggle dot plot panel")
+                .clicked()
+            {
+                self.dot_plot.show = !self.dot_plot.show;
+                if self.dot_plot.show {
+                    self.recompute_dot_plot();
+                }
+            }
         });
     }
 
+    // -- Panel rendering ----------------------------------------------------
+
     /// Render a single panel with pileup reads drawn on a canvas.
-    fn show_panel(
-        ui: &mut egui::Ui,
-        panel: Panel,
-        region_text: &str,
-        rows: &[PileupRow],
-        config: &PileupDisplayConfig,
-        view_start: u64,
-        view_end: u64,
-    ) {
-        let header_color = panel.color();
+    fn show_panel(ui: &mut egui::Ui, params: &PanelRenderParams<'_>) {
+        let header_color = params.panel.color();
 
         // Panel header
         let header_rect = ui.allocate_space(egui::vec2(ui.available_width(), 24.0)).1;
         ui.painter().rect_filled(header_rect, 0.0, header_color);
+
+        let mut header_text = format!("{}  |  {}", params.panel.label(), params.region_text);
+        if let Some(info) = params.coord_info {
+            header_text.push_str(&format!("  [{info}]"));
+        }
         ui.painter().text(
             header_rect.left_center() + egui::vec2(8.0, 0.0),
             egui::Align2::LEFT_CENTER,
-            format!("{}  |  {}", panel.label(), region_text),
+            header_text,
             egui::FontId::proportional(13.0),
             egui::Color32::WHITE,
         );
@@ -257,21 +628,51 @@ impl ViewerApp {
         body.show(ui, |ui| {
             ui.set_min_height(80.0);
 
-            if rows.is_empty() {
-                // Placeholder when no reads are loaded
+            let has_reads = !params.data.rows.is_empty();
+            let has_seq = params.data.sequence.is_some();
+
+            if !has_reads && !has_seq {
+                // Placeholder when no data is loaded
                 ui.centered_and_justified(|ui| {
                     ui.label(
-                        egui::RichText::new(format!("{} – no reads loaded", panel.label()))
+                        egui::RichText::new(format!("{} – no data loaded", params.panel.label()))
                             .color(egui::Color32::from_gray(120))
                             .italics(),
                     );
                 });
             } else {
-                // Render pileup using egui canvas primitives
-                let panel_width = ui.available_width();
-                let rects =
-                    pileup::layout_read_rects(rows, config, view_start, view_end, panel_width);
-                Self::paint_pileup(ui, &rects);
+                // Render FASTA sequence summary if available
+                if let Some(seq) = &params.data.sequence {
+                    let seq_info = format!(
+                        "{}: {} ({} bp)",
+                        seq.name,
+                        if seq.sequence.len() > 40 {
+                            format!("{}…", &seq.sequence[..40])
+                        } else {
+                            seq.sequence.clone()
+                        },
+                        seq.sequence.len()
+                    );
+                    ui.label(
+                        egui::RichText::new(seq_info)
+                            .small()
+                            .color(egui::Color32::from_gray(170))
+                            .monospace(),
+                    );
+                }
+
+                // Render pileup reads
+                if has_reads {
+                    let panel_width = ui.available_width();
+                    let rects = pileup::layout_read_rects(
+                        &params.data.rows,
+                        params.config,
+                        params.view_start,
+                        params.view_end,
+                        panel_width,
+                    );
+                    Self::paint_pileup(ui, &rects);
+                }
             }
         });
     }
@@ -301,21 +702,134 @@ impl ViewerApp {
         }
     }
 
-    /// Update status message to reflect the current region and sync panel views.
+    /// Render the dot plot panel.
+    fn show_dot_plot(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("Comparison:");
+            for cmp in DotPlotComparison::ALL {
+                if ui
+                    .selectable_label(self.dot_plot.comparison == cmp, cmp.label())
+                    .clicked()
+                {
+                    self.dot_plot.comparison = cmp;
+                    self.recompute_dot_plot();
+                }
+            }
+        });
+
+        match &self.dot_plot.result {
+            Some(result) => {
+                let total = result.total_matches();
+                ui.label(format!(
+                    "{} matches (fwd: {}, rev: {}, pal: {}){}",
+                    total,
+                    result.forward.len(),
+                    result.reverse.len(),
+                    result.palindrome.len(),
+                    if result.truncated { " [TRUNCATED]" } else { "" }
+                ));
+
+                // Draw dot plot canvas
+                if total > 0 {
+                    let size = 200.0_f32;
+                    let (response, painter) =
+                        ui.allocate_painter(egui::vec2(size, size), egui::Sense::hover());
+                    let rect = response.rect;
+
+                    // Background
+                    painter.rect_filled(rect, 0.0, egui::Color32::from_gray(20));
+
+                    let x_scale = size / result.seq1_len.max(1) as f32;
+                    let y_scale = size / result.seq2_len.max(1) as f32;
+
+                    // Draw forward matches (blue)
+                    for m in &result.forward {
+                        let p = rect.left_top()
+                            + egui::vec2(m.x as f32 * x_scale, m.y as f32 * y_scale);
+                        painter.rect_filled(
+                            egui::Rect::from_min_size(p, egui::vec2(1.0, 1.0)),
+                            0.0,
+                            egui::Color32::from_rgb(80, 140, 255),
+                        );
+                    }
+
+                    // Draw reverse matches (red)
+                    for m in &result.reverse {
+                        let p = rect.left_top()
+                            + egui::vec2(m.x as f32 * x_scale, m.y as f32 * y_scale);
+                        painter.rect_filled(
+                            egui::Rect::from_min_size(p, egui::vec2(1.0, 1.0)),
+                            0.0,
+                            egui::Color32::from_rgb(255, 80, 80),
+                        );
+                    }
+
+                    // Draw palindromic matches (green)
+                    for m in &result.palindrome {
+                        let p = rect.left_top()
+                            + egui::vec2(m.x as f32 * x_scale, m.y as f32 * y_scale);
+                        painter.rect_filled(
+                            egui::Rect::from_min_size(p, egui::vec2(1.0, 1.0)),
+                            0.0,
+                            egui::Color32::from_rgb(80, 200, 80),
+                        );
+                    }
+                }
+            }
+            None => {
+                ui.label(
+                    egui::RichText::new("Load FASTA files to compute dot plot")
+                        .color(egui::Color32::from_gray(120))
+                        .italics(),
+                );
+            }
+        }
+    }
+
+    // -- Status / navigation helpers ----------------------------------------
+
+    /// Update status message to reflect the current region.
     fn update_status_for_current_region(&mut self) {
         if let Some(entry) = self.navigator.current() {
-            self.status_message = format!(
+            let mut msg = format!(
                 "Region {}: {} → ref {}",
                 self.navigator.counter_text(),
                 entry.label,
                 entry.ref_region
             );
-            // Sync all panel views to the new region
-            self.sync_manager.set_regions(
-                &entry.ref_region,
-                entry.hap1_region.as_ref(),
-                entry.hap2_region.as_ref(),
-            );
+
+            // Show coordinate mapper info if available.
+            if let Some(index) = &self.coord_index {
+                let results = genome::coordinate_mapper::query(
+                    index,
+                    &entry.ref_region.chrom,
+                    entry.ref_region.start,
+                    entry.ref_region.end,
+                    0,
+                );
+                if !results.is_empty() {
+                    let events: Vec<String> = results
+                        .iter()
+                        .map(|r| {
+                            format!(
+                                "{}: {}:{}-{}",
+                                r.event_type, r.asm_chrom, r.asm_start, r.asm_end
+                            )
+                        })
+                        .collect();
+                    msg.push_str(&format!(" | mapped: {}", events.join(", ")));
+                }
+            }
+
+            // Append sync/view state info.
+            if self.sync_manager.all_spans_match() {
+                msg.push_str(" | spans synced");
+            }
+            if let Some(hr) = self.sync_manager.highlight_region(PanelId::Reference) {
+                msg.push_str(&format!(" | view: {hr}"));
+            }
+
+            self.status_message = msg;
         }
     }
 
@@ -338,10 +852,12 @@ impl ViewerApp {
 
         if prev && !self.navigator.is_empty() {
             self.navigator.prev();
+            self.load_region_data();
             self.update_status_for_current_region();
         }
         if next && !self.navigator.is_empty() {
             self.navigator.next();
+            self.load_region_data();
             self.update_status_for_current_region();
         }
         if zoom_in {
@@ -379,7 +895,7 @@ impl eframe::App for ViewerApp {
         // Clone display_config for immutable borrow inside closure
         let config = self.display_config.clone();
 
-        // Central area: 3 panels stacked vertically
+        // Central area: 3 panels + optional dot plot
         egui::CentralPanel::default().show(ctx, |ui| {
             let current = self.navigator.current();
             let ref_text = current
@@ -403,21 +919,40 @@ impl eframe::App for ViewerApp {
             let (h1_start, h1_end) = (h1_view.view_start, h1_view.view_end);
             let (h2_start, h2_end) = (h2_view.view_start, h2_view.view_end);
 
-            // Use vertical layout with equal panel sizes
-            let available = ui.available_height();
+            // Compute coordinate mapper info for header display
+            let ref_coord_info = self.coord_index.as_ref().and_then(|index| {
+                let entry = self.navigator.current()?;
+                let results = genome::coordinate_mapper::query(
+                    index,
+                    &entry.ref_region.chrom,
+                    entry.ref_region.start,
+                    entry.ref_region.end,
+                    0,
+                );
+                if results.is_empty() {
+                    None
+                } else {
+                    Some(format!("{} blocks", results.len()))
+                }
+            });
+
+            // Calculate available space
+            let dot_plot_height = if self.dot_plot.show { 280.0 } else { 0.0 };
+            let available = ui.available_height() - dot_plot_height;
             let panel_height = (available - 16.0) / 3.0; // 16px for spacing
 
-            let rows = &self.demo_rows;
-
             ui.allocate_ui(egui::vec2(ui.available_width(), panel_height), |ui| {
                 Self::show_panel(
                     ui,
-                    Panel::Reference,
-                    &ref_text,
-                    rows,
-                    &config,
-                    ref_start,
-                    ref_end,
+                    &PanelRenderParams {
+                        panel: Panel::Reference,
+                        region_text: &ref_text,
+                        data: &self.ref_data,
+                        config: &config,
+                        view_start: ref_start,
+                        view_end: ref_end,
+                        coord_info: ref_coord_info.as_deref(),
+                    },
                 );
             });
 
@@ -426,12 +961,15 @@ impl eframe::App for ViewerApp {
             ui.allocate_ui(egui::vec2(ui.available_width(), panel_height), |ui| {
                 Self::show_panel(
                     ui,
-                    Panel::Haplotype1,
-                    &hap1_text,
-                    rows,
-                    &config,
-                    h1_start,
-                    h1_end,
+                    &PanelRenderParams {
+                        panel: Panel::Haplotype1,
+                        region_text: &hap1_text,
+                        data: &self.hap1_data,
+                        config: &config,
+                        view_start: h1_start,
+                        view_end: h1_end,
+                        coord_info: None,
+                    },
                 );
             });
 
@@ -440,16 +978,73 @@ impl eframe::App for ViewerApp {
             ui.allocate_ui(egui::vec2(ui.available_width(), panel_height), |ui| {
                 Self::show_panel(
                     ui,
-                    Panel::Haplotype2,
-                    &hap2_text,
-                    rows,
-                    &config,
-                    h2_start,
-                    h2_end,
+                    &PanelRenderParams {
+                        panel: Panel::Haplotype2,
+                        region_text: &hap2_text,
+                        data: &self.hap2_data,
+                        config: &config,
+                        view_start: h2_start,
+                        view_end: h2_end,
+                        coord_info: None,
+                    },
                 );
             });
+
+            // Dot plot panel
+            if self.dot_plot.show {
+                ui.add_space(4.0);
+                ui.group(|ui| {
+                    ui.set_min_height(250.0);
+                    self.show_dot_plot(ui);
+                });
+            }
         });
     }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Load a FASTA sequence for a genomic region.
+///
+/// Uses `query_fasta_region()` with the region's chrom as the exact sequence
+/// name and local coordinates, to handle FASTAs with colons in sequence names.
+fn load_fasta_for_region(
+    fasta_path: &std::path::Path,
+    region: &crate::region::GenomicRegion,
+) -> Option<FastaSequence> {
+    // First try: use the full "chrom:start-end" as a sequence name (for
+    // extracted sub-FASTA files where the name includes coordinates).
+    let full_name = region.to_string();
+    if let Ok(seqs) = genome::fasta::list_sequences(fasta_path) {
+        // Check if any sequence name matches the region's chrom or full string.
+        for (name, len) in &seqs {
+            if *name == full_name {
+                // The full region string IS the sequence name; query local coords.
+                let end = (*len).min(region.end - region.start + 1);
+                return genome::fasta::query_fasta_region(fasta_path, name, 1, end).ok();
+            }
+            if *name == region.chrom {
+                // Standard case: chrom matches, use region coordinates.
+                return genome::fasta::query_fasta_region(
+                    fasta_path,
+                    name,
+                    region.start,
+                    region.end,
+                )
+                .ok();
+            }
+            // Handle assembly contig names (e.g., "NA21110#1#CM089663.1:111967298-112167366")
+            // where the region chrom is the full contig name.
+            if name.contains(&region.chrom) || region.chrom.contains(name.as_str()) {
+                let end = (*len).min(region.end - region.start + 1);
+                return genome::fasta::query_fasta_region(fasta_path, name, 1, end).ok();
+            }
+        }
+    }
+    // Fallback: try direct query (may fail for colon-containing names).
+    genome::fasta::query_fasta(fasta_path, &region.to_string()).ok()
 }
 
 /// Configure default fonts/styles.
@@ -512,6 +1107,7 @@ mod tests {
           }]
         }"#;
         app.navigator.load_manifest_str(json).unwrap();
+        app.load_region_data();
         app.update_status_for_current_region();
         assert!(app.status_message.contains("1/1"));
         assert!(app.status_message.contains("chr1:100-150"));
@@ -554,6 +1150,7 @@ mod tests {
           ]
         }"#;
         app.navigator.load_manifest_str(json).unwrap();
+        app.load_region_data();
         app.update_status_for_current_region();
 
         // Verify region 1
@@ -563,6 +1160,7 @@ mod tests {
 
         // Navigate to next region
         app.navigator.next();
+        app.load_region_data();
         app.update_status_for_current_region();
 
         // Verify region 2 — all panels updated
@@ -586,6 +1184,7 @@ mod tests {
           }]
         }"#;
         app.navigator.load_manifest_str(json).unwrap();
+        app.load_region_data();
         app.update_status_for_current_region();
 
         // Zoom in on reference panel
@@ -608,6 +1207,7 @@ mod tests {
           }]
         }"#;
         app.navigator.load_manifest_str(json).unwrap();
+        app.load_region_data();
         app.update_status_for_current_region();
 
         // Pan right from reference
@@ -617,5 +1217,150 @@ mod tests {
         assert_eq!(app.sync_manager.view(PanelId::Reference).view_start, 1200);
         assert_eq!(app.sync_manager.view(PanelId::Haplotype1).view_start, 5200);
         assert_eq!(app.sync_manager.view(PanelId::Haplotype2).view_start, 8200);
+    }
+
+    #[test]
+    fn test_data_paths_default() {
+        let dp = DataPaths::default();
+        assert!(dp.reference_fasta.is_none());
+        assert!(dp.hap1_fasta.is_none());
+        assert!(dp.hap2_fasta.is_none());
+        assert!(dp.reads_bam.is_none());
+        assert!(dp.coordinate_index.is_none());
+    }
+
+    #[test]
+    fn test_dot_plot_state_default() {
+        let app = ViewerApp::default();
+        assert!(!app.dot_plot.show);
+        assert_eq!(app.dot_plot.comparison, DotPlotComparison::RefVsHap1);
+        assert!(app.dot_plot.result.is_none());
+    }
+
+    #[test]
+    fn test_recompute_dot_plot_no_sequences() {
+        let mut app = ViewerApp::default();
+        app.recompute_dot_plot();
+        assert!(app.dot_plot.result.is_none());
+    }
+
+    #[test]
+    fn test_recompute_dot_plot_with_sequences() {
+        let mut app = ViewerApp::default();
+        app.ref_data.sequence = Some(FastaSequence {
+            name: "test".to_string(),
+            start: 1,
+            end: 100,
+            sequence: "ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT".to_string(),
+        });
+        app.hap1_data.sequence = Some(FastaSequence {
+            name: "test2".to_string(),
+            start: 1,
+            end: 100,
+            sequence: "ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT".to_string(),
+        });
+        app.dot_plot.k = 5;
+        app.recompute_dot_plot();
+        assert!(app.dot_plot.result.is_some());
+        let result = app.dot_plot.result.as_ref().unwrap();
+        assert!(result.total_matches() > 0);
+    }
+
+    #[test]
+    fn test_load_region_data_without_files() {
+        let mut app = ViewerApp::default();
+        let json = r#"{
+          "variants": [{
+            "chrom": "chr1", "pos": 1000, "size": 500,
+            "ref_region": "chr1:1000-1500"
+          }]
+        }"#;
+        app.navigator.load_manifest_str(json).unwrap();
+        app.load_region_data();
+        // No files loaded, panels should be empty
+        assert!(app.ref_data.rows.is_empty());
+        assert!(app.ref_data.sequence.is_none());
+    }
+
+    #[test]
+    fn test_data_paths_from_tsv() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tsv_path = tmp.path().join("config.tsv");
+        std::fs::write(
+            &tsv_path,
+            "sample_id\treference\thap1_assembly\thap2_assembly\treads_bam\tregions\n\
+             sample1\t/path/to/ref.fa.gz\t/path/to/hap1.fa.gz\t/path/to/hap2.fa.gz\t/path/to/reads.bam\t/path/to/manifest.json\n",
+        )
+        .unwrap();
+
+        let dp = DataPaths::from_tsv(&tsv_path).unwrap();
+        assert_eq!(
+            dp.reference_fasta.as_deref(),
+            Some(std::path::Path::new("/path/to/ref.fa.gz"))
+        );
+        assert_eq!(
+            dp.hap1_fasta.as_deref(),
+            Some(std::path::Path::new("/path/to/hap1.fa.gz"))
+        );
+        assert_eq!(
+            dp.hap2_fasta.as_deref(),
+            Some(std::path::Path::new("/path/to/hap2.fa.gz"))
+        );
+        assert_eq!(
+            dp.reads_bam.as_deref(),
+            Some(std::path::Path::new("/path/to/reads.bam"))
+        );
+        assert_eq!(
+            dp.regions.as_deref(),
+            Some(std::path::Path::new("/path/to/manifest.json"))
+        );
+    }
+
+    #[test]
+    fn test_data_paths_from_tsv_with_comment_header() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tsv_path = tmp.path().join("config.tsv");
+        std::fs::write(
+            &tsv_path,
+            "#sample_id\treference\thap1_assembly\thap2_assembly\treads_bam\n\
+             sample1\t/ref.fa.gz\t/hap1.fa.gz\t/hap2.fa.gz\t/reads.bam\n",
+        )
+        .unwrap();
+
+        let dp = DataPaths::from_tsv(&tsv_path).unwrap();
+        assert_eq!(
+            dp.reference_fasta.as_deref(),
+            Some(std::path::Path::new("/ref.fa.gz"))
+        );
+        assert_eq!(
+            dp.hap1_fasta.as_deref(),
+            Some(std::path::Path::new("/hap1.fa.gz"))
+        );
+    }
+
+    #[test]
+    fn test_data_paths_from_tsv_empty_optional_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tsv_path = tmp.path().join("config.tsv");
+        std::fs::write(
+            &tsv_path,
+            "sample_id\treference\thap1_assembly\thap2_assembly\treads_bam\tregions\n\
+             sample1\t/ref.fa.gz\t/hap1.fa.gz\t/hap2.fa.gz\t\t\n",
+        )
+        .unwrap();
+
+        let dp = DataPaths::from_tsv(&tsv_path).unwrap();
+        assert_eq!(
+            dp.reference_fasta.as_deref(),
+            Some(std::path::Path::new("/ref.fa.gz"))
+        );
+        assert!(dp.reads_bam.is_none());
+        assert!(dp.regions.is_none());
+    }
+
+    #[test]
+    fn test_data_paths_from_tsv_missing_file() {
+        let result = DataPaths::from_tsv(std::path::Path::new("/nonexistent/config.tsv"));
+        assert!(result.is_err());
     }
 }

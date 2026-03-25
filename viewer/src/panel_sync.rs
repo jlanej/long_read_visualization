@@ -99,6 +99,7 @@ impl PanelSyncManager {
     }
 
     /// Get a mutable reference to the view state for a panel.
+    #[allow(dead_code)] // Public API used in tests; available for direct panel manipulation.
     pub fn view_mut(&mut self, panel: PanelId) -> &mut PanelView {
         &mut self.panels[Self::idx(panel)]
     }
