@@ -1,5 +1,9 @@
 use eframe::egui;
 
+use crate::genome::pileup::{
+    self, PileupDisplayConfig, PileupRow, ReadRect, EXPANDED_ROW_HEIGHT, ROW_SPACING,
+    SQUISHED_ROW_HEIGHT,
+};
 use crate::region::RegionNavigator;
 
 /// Panel identifiers for the 3-panel layout.
@@ -32,6 +36,10 @@ impl Panel {
 pub struct ViewerApp {
     pub navigator: RegionNavigator,
     pub status_message: String,
+    /// Display configuration (shared across panels).
+    pub display_config: PileupDisplayConfig,
+    /// Demo pileup rows for rendering (populated when a manifest is loaded).
+    demo_rows: Vec<PileupRow>,
 }
 
 impl Default for ViewerApp {
@@ -40,6 +48,8 @@ impl Default for ViewerApp {
             navigator: RegionNavigator::new(),
             status_message: "No regions loaded. Use File > Load Manifest to open a region manifest JSON."
                 .to_string(),
+            display_config: PileupDisplayConfig::default(),
+            demo_rows: Vec::new(),
         }
     }
 }
@@ -130,11 +140,41 @@ impl ViewerApp {
             }
 
             ui.label(self.navigator.counter_text());
+
+            ui.separator();
+
+            // Display toggle: squished / expanded
+            let squish_label = if self.display_config.squished {
+                "Squished"
+            } else {
+                "Expanded"
+            };
+            if ui.button(squish_label).on_hover_text("Toggle squished/expanded read display").clicked() {
+                self.display_config.squished = !self.display_config.squished;
+            }
+
+            // Display toggle: hide small indels
+            let indel_label = if self.display_config.hide_small_indels {
+                format!("Indels ≤{}bp: hidden", self.display_config.indel_threshold)
+            } else {
+                "Indels: shown".to_string()
+            };
+            if ui.button(&indel_label).on_hover_text("Toggle small indel display").clicked() {
+                self.display_config.hide_small_indels = !self.display_config.hide_small_indels;
+            }
         });
     }
 
-    /// Render a single panel placeholder.
-    fn show_panel(ui: &mut egui::Ui, panel: Panel, region_text: &str) {
+    /// Render a single panel with pileup reads drawn on a canvas.
+    fn show_panel(
+        ui: &mut egui::Ui,
+        panel: Panel,
+        region_text: &str,
+        rows: &[PileupRow],
+        config: &PileupDisplayConfig,
+        view_start: u64,
+        view_end: u64,
+    ) {
         let header_color = panel.color();
 
         // Panel header
@@ -148,22 +188,56 @@ impl ViewerApp {
             egui::Color32::WHITE,
         );
 
-        // Placeholder body
+        // Panel body: dark background with pileup rendering
         let body = egui::Frame::new()
             .fill(egui::Color32::from_gray(32))
-            .inner_margin(egui::Margin::same(12))
-            .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(60)));
+            .inner_margin(egui::Margin::same(4));
 
         body.show(ui, |ui| {
             ui.set_min_height(80.0);
-            ui.centered_and_justified(|ui| {
-                ui.label(
-                    egui::RichText::new(format!("{} – pileup placeholder", panel.label()))
-                        .color(egui::Color32::from_gray(120))
-                        .italics(),
-                );
-            });
+
+            if rows.is_empty() {
+                // Placeholder when no reads are loaded
+                ui.centered_and_justified(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!("{} – no reads loaded", panel.label()))
+                            .color(egui::Color32::from_gray(120))
+                            .italics(),
+                    );
+                });
+            } else {
+                // Render pileup using egui canvas primitives
+                let panel_width = ui.available_width();
+                let rects = pileup::layout_read_rects(rows, config, view_start, view_end, panel_width);
+                Self::paint_pileup(ui, &rects);
+            }
         });
+    }
+
+    /// Paint pre-computed read rectangles onto the UI using egui painter.
+    fn paint_pileup(ui: &mut egui::Ui, rects: &[ReadRect]) {
+        if rects.is_empty() {
+            return;
+        }
+
+        // Compute the total height needed
+        let max_y = rects
+            .iter()
+            .map(|r| r.y + r.height)
+            .fold(0.0_f32, f32::max);
+        let total_height = max_y + 4.0; // small padding
+
+        let (response, painter) =
+            ui.allocate_painter(egui::vec2(ui.available_width(), total_height), egui::Sense::hover());
+
+        let origin = response.rect.left_top();
+
+        for rect in rects {
+            let min = origin + egui::vec2(rect.x, rect.y);
+            let max = min + egui::vec2(rect.width, rect.height);
+            let color = egui::Color32::from_rgb(rect.color[0], rect.color[1], rect.color[2]);
+            painter.rect_filled(egui::Rect::from_min_max(min, max), 0.0, color);
+        }
     }
 
     /// Update status message to reflect the current region.
@@ -222,6 +296,10 @@ impl eframe::App for ViewerApp {
             });
         });
 
+        // Clone display_config for immutable borrow inside closure
+        let config = self.display_config.clone();
+        let demo_rows = self.demo_rows.clone();
+
         // Central area: 3 panels stacked vertically
         egui::CentralPanel::default().show(ctx, |ui| {
             let current = self.navigator.current();
@@ -237,24 +315,32 @@ impl eframe::App for ViewerApp {
                 .map(|r| r.to_string())
                 .unwrap_or_else(|| "—".to_string());
 
+            // Determine view range from the current region (or use defaults)
+            let (view_start, view_end) = current
+                .map(|e| {
+                    let r = &e.ref_region;
+                    (r.start, r.end)
+                })
+                .unwrap_or((0, 1000));
+
             // Use vertical layout with equal panel sizes
             let available = ui.available_height();
             let panel_height = (available - 16.0) / 3.0; // 16px for spacing
 
             ui.allocate_ui(egui::vec2(ui.available_width(), panel_height), |ui| {
-                Self::show_panel(ui, Panel::Reference, &ref_text);
+                Self::show_panel(ui, Panel::Reference, &ref_text, &demo_rows, &config, view_start, view_end);
             });
 
             ui.add_space(4.0);
 
             ui.allocate_ui(egui::vec2(ui.available_width(), panel_height), |ui| {
-                Self::show_panel(ui, Panel::Haplotype1, &hap1_text);
+                Self::show_panel(ui, Panel::Haplotype1, &hap1_text, &demo_rows, &config, view_start, view_end);
             });
 
             ui.add_space(4.0);
 
             ui.allocate_ui(egui::vec2(ui.available_width(), panel_height), |ui| {
-                Self::show_panel(ui, Panel::Haplotype2, &hap2_text);
+                Self::show_panel(ui, Panel::Haplotype2, &hap2_text, &demo_rows, &config, view_start, view_end);
             });
         });
     }
@@ -300,6 +386,8 @@ mod tests {
         let app = ViewerApp::default();
         assert!(app.navigator.is_empty());
         assert!(app.status_message.contains("No regions loaded"));
+        assert!(app.display_config.squished);
+        assert!(app.display_config.hide_small_indels);
     }
 
     #[test]
@@ -315,5 +403,17 @@ mod tests {
         app.update_status_for_current_region();
         assert!(app.status_message.contains("1/1"));
         assert!(app.status_message.contains("chr1:100-150"));
+    }
+
+    #[test]
+    fn test_display_config_toggle() {
+        let mut app = ViewerApp::default();
+        assert!(app.display_config.squished);
+        app.display_config.squished = false;
+        assert!(!app.display_config.squished);
+
+        assert!(app.display_config.hide_small_indels);
+        app.display_config.hide_small_indels = false;
+        assert!(!app.display_config.hide_small_indels);
     }
 }
