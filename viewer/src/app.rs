@@ -23,10 +23,20 @@ pub struct DataPaths {
     pub hap2_fasta: Option<PathBuf>,
     /// Reads BAM/CRAM file (indexed).
     pub reads_bam: Option<PathBuf>,
-    /// Optional coordinate mapping index (gzipped JSON).
+    /// Optional coordinate mapping index (gzipped JSON) — legacy single-index.
     pub coordinate_index: Option<PathBuf>,
     /// Optional path to the manifest/regions JSON loaded from config.
     pub regions: Option<PathBuf>,
+    /// Hap1-to-ref coordinate mapping index (gzipped JSON).
+    pub hap1_coord_index: Option<PathBuf>,
+    /// Hap2-to-ref coordinate mapping index (gzipped JSON).
+    pub hap2_coord_index: Option<PathBuf>,
+    /// Reads aligned to haplotype 1 assembly (BAM, indexed).
+    pub reads_to_hap1_bam: Option<PathBuf>,
+    /// Reads aligned to haplotype 2 assembly (BAM, indexed).
+    pub reads_to_hap2_bam: Option<PathBuf>,
+    /// Reference FASTA used for CRAM encoding (when different from panel ref).
+    pub cram_ref: Option<PathBuf>,
 }
 
 impl DataPaths {
@@ -88,13 +98,33 @@ impl DataPaths {
             row.get(key).filter(|v| !v.is_empty()).map(PathBuf::from)
         };
 
+        // Discover preprocessing output files from output_dir + sample_id.
+        let output_dir = non_empty("output_dir");
+        let sample_id = non_empty("sample_id");
+
+        let discover = |suffix: &str| -> Option<PathBuf> {
+            let dir = output_dir.as_ref()?;
+            let sid = sample_id.as_ref()?.to_string_lossy().to_string();
+            let candidate = dir.join(format!("{sid}{suffix}"));
+            if candidate.is_file() {
+                Some(candidate)
+            } else {
+                None
+            }
+        };
+
         Ok(Self {
             reference_fasta: non_empty("reference"),
             hap1_fasta: non_empty("hap1_assembly"),
             hap2_fasta: non_empty("hap2_assembly"),
             reads_bam: non_empty("reads_bam"),
-            coordinate_index: None, // Not in TSV format; discovered via output_dir
+            coordinate_index: None,
             regions: non_empty("regions"),
+            hap1_coord_index: discover("_hap1_to_ref.mapping.json.gz"),
+            hap2_coord_index: discover("_hap2_to_ref.mapping.json.gz"),
+            reads_to_hap1_bam: discover("_reads_to_hap1.bam"),
+            reads_to_hap2_bam: discover("_reads_to_hap2.bam"),
+            cram_ref: non_empty("cram_ref"),
         })
     }
 }
@@ -200,8 +230,12 @@ pub struct ViewerApp {
     hap2_data: PanelData,
     /// Dot plot comparison state.
     dot_plot: DotPlotState,
-    /// Optional coordinate mapping index.
+    /// Legacy single coordinate mapping index (backward compat).
     coord_index: Option<genome::coordinate_mapper::MappingIndex>,
+    /// Hap1-to-ref coordinate mapping index.
+    hap1_coord_index: Option<genome::coordinate_mapper::MappingIndex>,
+    /// Hap2-to-ref coordinate mapping index.
+    hap2_coord_index: Option<genome::coordinate_mapper::MappingIndex>,
 }
 
 impl Default for ViewerApp {
@@ -219,6 +253,8 @@ impl Default for ViewerApp {
             hap2_data: PanelData::default(),
             dot_plot: DotPlotState::default(),
             coord_index: None,
+            hap1_coord_index: None,
+            hap2_coord_index: None,
         }
     }
 }
@@ -246,7 +282,7 @@ impl ViewerApp {
             ..Self::default()
         };
 
-        // Load coordinate mapping index if provided.
+        // Load coordinate mapping index if provided (legacy single index).
         if let Some(idx_path) = &app.data_paths.coordinate_index {
             match genome::coordinate_mapper::load_index(&idx_path.to_string_lossy()) {
                 Ok(index) => {
@@ -254,6 +290,30 @@ impl ViewerApp {
                 }
                 Err(e) => {
                     app.status_message = format!("Warning: failed to load coord index: {e}");
+                }
+            }
+        }
+
+        // Load hap1 coordinate mapping index.
+        if let Some(idx_path) = &app.data_paths.hap1_coord_index {
+            match genome::coordinate_mapper::load_index(&idx_path.to_string_lossy()) {
+                Ok(index) => {
+                    app.hap1_coord_index = Some(index);
+                }
+                Err(e) => {
+                    eprintln!("Warning: failed to load hap1 coord index: {e}");
+                }
+            }
+        }
+
+        // Load hap2 coordinate mapping index.
+        if let Some(idx_path) = &app.data_paths.hap2_coord_index {
+            match genome::coordinate_mapper::load_index(&idx_path.to_string_lossy()) {
+                Ok(index) => {
+                    app.hap2_coord_index = Some(index);
+                }
+                Err(e) => {
+                    eprintln!("Warning: failed to load hap2 coord index: {e}");
                 }
             }
         }
@@ -287,29 +347,51 @@ impl ViewerApp {
             None => return,
         };
 
+        // -- Compute haplotype regions via coordinate mapper when missing --
+        let hap1_region = entry.hap1_region.clone().or_else(|| {
+            let index = self.hap1_coord_index.as_ref()?;
+            collapse_asm_regions(&genome::coordinate_mapper::query(
+                index,
+                &entry.ref_region.chrom,
+                entry.ref_region.start,
+                entry.ref_region.end,
+                0,
+            ))
+        });
+        let hap2_region = entry.hap2_region.clone().or_else(|| {
+            let index = self.hap2_coord_index.as_ref()?;
+            collapse_asm_regions(&genome::coordinate_mapper::query(
+                index,
+                &entry.ref_region.chrom,
+                entry.ref_region.start,
+                entry.ref_region.end,
+                0,
+            ))
+        });
+
         // Sync panel views to the new region.
         self.sync_manager.set_regions(
             &entry.ref_region,
-            entry.hap1_region.as_ref(),
-            entry.hap2_region.as_ref(),
+            hap1_region.as_ref(),
+            hap2_region.as_ref(),
         );
 
         // -- Reference panel: BAM/CRAM reads + FASTA sequence --
         self.ref_data = PanelData::default();
         if let Some(reads_path) = &self.data_paths.reads_bam {
             let region_str = entry.ref_region.to_string();
+            let cram_ref = self
+                .data_paths
+                .cram_ref
+                .as_deref()
+                .or(self.data_paths.reference_fasta.as_deref());
             let result = if reads_path.extension().is_some_and(|e| e == "cram") {
-                genome::bam::query_cram(
-                    reads_path,
-                    self.data_paths.reference_fasta.as_deref(),
-                    &region_str,
-                )
+                genome::bam::query_cram(reads_path, cram_ref, &region_str)
             } else {
                 genome::bam::query_bam(reads_path, &region_str)
             };
             match result {
                 Ok(reads) => {
-                    // Read field summary for status: count reads, note reverse-strand and MAPQ.
                     let n_reads = reads.len();
                     let n_reverse = reads.iter().filter(|r| r.is_reverse).count();
                     let avg_mapq = {
@@ -339,20 +421,32 @@ impl ViewerApp {
             self.ref_data.sequence = load_fasta_for_region(fasta_path, &entry.ref_region);
         }
 
-        // -- Haplotype 1 panel: FASTA sequence --
+        // -- Haplotype 1 panel: BAM reads + FASTA sequence --
         self.hap1_data = PanelData::default();
-        if let Some(fasta_path) = &self.data_paths.hap1_fasta
-            && let Some(region) = &entry.hap1_region
-        {
-            self.hap1_data.sequence = load_fasta_for_region(fasta_path, region);
+        if let Some(region) = &hap1_region {
+            if let Some(bam_path) = &self.data_paths.reads_to_hap1_bam {
+                let region_str = region.to_string();
+                if let Ok(reads) = genome::bam::query_bam(bam_path, &region_str) {
+                    self.hap1_data.rows = pileup::pack_reads(reads);
+                }
+            }
+            if let Some(fasta_path) = &self.data_paths.hap1_fasta {
+                self.hap1_data.sequence = load_fasta_for_region(fasta_path, region);
+            }
         }
 
-        // -- Haplotype 2 panel: FASTA sequence --
+        // -- Haplotype 2 panel: BAM reads + FASTA sequence --
         self.hap2_data = PanelData::default();
-        if let Some(fasta_path) = &self.data_paths.hap2_fasta
-            && let Some(region) = &entry.hap2_region
-        {
-            self.hap2_data.sequence = load_fasta_for_region(fasta_path, region);
+        if let Some(region) = &hap2_region {
+            if let Some(bam_path) = &self.data_paths.reads_to_hap2_bam {
+                let region_str = region.to_string();
+                if let Ok(reads) = genome::bam::query_bam(bam_path, &region_str) {
+                    self.hap2_data.rows = pileup::pack_reads(reads);
+                }
+            }
+            if let Some(fasta_path) = &self.data_paths.hap2_fasta {
+                self.hap2_data.sequence = load_fasta_for_region(fasta_path, region);
+            }
         }
 
         // -- Dot plot: recompute if visible --
@@ -801,8 +895,18 @@ impl ViewerApp {
                 entry.ref_region
             );
 
-            // Show coordinate mapper info if available.
-            if let Some(index) = &self.coord_index {
+            // Show coordinate mapper info if available (legacy single index
+            // or hap-specific indices).
+            let indices: Vec<(&str, &genome::coordinate_mapper::MappingIndex)> = [
+                ("", self.coord_index.as_ref()),
+                ("hap1", self.hap1_coord_index.as_ref()),
+                ("hap2", self.hap2_coord_index.as_ref()),
+            ]
+            .into_iter()
+            .filter_map(|(label, idx)| idx.map(|i| (label, i)))
+            .collect();
+
+            for (label, index) in &indices {
                 let results = genome::coordinate_mapper::query(
                     index,
                     &entry.ref_region.chrom,
@@ -811,16 +915,27 @@ impl ViewerApp {
                     0,
                 );
                 if !results.is_empty() {
+                    let prefix = if label.is_empty() {
+                        "mapped".to_string()
+                    } else {
+                        label.to_string()
+                    };
                     let events: Vec<String> = results
                         .iter()
+                        .filter(|r| {
+                            r.event_type
+                                == genome::coordinate_mapper::EventType::Alignment
+                        })
                         .map(|r| {
-                            format!(
-                                "{}: {}:{}-{}",
-                                r.event_type, r.asm_chrom, r.asm_start, r.asm_end
-                            )
+                            format!("{}:{}-{}", r.asm_chrom, r.asm_start, r.asm_end)
                         })
                         .collect();
-                    msg.push_str(&format!(" | mapped: {}", events.join(", ")));
+                    if !events.is_empty() {
+                        msg.push_str(&format!(
+                            " | {prefix}: {}",
+                            events.join(", ")
+                        ));
+                    }
                 }
             }
 
@@ -904,19 +1019,31 @@ impl eframe::App for ViewerApp {
             let ref_text = current
                 .map(|e| e.ref_region.to_string())
                 .unwrap_or_else(|| "—".to_string());
-            let hap1_text = current
-                .and_then(|e| e.hap1_region.as_ref())
-                .map(|r| r.to_string())
-                .unwrap_or_else(|| "—".to_string());
-            let hap2_text = current
-                .and_then(|e| e.hap2_region.as_ref())
-                .map(|r| r.to_string())
-                .unwrap_or_else(|| "—".to_string());
+
+            // Use sync manager's view regions for hap panel headers (these
+            // reflect coordinate-mapper-derived regions when the manifest/VCF
+            // does not provide them).
+            let h1_view = self.sync_manager.view(PanelId::Haplotype1);
+            let h2_view = self.sync_manager.view(PanelId::Haplotype2);
+            let hap1_text = if h1_view.view_start > 0 || h1_view.view_end > 0 {
+                self.sync_manager
+                    .highlight_region(PanelId::Haplotype1)
+                    .map(|r| r.to_string())
+                    .unwrap_or_else(|| "—".to_string())
+            } else {
+                "—".to_string()
+            };
+            let hap2_text = if h2_view.view_start > 0 || h2_view.view_end > 0 {
+                self.sync_manager
+                    .highlight_region(PanelId::Haplotype2)
+                    .map(|r| r.to_string())
+                    .unwrap_or_else(|| "—".to_string())
+            } else {
+                "—".to_string()
+            };
 
             // Use per-panel view ranges from sync manager
             let ref_view = self.sync_manager.view(PanelId::Reference);
-            let h1_view = self.sync_manager.view(PanelId::Haplotype1);
-            let h2_view = self.sync_manager.view(PanelId::Haplotype2);
 
             let (ref_start, ref_end) = (ref_view.view_start, ref_view.view_end);
             let (h1_start, h1_end) = (h1_view.view_start, h1_view.view_end);
@@ -938,6 +1065,19 @@ impl eframe::App for ViewerApp {
                     Some(format!("{} blocks", results.len()))
                 }
             });
+
+            let hap1_coord_info: Option<String> = if !self.hap1_data.rows.is_empty() {
+                let n: usize = self.hap1_data.rows.iter().map(|r| r.reads.len()).sum();
+                Some(format!("{n} reads"))
+            } else {
+                None
+            };
+            let hap2_coord_info: Option<String> = if !self.hap2_data.rows.is_empty() {
+                let n: usize = self.hap2_data.rows.iter().map(|r| r.reads.len()).sum();
+                Some(format!("{n} reads"))
+            } else {
+                None
+            };
 
             // Calculate available space
             let dot_plot_height = if self.dot_plot.show { 280.0 } else { 0.0 };
@@ -971,7 +1111,7 @@ impl eframe::App for ViewerApp {
                         config: &config,
                         view_start: h1_start,
                         view_end: h1_end,
-                        coord_info: None,
+                        coord_info: hap1_coord_info.as_deref(),
                     },
                 );
             });
@@ -988,7 +1128,7 @@ impl eframe::App for ViewerApp {
                         config: &config,
                         view_start: h2_start,
                         view_end: h2_end,
-                        coord_info: None,
+                        coord_info: hap2_coord_info.as_deref(),
                     },
                 );
             });
@@ -1008,6 +1148,62 @@ impl eframe::App for ViewerApp {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Merge coordinate-mapper query results into a single assembly region.
+///
+/// Port of the Python `_collapse_asm_regions()` function.  Only alignment
+/// events (not SV gap events) are considered.  The intervals are merged
+/// per contig and the first merged region is returned as a [`GenomicRegion`].
+fn collapse_asm_regions(
+    results: &[genome::coordinate_mapper::QueryResult],
+) -> Option<crate::region::GenomicRegion> {
+    use std::collections::BTreeMap;
+
+    let mut by_contig: BTreeMap<&str, Vec<(u64, u64)>> = BTreeMap::new();
+    for r in results {
+        if r.event_type != genome::coordinate_mapper::EventType::Alignment {
+            continue;
+        }
+        let (s, e) = if r.asm_start <= r.asm_end {
+            (r.asm_start, r.asm_end)
+        } else {
+            (r.asm_end, r.asm_start)
+        };
+        by_contig.entry(&r.asm_chrom).or_default().push((s, e));
+    }
+
+    // Return the first merged region (covering the most contiguous aligned span).
+    for (contig, mut intervals) in by_contig {
+        if intervals.is_empty() {
+            continue;
+        }
+        intervals.sort();
+        let mut merged: Vec<(u64, u64)> = vec![intervals[0]];
+        for &(s, e) in &intervals[1..] {
+            // Safety: merged always has at least one element (initialised above).
+            let last = merged.last_mut().unwrap();
+            if s <= last.1 {
+                last.1 = last.1.max(e);
+            } else {
+                merged.push((s, e));
+            }
+        }
+        // Use the bounding interval across all merged segments on this contig.
+        // Safety: merged was initialised with intervals[0] so it is non-empty.
+        let start = merged.first().unwrap().0;
+        let end = merged.last().unwrap().1;
+        // Ensure start is at least 1 for GenomicRegion (1-based).
+        let start = start.max(1);
+        if end >= start {
+            return Some(crate::region::GenomicRegion {
+                chrom: contig.to_string(),
+                start,
+                end,
+            });
+        }
+    }
+    None
+}
 
 /// Load a FASTA sequence for a genomic region.
 ///
@@ -1373,5 +1569,184 @@ mod tests {
     fn test_data_paths_from_tsv_missing_file() {
         let result = DataPaths::from_tsv(std::path::Path::new("/nonexistent/config.tsv"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_data_paths_default_new_fields() {
+        let dp = DataPaths::default();
+        assert!(dp.hap1_coord_index.is_none());
+        assert!(dp.hap2_coord_index.is_none());
+        assert!(dp.reads_to_hap1_bam.is_none());
+        assert!(dp.reads_to_hap2_bam.is_none());
+        assert!(dp.cram_ref.is_none());
+    }
+
+    #[test]
+    fn test_data_paths_from_tsv_discovers_output_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let output_dir = tmp.path().join("output").join("NA21110");
+        std::fs::create_dir_all(&output_dir).unwrap();
+
+        // Create the files that from_tsv should discover
+        for suffix in &[
+            "_hap1_to_ref.mapping.json.gz",
+            "_hap2_to_ref.mapping.json.gz",
+            "_reads_to_hap1.bam",
+            "_reads_to_hap2.bam",
+        ] {
+            let path = output_dir.join(format!("NA21110{suffix}"));
+            std::fs::write(&path, b"dummy").unwrap();
+        }
+
+        let tsv_path = tmp.path().join("config.tsv");
+        std::fs::write(
+            &tsv_path,
+            format!(
+                "#sample_id\toutput_dir\treference\thap1_assembly\thap2_assembly\treads_bam\tregions\tcram_ref\n\
+                 NA21110\t{}\t/ref.fa.gz\t/hap1.fa.gz\t/hap2.fa.gz\t/reads.cram\t/regions.vcf.gz\t/cram_ref.fa.gz\n",
+                output_dir.display()
+            ),
+        )
+        .unwrap();
+
+        let dp = DataPaths::from_tsv(&tsv_path).unwrap();
+        assert!(dp.hap1_coord_index.is_some());
+        assert!(dp.hap2_coord_index.is_some());
+        assert!(dp.reads_to_hap1_bam.is_some());
+        assert!(dp.reads_to_hap2_bam.is_some());
+        assert_eq!(
+            dp.cram_ref.as_deref(),
+            Some(std::path::Path::new("/cram_ref.fa.gz"))
+        );
+        // Verify discovered file names contain expected suffix
+        assert!(dp
+            .hap1_coord_index
+            .as_ref()
+            .unwrap()
+            .to_string_lossy()
+            .ends_with("_hap1_to_ref.mapping.json.gz"));
+        assert!(dp
+            .reads_to_hap2_bam
+            .as_ref()
+            .unwrap()
+            .to_string_lossy()
+            .ends_with("_reads_to_hap2.bam"));
+    }
+
+    #[test]
+    fn test_data_paths_from_tsv_no_output_dir_no_discovery() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tsv_path = tmp.path().join("config.tsv");
+        std::fs::write(
+            &tsv_path,
+            "sample_id\treference\thap1_assembly\thap2_assembly\treads_bam\n\
+             sample1\t/ref.fa.gz\t/hap1.fa.gz\t/hap2.fa.gz\t/reads.bam\n",
+        )
+        .unwrap();
+
+        let dp = DataPaths::from_tsv(&tsv_path).unwrap();
+        // Without output_dir column, discovery should yield None
+        assert!(dp.hap1_coord_index.is_none());
+        assert!(dp.hap2_coord_index.is_none());
+        assert!(dp.reads_to_hap1_bam.is_none());
+        assert!(dp.reads_to_hap2_bam.is_none());
+    }
+
+    #[test]
+    fn test_collapse_asm_regions_empty() {
+        assert!(collapse_asm_regions(&[]).is_none());
+    }
+
+    #[test]
+    fn test_collapse_asm_regions_single_alignment() {
+        use crate::genome::coordinate_mapper::{EventType, QueryResult};
+        let results = vec![QueryResult {
+            ref_chrom: "chr1".to_string(),
+            ref_start: 1000,
+            ref_end: 2000,
+            asm_chrom: "ctg1".to_string(),
+            asm_start: 5000,
+            asm_end: 6000,
+            strand: "+".to_string(),
+            mapq: 60,
+            event_type: EventType::Alignment,
+            ref_gap_size: None,
+            asm_gap_size: None,
+        }];
+        let region = collapse_asm_regions(&results).unwrap();
+        assert_eq!(region.chrom, "ctg1");
+        assert_eq!(region.start, 5000);
+        assert_eq!(region.end, 6000);
+    }
+
+    #[test]
+    fn test_collapse_asm_regions_skips_sv_events() {
+        use crate::genome::coordinate_mapper::{EventType, QueryResult};
+        let results = vec![
+            QueryResult {
+                ref_chrom: "chr1".to_string(),
+                ref_start: 1000,
+                ref_end: 2000,
+                asm_chrom: "ctg1".to_string(),
+                asm_start: 5000,
+                asm_end: 6000,
+                strand: "+".to_string(),
+                mapq: 60,
+                event_type: EventType::Alignment,
+                ref_gap_size: None,
+                asm_gap_size: None,
+            },
+            QueryResult {
+                ref_chrom: "chr1".to_string(),
+                ref_start: 2000,
+                ref_end: 2500,
+                asm_chrom: "ctg1".to_string(),
+                asm_start: 6000,
+                asm_end: 6000,
+                strand: "+".to_string(),
+                mapq: 60,
+                event_type: EventType::Deletion,
+                ref_gap_size: Some(500),
+                asm_gap_size: Some(0),
+            },
+            QueryResult {
+                ref_chrom: "chr1".to_string(),
+                ref_start: 2500,
+                ref_end: 3500,
+                asm_chrom: "ctg1".to_string(),
+                asm_start: 6000,
+                asm_end: 7000,
+                strand: "+".to_string(),
+                mapq: 60,
+                event_type: EventType::Alignment,
+                ref_gap_size: None,
+                asm_gap_size: None,
+            },
+        ];
+        // Should merge two alignment blocks, skip the deletion
+        let region = collapse_asm_regions(&results).unwrap();
+        assert_eq!(region.chrom, "ctg1");
+        assert_eq!(region.start, 5000);
+        assert_eq!(region.end, 7000);
+    }
+
+    #[test]
+    fn test_collapse_asm_regions_only_sv_events() {
+        use crate::genome::coordinate_mapper::{EventType, QueryResult};
+        let results = vec![QueryResult {
+            ref_chrom: "chr1".to_string(),
+            ref_start: 1000,
+            ref_end: 2000,
+            asm_chrom: "ctg1".to_string(),
+            asm_start: 5000,
+            asm_end: 5000,
+            strand: "+".to_string(),
+            mapq: 60,
+            event_type: EventType::Insertion,
+            ref_gap_size: Some(1000),
+            asm_gap_size: Some(5000),
+        }];
+        // No alignment events → None
+        assert!(collapse_asm_regions(&results).is_none());
     }
 }
