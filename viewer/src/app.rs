@@ -1174,9 +1174,13 @@ fn collapse_asm_regions(
 
     // Return the first merged region (covering the most contiguous aligned span).
     for (contig, mut intervals) in by_contig {
+        if intervals.is_empty() {
+            continue;
+        }
         intervals.sort();
         let mut merged: Vec<(u64, u64)> = vec![intervals[0]];
         for &(s, e) in &intervals[1..] {
+            // Safety: merged always has at least one element (initialised above).
             let last = merged.last_mut().unwrap();
             if s <= last.1 {
                 last.1 = last.1.max(e);
@@ -1185,6 +1189,7 @@ fn collapse_asm_regions(
             }
         }
         // Use the bounding interval across all merged segments on this contig.
+        // Safety: merged was initialised with intervals[0] so it is non-empty.
         let start = merged.first().unwrap().0;
         let end = merged.last().unwrap().1;
         // Ensure start is at least 1 for GenomicRegion (1-based).
