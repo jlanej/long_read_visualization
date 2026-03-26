@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::VecDeque;
 
 use crate::genome::pileup::PileupRow;
 use crate::genome::FastaSequence;
@@ -41,11 +42,11 @@ pub const DEFAULT_CACHE_CAPACITY: usize = 32;
 
 /// LRU cache for loaded region data, keyed by a region string.
 ///
-/// Uses a `HashMap` for O(1) lookup and a `Vec<String>` for LRU ordering.
-/// The most recently used key is at the end of the `order` vector.
+/// Uses a `HashMap` for O(1) lookup and a `VecDeque<String>` for LRU ordering.
+/// The most recently used key is at the back of the deque.
 pub struct RegionCache {
     map: HashMap<String, CachedRegion>,
-    order: Vec<String>,
+    order: VecDeque<String>,
     capacity: usize,
 }
 
@@ -54,7 +55,7 @@ impl RegionCache {
     pub fn new(capacity: usize) -> Self {
         Self {
             map: HashMap::new(),
-            order: Vec::with_capacity(capacity),
+            order: VecDeque::with_capacity(capacity),
             capacity,
         }
     }
@@ -80,13 +81,12 @@ impl RegionCache {
         }
 
         if self.order.len() >= self.capacity {
-            // Evict the least-recently used (front of the order vec).
-            if let Some(evicted) = self.order.first().cloned() {
+            // Evict the least-recently used (front of the deque) — O(1).
+            if let Some(evicted) = self.order.pop_front() {
                 self.map.remove(&evicted);
-                self.order.remove(0);
             }
         }
-        self.order.push(key.clone());
+        self.order.push_back(key.clone());
         self.map.insert(key, value);
     }
 
@@ -115,11 +115,11 @@ impl RegionCache {
 
     // -- internal -----------------------------------------------------------
 
-    /// Move `key` to the most-recently-used position (end of `order`).
+    /// Move `key` to the most-recently-used position (back of `order`).
     fn promote(&mut self, key: &str) {
         if let Some(pos) = self.order.iter().position(|k| k == key) {
             self.order.remove(pos);
-            self.order.push(key.to_string());
+            self.order.push_back(key.to_string());
         }
     }
 }
