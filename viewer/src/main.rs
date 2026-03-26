@@ -131,6 +131,22 @@ fn parse_args() -> CliArgs {
                 if data_paths.reads_bam.is_none() {
                     data_paths.reads_bam = tsv_paths.reads_bam;
                 }
+                // Discovered preprocessing output (always from TSV output_dir)
+                if data_paths.hap1_coord_index.is_none() {
+                    data_paths.hap1_coord_index = tsv_paths.hap1_coord_index;
+                }
+                if data_paths.hap2_coord_index.is_none() {
+                    data_paths.hap2_coord_index = tsv_paths.hap2_coord_index;
+                }
+                if data_paths.reads_to_hap1_bam.is_none() {
+                    data_paths.reads_to_hap1_bam = tsv_paths.reads_to_hap1_bam;
+                }
+                if data_paths.reads_to_hap2_bam.is_none() {
+                    data_paths.reads_to_hap2_bam = tsv_paths.reads_to_hap2_bam;
+                }
+                if data_paths.cram_ref.is_none() {
+                    data_paths.cram_ref = tsv_paths.cram_ref;
+                }
                 // Use regions from config if no manifest given on CLI
                 if manifest.is_none() {
                     manifest = tsv_paths.regions;
