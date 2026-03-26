@@ -4,6 +4,7 @@
 > the Python + igv.js implementation (`server/`), then exceed it with native-app
 > advantages (performance, offline use, richer interactivity).
 > Ensure that all features are well tested via automated CI, and ensure that accuracy and interpretation of the visualization is considered with each implementation. 
+> Please ensure that our methods you come across, create, or edit are reasonably efficient and not something like O(n squared) for very large compute tasks that can annoying block interactivity. Keep performance in mind for all implementations 
 
 ## Background
 
