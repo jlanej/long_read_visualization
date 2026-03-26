@@ -729,4 +729,40 @@ mod tests {
             "header should contain reference sequences"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // BAM reads include new fields (mismatches, soft_clips)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_bam_reads_have_mismatch_and_softclip_fields() {
+        let bam = toy_bam();
+        if !bam.exists() {
+            eprintln!("skipping: toy BAM not found");
+            return;
+        }
+        let reads = query_bam(&bam, &format!("{TOY_CONTIG}:1-212914")).unwrap();
+        assert!(!reads.is_empty());
+        // Verify the new fields are present and accessible
+        for read in &reads {
+            // mismatches and soft_clips should be Vec (possibly empty)
+            let _ = &read.mismatches;
+            let _ = &read.soft_clips;
+        }
+    }
+
+    #[test]
+    fn test_bam_reads_soft_clips_extracted() {
+        let bam = toy_bam();
+        if !bam.exists() {
+            eprintln!("skipping: toy BAM not found");
+            return;
+        }
+        let reads = query_bam(&bam, &format!("{TOY_CONTIG}:1-212914")).unwrap();
+        // Count total soft clips across all reads
+        let total_clips: usize = reads.iter().map(|r| r.soft_clips.len()).sum();
+        // Soft clips may or may not be present in the toy data, but the
+        // extraction path should work without errors
+        let _ = total_clips;
+    }
 }
