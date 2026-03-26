@@ -3,6 +3,7 @@
 > **Meta Issue**: Bring the Rust native viewer (`viewer/`) to full feature parity with
 > the Python + igv.js implementation (`server/`), then exceed it with native-app
 > advantages (performance, offline use, richer interactivity).
+> Ensure that all features are well tested via automated CI, and ensure that accuracy and interpretation of the visualization is considered with each implementation. 
 
 ## Background
 
