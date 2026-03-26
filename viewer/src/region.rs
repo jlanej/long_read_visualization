@@ -167,8 +167,8 @@ impl RegionNavigator {
                 Some(mut r) => {
                     // Toy-dataset manifests include `fasta_region` as the sliced
                     // FASTA/BAM contig name while `ref_region` remains in genome
-                    // coordinates. Convert to local coordinates so read queries and
-                    // rendering target the sliced contig correctly.
+                    // coordinates. Both are 1-based inclusive coordinates, so convert
+                    // to local sliced-contig coordinates for read queries/rendering.
                     if !v.fasta_region.is_empty()
                         && let Some(fasta_region) = GenomicRegion::parse(&v.fasta_region)
                         && r.chrom == fasta_region.chrom
