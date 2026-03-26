@@ -156,6 +156,9 @@ impl RegionNavigator {
         self.regions.clear();
         self.current = 0;
 
+        let is_toy_manifest =
+            manifest.description == "Toy dataset for long_read_visualization integration testing";
+
         for v in &manifest.variants {
             let ref_region = if !v.ref_region.is_empty() {
                 GenomicRegion::parse(&v.ref_region)
@@ -169,7 +172,8 @@ impl RegionNavigator {
                     // FASTA/BAM contig name while `ref_region` remains in genome
                     // coordinates. Both are 1-based inclusive coordinates, so convert
                     // to local sliced-contig coordinates for read queries/rendering.
-                    if !v.fasta_region.is_empty()
+                    if is_toy_manifest
+                        && !v.fasta_region.is_empty()
                         && let Some(fasta_region) = GenomicRegion::parse(&v.fasta_region)
                         && r.chrom == fasta_region.chrom
                         && r.start >= fasta_region.start
@@ -629,6 +633,7 @@ mod tests {
     #[test]
     fn test_manifest_uses_fasta_region_for_local_ref_coords() {
         let json = r#"{
+          "description": "Toy dataset for long_read_visualization integration testing",
           "variants": [
             {
               "chrom": "chr1",
@@ -645,6 +650,28 @@ mod tests {
         assert_eq!(entry.ref_region.chrom, "chr1:112064095-112277008");
         assert_eq!(entry.ref_region.start, 100001);
         assert_eq!(entry.ref_region.end, 112913);
+    }
+
+    #[test]
+    fn test_manifest_does_not_use_fasta_region_for_non_toy_manifest() {
+        let json = r#"{
+          "description": "Test manifest",
+          "variants": [
+            {
+              "chrom": "chr1",
+              "pos": 112164095,
+              "size": 12912,
+              "ref_region": "chr1:112164095-112177007",
+              "fasta_region": "chr1:112064095-112277008"
+            }
+          ]
+        }"#;
+        let mut nav = RegionNavigator::new();
+        nav.load_manifest_str(json).unwrap();
+        let entry = nav.current().unwrap();
+        assert_eq!(entry.ref_region.chrom, "chr1");
+        assert_eq!(entry.ref_region.start, 112164095);
+        assert_eq!(entry.ref_region.end, 112177007);
     }
 
     #[test]
