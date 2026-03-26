@@ -340,6 +340,19 @@ impl ViewerApp {
 
     // -- Data loading -------------------------------------------------------
 
+    /// Pack reads using the current display config (position-based or
+    /// haplotype-grouped).
+    fn pack_reads_for_config(
+        &self,
+        reads: Vec<genome::AlignedRead>,
+    ) -> Vec<pileup::PileupRow> {
+        if self.display_config.sort_by_haplotype {
+            pileup::pack_reads_by_haplotype(reads)
+        } else {
+            pileup::pack_reads(reads)
+        }
+    }
+
     /// Load BAM reads and FASTA sequences for the current region.
     fn load_region_data(&mut self) {
         let entry = match self.navigator.current() {
@@ -405,7 +418,7 @@ impl ViewerApp {
                     };
                     let n_flagged = reads.iter().filter(|r| r.flags & 0x100 != 0).count();
 
-                    self.ref_data.rows = pileup::pack_reads(reads);
+                    self.ref_data.rows = self.pack_reads_for_config(reads);
 
                     self.status_message = format!(
                         "{n_reads} reads ({n_reverse} rev, {n_flagged} secondary, avg MAPQ {})",
@@ -427,7 +440,7 @@ impl ViewerApp {
             if let Some(bam_path) = &self.data_paths.reads_to_hap1_bam {
                 let region_str = region.to_string();
                 if let Ok(reads) = genome::bam::query_bam(bam_path, &region_str) {
-                    self.hap1_data.rows = pileup::pack_reads(reads);
+                    self.hap1_data.rows = self.pack_reads_for_config(reads);
                 }
             }
             if let Some(fasta_path) = &self.data_paths.hap1_fasta {
@@ -441,7 +454,7 @@ impl ViewerApp {
             if let Some(bam_path) = &self.data_paths.reads_to_hap2_bam {
                 let region_str = region.to_string();
                 if let Ok(reads) = genome::bam::query_bam(bam_path, &region_str) {
-                    self.hap2_data.rows = pileup::pack_reads(reads);
+                    self.hap2_data.rows = self.pack_reads_for_config(reads);
                 }
             }
             if let Some(fasta_path) = &self.data_paths.hap2_fasta {
@@ -639,6 +652,51 @@ impl ViewerApp {
                 .clicked()
             {
                 self.display_config.hide_small_indels = !self.display_config.hide_small_indels;
+            }
+
+            // Display toggle: show mismatches
+            let mm_label = if self.display_config.show_mismatches {
+                "SNVs: on"
+            } else {
+                "SNVs: off"
+            };
+            if ui
+                .button(mm_label)
+                .on_hover_text("Toggle base-level mismatch/SNV display")
+                .clicked()
+            {
+                self.display_config.show_mismatches = !self.display_config.show_mismatches;
+            }
+
+            // Display toggle: show soft clips
+            let sc_label = if self.display_config.show_soft_clips {
+                "Clips: on"
+            } else {
+                "Clips: off"
+            };
+            if ui
+                .button(sc_label)
+                .on_hover_text("Toggle soft-clip overlay display")
+                .clicked()
+            {
+                self.display_config.show_soft_clips = !self.display_config.show_soft_clips;
+            }
+
+            // Display toggle: sort by haplotype
+            let hp_label = if self.display_config.sort_by_haplotype {
+                "HP Sort: on"
+            } else {
+                "HP Sort: off"
+            };
+            if ui
+                .button(hp_label)
+                .on_hover_text("Toggle haplotype-based read grouping")
+                .clicked()
+            {
+                self.display_config.sort_by_haplotype =
+                    !self.display_config.sort_by_haplotype;
+                // Re-pack reads with the new sort mode
+                self.load_region_data();
             }
 
             ui.separator();

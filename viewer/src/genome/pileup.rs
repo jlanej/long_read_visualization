@@ -1,3 +1,6 @@
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
+
 use super::AlignedRead;
 
 /// A row in a pileup layout. Each row contains non-overlapping reads
@@ -14,7 +17,10 @@ pub struct PileupRow {
 const READ_GAP: u64 = 5;
 
 /// Default indel threshold for suppression (base pairs).
-pub const DEFAULT_INDEL_THRESHOLD: u32 = 3;
+///
+/// Set to 50 bp for long-read data where small indels are common sequencing
+/// noise and structural variants of interest are typically ≥50 bp.
+pub const DEFAULT_INDEL_THRESHOLD: u32 = 50;
 
 /// Display configuration for a pileup panel.
 #[derive(Debug, Clone)]
@@ -26,6 +32,12 @@ pub struct PileupDisplayConfig {
     pub hide_small_indels: bool,
     /// Indel size threshold (bp) below which indels are hidden.
     pub indel_threshold: u32,
+    /// If true, group reads by HP tag (hap1 → hap2 → unphased) before packing.
+    pub sort_by_haplotype: bool,
+    /// If true, render soft-clipped bases as semi-transparent extensions.
+    pub show_soft_clips: bool,
+    /// If true, render base-level mismatches with standard nucleotide coloring.
+    pub show_mismatches: bool,
 }
 
 impl Default for PileupDisplayConfig {
@@ -34,6 +46,9 @@ impl Default for PileupDisplayConfig {
             squished: true,
             hide_small_indels: true,
             indel_threshold: DEFAULT_INDEL_THRESHOLD,
+            sort_by_haplotype: false,
+            show_soft_clips: false,
+            show_mismatches: false,
         }
     }
 }
@@ -75,10 +90,13 @@ pub fn visible_indels(read: &AlignedRead, config: &PileupDisplayConfig) -> Vec<s
 }
 
 /// Pack a set of aligned reads into pileup rows using a greedy
-/// interval-scheduling algorithm.
+/// interval-scheduling algorithm with a min-heap for O(n log n) performance.
 ///
 /// Reads are sorted by start position, then each read is assigned to
-/// the lowest row whose last read ends before `read.start - READ_GAP`.
+/// the row whose last read ended earliest (if the gap constraint is met).
+/// If no existing row has room, a new row is created.
+///
+/// Complexity: O(n log n) sort + O(n log R) packing where R = row count.
 pub fn pack_reads(mut reads: Vec<AlignedRead>) -> Vec<PileupRow> {
     if reads.is_empty() {
         return Vec::new();
@@ -86,23 +104,24 @@ pub fn pack_reads(mut reads: Vec<AlignedRead>) -> Vec<PileupRow> {
 
     reads.sort_by_key(|r| r.start);
 
-    // Track the rightmost end position in each row.
-    let mut row_ends: Vec<u64> = Vec::new();
+    // Min-heap of (end_position, row_index) — earliest-ending row on top.
+    let mut heap: BinaryHeap<Reverse<(u64, usize)>> = BinaryHeap::new();
     let mut rows: Vec<Vec<AlignedRead>> = Vec::new();
 
     for read in reads {
-        let assigned = row_ends.iter().position(|&end| read.start > end + READ_GAP);
-
-        match assigned {
-            Some(idx) => {
-                row_ends[idx] = read.end;
-                rows[idx].push(read);
-            }
-            None => {
-                row_ends.push(read.end);
-                rows.push(vec![read]);
-            }
+        if let Some(&Reverse((end, idx))) = heap.peek()
+            && read.start > end + READ_GAP
+        {
+            // Reuse the row with the earliest end.
+            heap.pop();
+            heap.push(Reverse((read.end, idx)));
+            rows[idx].push(read);
+            continue;
         }
+        // No row available — create a new one.
+        let idx = rows.len();
+        heap.push(Reverse((read.end, idx)));
+        rows.push(vec![read]);
     }
 
     rows.into_iter()
@@ -112,6 +131,70 @@ pub fn pack_reads(mut reads: Vec<AlignedRead>) -> Vec<PileupRow> {
             reads,
         })
         .collect()
+}
+
+/// Pack reads grouped by haplotype: HP=1 first, then HP=2, then unphased.
+///
+/// Within each haplotype group, reads are packed using the standard greedy
+/// interval-scheduling algorithm.  A separator row is inserted between groups
+/// when the group is non-empty.
+pub fn pack_reads_by_haplotype(reads: Vec<AlignedRead>) -> Vec<PileupRow> {
+    if reads.is_empty() {
+        return Vec::new();
+    }
+
+    let mut hap1 = Vec::new();
+    let mut hap2 = Vec::new();
+    let mut unphased = Vec::new();
+
+    for read in reads {
+        match read.haplotype {
+            Some(1) => hap1.push(read),
+            Some(2) => hap2.push(read),
+            _ => unphased.push(read),
+        }
+    }
+
+    let mut all_rows: Vec<PileupRow> = Vec::new();
+    let mut y = 0u32;
+
+    for group in [hap1, hap2, unphased] {
+        if group.is_empty() {
+            continue;
+        }
+        if y > 0 {
+            // Insert a separator (empty row) between groups
+            y += 1;
+        }
+        let packed = pack_reads(group);
+        for row in packed {
+            all_rows.push(PileupRow {
+                y_offset: y,
+                reads: row.reads,
+            });
+            y += 1;
+        }
+    }
+
+    all_rows
+}
+
+/// Map a nucleotide base to a display color following standard genomics conventions.
+///
+/// - A → green
+/// - C → blue
+/// - G → orange/yellow
+/// - T → red
+/// - Other → grey
+#[inline]
+pub fn nucleotide_color(base: u8) -> [u8; 3] {
+    match base.to_ascii_uppercase() {
+        b'A' => [0, 180, 0],    // green
+        b'C' => [0, 0, 200],    // blue
+        b'G' => [209, 159, 0],  // orange/yellow
+        b'T' => [200, 0, 0],    // red
+        _ => [128, 128, 128],   // grey (N or unknown)
+    }
 }
 
 /// Compute the pixel rectangles for all reads in the pileup.
@@ -157,6 +240,70 @@ pub fn layout_read_rects(
                 color,
                 read_name: read.name.clone(),
             });
+
+            // Draw soft-clip overlays (semi-transparent extensions beyond alignment)
+            if config.show_soft_clips {
+                for clip in &read.soft_clips {
+                    let clip_color = [180, 180, 220]; // light blue-grey
+                    if clip.is_leading {
+                        // Leading clip: extends to the left of the alignment start
+                        let clip_end = clip.ref_pos;
+                        let clip_start = clip_end.saturating_sub(clip.length as u64);
+                        let cs = clip_start.max(view_start);
+                        let ce = clip_end.min(view_end);
+                        if cs < ce {
+                            let cx = (cs - view_start) as f32 * bp_per_px;
+                            let cw = ((ce - cs) as f32 * bp_per_px).max(1.0);
+                            rects.push(ReadRect {
+                                x: cx,
+                                y,
+                                width: cw,
+                                height: row_h,
+                                color: clip_color,
+                                read_name: read.name.clone(),
+                            });
+                        }
+                    } else {
+                        // Trailing clip: extends to the right of the alignment end
+                        let clip_start = clip.ref_pos;
+                        let clip_end = clip_start + clip.length as u64;
+                        let cs = clip_start.max(view_start);
+                        let ce = clip_end.min(view_end);
+                        if cs < ce {
+                            let cx = (cs - view_start) as f32 * bp_per_px;
+                            let cw = ((ce - cs) as f32 * bp_per_px).max(1.0);
+                            rects.push(ReadRect {
+                                x: cx,
+                                y,
+                                width: cw,
+                                height: row_h,
+                                color: clip_color,
+                                read_name: read.name.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+
+            // Draw mismatch markers (nucleotide-colored overlays)
+            if config.show_mismatches {
+                for mm in &read.mismatches {
+                    if mm.ref_pos < view_start || mm.ref_pos > view_end {
+                        continue;
+                    }
+                    let mx = (mm.ref_pos - view_start) as f32 * bp_per_px;
+                    let mw = bp_per_px.max(1.0);
+                    let mc = nucleotide_color(mm.read_base);
+                    rects.push(ReadRect {
+                        x: mx,
+                        y,
+                        width: mw,
+                        height: row_h,
+                        color: mc,
+                        read_name: read.name.clone(),
+                    });
+                }
+            }
 
             // Draw indel markers
             let vis_indels = visible_indels(read, config);
@@ -220,6 +367,8 @@ mod tests {
             haplotype: None,
             flags: 0,
             indels: Vec::new(),
+            mismatches: Vec::new(),
+            soft_clips: Vec::new(),
         }
     }
 
@@ -233,6 +382,8 @@ mod tests {
             haplotype: hp,
             flags: 0,
             indels: Vec::new(),
+            mismatches: Vec::new(),
+            soft_clips: Vec::new(),
         }
     }
 

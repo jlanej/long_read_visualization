@@ -59,6 +59,27 @@ pub struct Indel {
     pub kind: IndelKind,
 }
 
+/// A single base-level mismatch between a read and the reference.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Mismatch {
+    /// Reference position (1-based) of the mismatch.
+    pub ref_pos: u64,
+    /// The read base at this position (uppercase ASCII).
+    pub read_base: u8,
+}
+
+/// A soft-clipped region at the start or end of a read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SoftClip {
+    /// Reference position (1-based) where the clip occurs.
+    /// For leading clips this equals alignment start; for trailing clips, alignment end + 1.
+    pub ref_pos: u64,
+    /// Number of soft-clipped bases.
+    pub length: u32,
+    /// Whether this is a leading (true) or trailing (false) soft clip.
+    pub is_leading: bool,
+}
+
 /// A single aligned read extracted from a BAM or CRAM file.
 #[derive(Debug, Clone)]
 pub struct AlignedRead {
@@ -78,6 +99,10 @@ pub struct AlignedRead {
     pub flags: u16,
     /// Indels extracted from the CIGAR string.
     pub indels: Vec<Indel>,
+    /// Base-level mismatches (from `X` CIGAR ops with `--eqx` encoding).
+    pub mismatches: Vec<Mismatch>,
+    /// Soft-clipped regions at the read boundaries.
+    pub soft_clips: Vec<SoftClip>,
 }
 
 /// A reference or assembly sequence extracted from a FASTA file.
