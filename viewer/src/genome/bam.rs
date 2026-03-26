@@ -11,7 +11,10 @@ use noodles::sam;
 use noodles::sam::alignment::record::cigar::Cigar as _;
 use noodles::sam::alignment::record::data::field::tag::Tag;
 
-use super::{AlignedRead, GenomeError, Indel, IndelKind};
+use super::{AlignedRead, GenomeError, Indel, IndelKind, Mismatch, SoftClip};
+
+/// Extracted CIGAR features: (indels, mismatches, soft_clips).
+type CigarFeatures = (Vec<Indel>, Vec<Mismatch>, Vec<SoftClip>);
 
 // ---------------------------------------------------------------------------
 // Lenient SAM header parsing helpers
@@ -163,7 +166,7 @@ fn extract_bam_read(record: &bam::Record) -> Result<Option<AlignedRead>, GenomeE
         start
     };
 
-    let indels = extract_indels_from_bam_cigar(&cigar, start)?;
+    let (indels, mismatches, soft_clips) = extract_cigar_features_bam(&cigar, start)?;
 
     let name = record.name().map(|n| format!("{n}")).unwrap_or_default();
 
@@ -179,36 +182,58 @@ fn extract_bam_read(record: &bam::Record) -> Result<Option<AlignedRead>, GenomeE
         haplotype: hp,
         flags: u16::from(flags),
         indels,
+        mismatches,
+        soft_clips,
     }))
 }
 
-/// Walk a BAM CIGAR string and collect insertion/deletion events with their
-/// reference positions and lengths.
-fn extract_indels_from_bam_cigar(
+/// Walk a BAM CIGAR string and collect indels, mismatches, and soft clips.
+fn extract_cigar_features_bam(
     cigar: &noodles::bam::record::Cigar<'_>,
     alignment_start: u64,
-) -> Result<Vec<Indel>, GenomeError> {
+) -> Result<CigarFeatures, GenomeError> {
     use noodles::sam::alignment::record::cigar::op::Kind;
 
     let mut indels = Vec::new();
+    let mut mismatches = Vec::new();
+    let mut soft_clips = Vec::new();
     let mut ref_pos = alignment_start;
+    let mut is_first_op = true;
 
     for result in cigar.iter() {
         let op = result.map_err(|e| GenomeError::ParseError(format!("CIGAR op: {e}")))?;
         let len = op.len();
         match op.kind() {
-            Kind::Match | Kind::SequenceMatch | Kind::SequenceMismatch => {
+            Kind::Match | Kind::SequenceMatch => {
+                is_first_op = false;
+                ref_pos += len as u64;
+            }
+            Kind::SequenceMismatch => {
+                is_first_op = false;
+                // Each base in an X operation is a mismatch.  The actual read
+                // base requires accessing the BAM sequence field, which is not
+                // available through the CIGAR iterator alone.  We store `b'X'`
+                // as a sentinel; the renderer uses this to display a generic
+                // mismatch marker (grey) rather than a nucleotide-specific
+                // color, which is sufficient for identifying mismatch positions.
+                for i in 0..len {
+                    mismatches.push(Mismatch {
+                        ref_pos: ref_pos + i as u64,
+                        read_base: b'X',
+                    });
+                }
                 ref_pos += len as u64;
             }
             Kind::Insertion => {
+                is_first_op = false;
                 indels.push(Indel {
                     ref_pos,
                     length: len as u32,
                     kind: IndelKind::Insertion,
                 });
-                // Insertions don't consume reference bases
             }
             Kind::Deletion => {
+                is_first_op = false;
                 indels.push(Indel {
                     ref_pos,
                     length: len as u32,
@@ -216,16 +241,29 @@ fn extract_indels_from_bam_cigar(
                 });
                 ref_pos += len as u64;
             }
-            Kind::SoftClip | Kind::HardClip | Kind::Pad => {
-                // Soft/hard clips and pads don't consume reference positions
+            Kind::SoftClip => {
+                soft_clips.push(SoftClip {
+                    ref_pos: if is_first_op {
+                        alignment_start
+                    } else {
+                        ref_pos
+                    },
+                    length: len as u32,
+                    is_leading: is_first_op,
+                });
+                is_first_op = false;
+            }
+            Kind::HardClip | Kind::Pad => {
+                // Hard clips and pads don't consume reference positions
             }
             Kind::Skip => {
+                is_first_op = false;
                 ref_pos += len as u64;
             }
         }
     }
 
-    Ok(indels)
+    Ok((indels, mismatches, soft_clips))
 }
 
 /// Read the HP (haplotype) auxiliary tag from a BAM record.
@@ -376,7 +414,8 @@ fn extract_cram_read(record: &sam::alignment::RecordBuf) -> Option<AlignedRead> 
     let mq = record.mapping_quality().map(u8::from);
     let hp = hp_from_record_buf(record);
 
-    let indels = extract_indels_from_cigar_buf(record.cigar(), start);
+    let (indels, mismatches, soft_clips) =
+        extract_cigar_features_buf(record.cigar(), start);
 
     Some(AlignedRead {
         name,
@@ -387,26 +426,44 @@ fn extract_cram_read(record: &sam::alignment::RecordBuf) -> Option<AlignedRead> 
         haplotype: hp,
         flags: u16::from(flags),
         indels,
+        mismatches,
+        soft_clips,
     })
 }
 
-/// Walk a CIGAR from a RecordBuf and collect insertion/deletion events.
-fn extract_indels_from_cigar_buf(
+/// Walk a CIGAR from a RecordBuf and collect indels, mismatches, and soft clips.
+fn extract_cigar_features_buf(
     cigar: &noodles::sam::alignment::record_buf::Cigar,
     alignment_start: u64,
-) -> Vec<Indel> {
+) -> CigarFeatures {
     use noodles::sam::alignment::record::cigar::op::Kind;
 
     let mut indels = Vec::new();
+    let mut mismatches = Vec::new();
+    let mut soft_clips = Vec::new();
     let mut ref_pos = alignment_start;
+    let mut is_first_op = true;
 
     for op in cigar.as_ref() {
         let len = op.len();
         match op.kind() {
-            Kind::Match | Kind::SequenceMatch | Kind::SequenceMismatch => {
+            Kind::Match | Kind::SequenceMatch => {
+                is_first_op = false;
+                ref_pos += len as u64;
+            }
+            Kind::SequenceMismatch => {
+                is_first_op = false;
+                // Sentinel `b'X'` — see comment in extract_cigar_features_bam().
+                for i in 0..len {
+                    mismatches.push(Mismatch {
+                        ref_pos: ref_pos + i as u64,
+                        read_base: b'X',
+                    });
+                }
                 ref_pos += len as u64;
             }
             Kind::Insertion => {
+                is_first_op = false;
                 indels.push(Indel {
                     ref_pos,
                     length: len as u32,
@@ -414,6 +471,7 @@ fn extract_indels_from_cigar_buf(
                 });
             }
             Kind::Deletion => {
+                is_first_op = false;
                 indels.push(Indel {
                     ref_pos,
                     length: len as u32,
@@ -421,14 +479,27 @@ fn extract_indels_from_cigar_buf(
                 });
                 ref_pos += len as u64;
             }
-            Kind::SoftClip | Kind::HardClip | Kind::Pad => {}
+            Kind::SoftClip => {
+                soft_clips.push(SoftClip {
+                    ref_pos: if is_first_op {
+                        alignment_start
+                    } else {
+                        ref_pos
+                    },
+                    length: len as u32,
+                    is_leading: is_first_op,
+                });
+                is_first_op = false;
+            }
+            Kind::HardClip | Kind::Pad => {}
             Kind::Skip => {
+                is_first_op = false;
                 ref_pos += len as u64;
             }
         }
     }
 
-    indels
+    (indels, mismatches, soft_clips)
 }
 
 /// Read the HP tag from a fully-parsed `RecordBuf`.
@@ -663,5 +734,41 @@ mod tests {
             !header.reference_sequences().is_empty(),
             "header should contain reference sequences"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // BAM reads include new fields (mismatches, soft_clips)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_bam_reads_have_mismatch_and_softclip_fields() {
+        let bam = toy_bam();
+        if !bam.exists() {
+            eprintln!("skipping: toy BAM not found");
+            return;
+        }
+        let reads = query_bam(&bam, &format!("{TOY_CONTIG}:1-212914")).unwrap();
+        assert!(!reads.is_empty());
+        // Verify the new fields are present and accessible
+        for read in &reads {
+            // mismatches and soft_clips should be Vec (possibly empty)
+            let _ = &read.mismatches;
+            let _ = &read.soft_clips;
+        }
+    }
+
+    #[test]
+    fn test_bam_reads_soft_clips_extracted() {
+        let bam = toy_bam();
+        if !bam.exists() {
+            eprintln!("skipping: toy BAM not found");
+            return;
+        }
+        let reads = query_bam(&bam, &format!("{TOY_CONTIG}:1-212914")).unwrap();
+        // Count total soft clips across all reads
+        let total_clips: usize = reads.iter().map(|r| r.soft_clips.len()).sum();
+        // Soft clips may or may not be present in the toy data, but the
+        // extraction path should work without errors
+        let _ = total_clips;
     }
 }

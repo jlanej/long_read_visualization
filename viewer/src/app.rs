@@ -37,6 +37,19 @@ pub struct DataPaths {
     pub reads_to_hap2_bam: Option<PathBuf>,
     /// Reference FASTA used for CRAM encoding (when different from panel ref).
     pub cram_ref: Option<PathBuf>,
+    // -- Cross-alignment (assembly) BAMs --
+    /// Hap1 assembly aligned to reference (BAM, indexed).
+    pub hap1_to_ref_bam: Option<PathBuf>,
+    /// Hap2 assembly aligned to reference (BAM, indexed).
+    pub hap2_to_ref_bam: Option<PathBuf>,
+    /// Reference aligned to hap1 assembly (BAM, indexed).
+    pub ref_to_hap1_bam: Option<PathBuf>,
+    /// Reference aligned to hap2 assembly (BAM, indexed).
+    pub ref_to_hap2_bam: Option<PathBuf>,
+    /// Hap1 aligned to hap2 (BAM, indexed) — cross-haplotype track in hap2 panel.
+    pub hap1_to_hap2_bam: Option<PathBuf>,
+    /// Hap2 aligned to hap1 (BAM, indexed) — cross-haplotype track in hap1 panel.
+    pub hap2_to_hap1_bam: Option<PathBuf>,
 }
 
 impl DataPaths {
@@ -125,6 +138,13 @@ impl DataPaths {
             reads_to_hap1_bam: discover("_reads_to_hap1.bam"),
             reads_to_hap2_bam: discover("_reads_to_hap2.bam"),
             cram_ref: non_empty("cram_ref"),
+            // Cross-alignment BAMs
+            hap1_to_ref_bam: discover("_hap1_to_ref.bam"),
+            hap2_to_ref_bam: discover("_hap2_to_ref.bam"),
+            ref_to_hap1_bam: discover("_ref_to_hap1.bam"),
+            ref_to_hap2_bam: discover("_ref_to_hap2.bam"),
+            hap1_to_hap2_bam: discover("_hap1_to_hap2.bam"),
+            hap2_to_hap1_bam: discover("_hap2_to_hap1.bam"),
         })
     }
 }
@@ -140,6 +160,19 @@ struct PanelData {
     rows: Vec<PileupRow>,
     /// FASTA sequence for this region.
     sequence: Option<FastaSequence>,
+    /// Assembly cross-alignment tracks (each entry: label, color, packed rows).
+    assembly_tracks: Vec<AssemblyTrack>,
+}
+
+/// A single assembly cross-alignment track for display below reads.
+#[derive(Debug, Clone)]
+struct AssemblyTrack {
+    /// Display label (e.g. "Hap1 → Ref").
+    label: String,
+    /// RGB color for this track.
+    color: [u8; 3],
+    /// Packed pileup rows from the assembly BAM query.
+    rows: Vec<PileupRow>,
 }
 
 // ---------------------------------------------------------------------------
@@ -340,6 +373,19 @@ impl ViewerApp {
 
     // -- Data loading -------------------------------------------------------
 
+    /// Pack reads using the current display config (position-based or
+    /// haplotype-grouped).
+    fn pack_reads_for_config(
+        &self,
+        reads: Vec<genome::AlignedRead>,
+    ) -> Vec<pileup::PileupRow> {
+        if self.display_config.sort_by_haplotype {
+            pileup::pack_reads_by_haplotype(reads)
+        } else {
+            pileup::pack_reads(reads)
+        }
+    }
+
     /// Load BAM reads and FASTA sequences for the current region.
     fn load_region_data(&mut self) {
         let entry = match self.navigator.current() {
@@ -405,7 +451,7 @@ impl ViewerApp {
                     };
                     let n_flagged = reads.iter().filter(|r| r.flags & 0x100 != 0).count();
 
-                    self.ref_data.rows = pileup::pack_reads(reads);
+                    self.ref_data.rows = self.pack_reads_for_config(reads);
 
                     self.status_message = format!(
                         "{n_reads} reads ({n_reverse} rev, {n_flagged} secondary, avg MAPQ {})",
@@ -420,6 +466,14 @@ impl ViewerApp {
         if let Some(fasta_path) = &self.data_paths.reference_fasta {
             self.ref_data.sequence = load_fasta_for_region(fasta_path, &entry.ref_region);
         }
+        // Assembly cross-alignment tracks for reference panel
+        {
+            let region_str = entry.ref_region.to_string();
+            self.ref_data.assembly_tracks = load_assembly_tracks(&[
+                ("Hap1 → Ref", [60, 160, 80], self.data_paths.hap1_to_ref_bam.as_deref()),
+                ("Hap2 → Ref", [180, 100, 60], self.data_paths.hap2_to_ref_bam.as_deref()),
+            ], &region_str);
+        }
 
         // -- Haplotype 1 panel: BAM reads + FASTA sequence --
         self.hap1_data = PanelData::default();
@@ -427,12 +481,18 @@ impl ViewerApp {
             if let Some(bam_path) = &self.data_paths.reads_to_hap1_bam {
                 let region_str = region.to_string();
                 if let Ok(reads) = genome::bam::query_bam(bam_path, &region_str) {
-                    self.hap1_data.rows = pileup::pack_reads(reads);
+                    self.hap1_data.rows = self.pack_reads_for_config(reads);
                 }
             }
             if let Some(fasta_path) = &self.data_paths.hap1_fasta {
                 self.hap1_data.sequence = load_fasta_for_region(fasta_path, region);
             }
+            // Assembly cross-alignment tracks for hap1 panel
+            let region_str = region.to_string();
+            self.hap1_data.assembly_tracks = load_assembly_tracks(&[
+                ("Ref → Hap1", [70, 130, 180], self.data_paths.ref_to_hap1_bam.as_deref()),
+                ("Hap2 → Hap1", [180, 100, 60], self.data_paths.hap2_to_hap1_bam.as_deref()),
+            ], &region_str);
         }
 
         // -- Haplotype 2 panel: BAM reads + FASTA sequence --
@@ -441,12 +501,18 @@ impl ViewerApp {
             if let Some(bam_path) = &self.data_paths.reads_to_hap2_bam {
                 let region_str = region.to_string();
                 if let Ok(reads) = genome::bam::query_bam(bam_path, &region_str) {
-                    self.hap2_data.rows = pileup::pack_reads(reads);
+                    self.hap2_data.rows = self.pack_reads_for_config(reads);
                 }
             }
             if let Some(fasta_path) = &self.data_paths.hap2_fasta {
                 self.hap2_data.sequence = load_fasta_for_region(fasta_path, region);
             }
+            // Assembly cross-alignment tracks for hap2 panel
+            let region_str = region.to_string();
+            self.hap2_data.assembly_tracks = load_assembly_tracks(&[
+                ("Ref → Hap2", [70, 130, 180], self.data_paths.ref_to_hap2_bam.as_deref()),
+                ("Hap1 → Hap2", [60, 160, 80], self.data_paths.hap1_to_hap2_bam.as_deref()),
+            ], &region_str);
         }
 
         // -- Dot plot: recompute if visible --
@@ -641,6 +707,51 @@ impl ViewerApp {
                 self.display_config.hide_small_indels = !self.display_config.hide_small_indels;
             }
 
+            // Display toggle: show mismatches
+            let mm_label = if self.display_config.show_mismatches {
+                "SNVs: on"
+            } else {
+                "SNVs: off"
+            };
+            if ui
+                .button(mm_label)
+                .on_hover_text("Toggle base-level mismatch/SNV display")
+                .clicked()
+            {
+                self.display_config.show_mismatches = !self.display_config.show_mismatches;
+            }
+
+            // Display toggle: show soft clips
+            let sc_label = if self.display_config.show_soft_clips {
+                "Clips: on"
+            } else {
+                "Clips: off"
+            };
+            if ui
+                .button(sc_label)
+                .on_hover_text("Toggle soft-clip overlay display")
+                .clicked()
+            {
+                self.display_config.show_soft_clips = !self.display_config.show_soft_clips;
+            }
+
+            // Display toggle: sort by haplotype
+            let hp_label = if self.display_config.sort_by_haplotype {
+                "HP Sort: on"
+            } else {
+                "HP Sort: off"
+            };
+            if ui
+                .button(hp_label)
+                .on_hover_text("Toggle haplotype-based read grouping")
+                .clicked()
+            {
+                self.display_config.sort_by_haplotype =
+                    !self.display_config.sort_by_haplotype;
+                // Re-pack reads with the new sort mode
+                self.load_region_data();
+            }
+
             ui.separator();
 
             // Sync toggle
@@ -726,9 +837,10 @@ impl ViewerApp {
             ui.set_min_height(80.0);
 
             let has_reads = !params.data.rows.is_empty();
+            let has_assembly = !params.data.assembly_tracks.is_empty();
             let has_seq = params.data.sequence.is_some();
 
-            if !has_reads && !has_seq {
+            if !has_reads && !has_assembly && !has_seq {
                 // Placeholder when no data is loaded
                 ui.centered_and_justified(|ui| {
                     ui.label(
@@ -769,6 +881,42 @@ impl ViewerApp {
                         panel_width,
                     );
                     Self::paint_pileup(ui, &rects);
+                }
+
+                // Render assembly cross-alignment tracks below reads
+                for track in &params.data.assembly_tracks {
+                    if track.rows.is_empty() {
+                        continue;
+                    }
+                    // Small label for the assembly track
+                    ui.label(
+                        egui::RichText::new(&track.label)
+                            .small()
+                            .color(egui::Color32::from_rgb(
+                                track.color[0],
+                                track.color[1],
+                                track.color[2],
+                            )),
+                    );
+                    // Assembly tracks always use squished display
+                    let asm_config = params.config.with_squished(true);
+                    let panel_width = ui.available_width();
+                    let rects = pileup::layout_read_rects(
+                        &track.rows,
+                        &asm_config,
+                        params.view_start,
+                        params.view_end,
+                        panel_width,
+                    );
+                    // Override colors with the track's distinct color
+                    let colored_rects: Vec<ReadRect> = rects
+                        .into_iter()
+                        .map(|mut r| {
+                            r.color = track.color;
+                            r
+                        })
+                        .collect();
+                    Self::paint_pileup(ui, &colored_rects);
                 }
             }
         });
@@ -1252,6 +1400,32 @@ fn load_fasta_for_region(
     }
     // Fallback: try direct query (may fail for colon-containing names).
     genome::fasta::query_fasta(fasta_path, &region.to_string()).ok()
+}
+
+/// Load assembly cross-alignment tracks from a list of BAM file descriptors.
+///
+/// Each entry is `(label, color, optional_bam_path)`. BAM files that are
+/// `None` or fail to query are silently skipped (graceful degradation).
+/// Assembly tracks always use squished (compact) display.
+fn load_assembly_tracks(
+    track_specs: &[(&str, [u8; 3], Option<&std::path::Path>)],
+    region_str: &str,
+) -> Vec<AssemblyTrack> {
+    let mut tracks = Vec::new();
+    for &(label, color, bam_path) in track_specs {
+        let Some(path) = bam_path else { continue };
+        if let Ok(reads) = genome::bam::query_bam(path, region_str)
+            && !reads.is_empty()
+        {
+            let rows = pileup::pack_reads(reads);
+            tracks.push(AssemblyTrack {
+                label: label.to_string(),
+                color,
+                rows,
+            });
+        }
+    }
+    tracks
 }
 
 /// Configure default fonts/styles.
@@ -1748,5 +1922,94 @@ mod tests {
         }];
         // No alignment events → None
         assert!(collapse_asm_regions(&results).is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // DataPaths cross-alignment fields
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_data_paths_default_has_no_cross_alignment_bams() {
+        let dp = DataPaths::default();
+        assert!(dp.hap1_to_ref_bam.is_none());
+        assert!(dp.hap2_to_ref_bam.is_none());
+        assert!(dp.ref_to_hap1_bam.is_none());
+        assert!(dp.ref_to_hap2_bam.is_none());
+        assert!(dp.hap1_to_hap2_bam.is_none());
+        assert!(dp.hap2_to_hap1_bam.is_none());
+    }
+
+    #[test]
+    fn test_data_paths_cross_alignment_fields_settable() {
+        let dp = DataPaths {
+            hap1_to_ref_bam: Some(PathBuf::from("/tmp/h1_to_ref.bam")),
+            ref_to_hap1_bam: Some(PathBuf::from("/tmp/ref_to_h1.bam")),
+            hap2_to_hap1_bam: Some(PathBuf::from("/tmp/h2_to_h1.bam")),
+            ..Default::default()
+        };
+        assert!(dp.hap1_to_ref_bam.is_some());
+        assert!(dp.ref_to_hap1_bam.is_some());
+        assert!(dp.hap2_to_hap1_bam.is_some());
+    }
+
+    // -----------------------------------------------------------------------
+    // PanelData assembly tracks
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_panel_data_default_has_empty_assembly_tracks() {
+        let pd = PanelData::default();
+        assert!(pd.assembly_tracks.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Assembly track loading with missing files (graceful degradation)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_load_assembly_tracks_with_no_bams() {
+        let tracks = load_assembly_tracks(
+            &[
+                ("Hap1 → Ref", [60, 160, 80], None),
+                ("Hap2 → Ref", [180, 100, 60], None),
+            ],
+            "chr1:100-200",
+        );
+        assert!(tracks.is_empty(), "should gracefully return empty when no BAMs");
+    }
+
+    #[test]
+    fn test_load_assembly_tracks_with_nonexistent_bam() {
+        let tracks = load_assembly_tracks(
+            &[
+                (
+                    "Hap1 → Ref",
+                    [60, 160, 80],
+                    Some(std::path::Path::new("/nonexistent/file.bam")),
+                ),
+            ],
+            "chr1:100-200",
+        );
+        assert!(
+            tracks.is_empty(),
+            "should gracefully skip nonexistent BAM files"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // New toolbar toggle defaults
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_viewer_app_default_new_toggles() {
+        let app = ViewerApp::default();
+        assert!(!app.display_config.show_mismatches, "mismatches off by default");
+        assert!(!app.display_config.show_soft_clips, "soft clips off by default");
+        assert!(!app.display_config.sort_by_haplotype, "HP sort off by default");
+        assert_eq!(
+            app.display_config.indel_threshold,
+            pileup::DEFAULT_INDEL_THRESHOLD
+        );
+        assert_eq!(app.display_config.indel_threshold, 50);
     }
 }

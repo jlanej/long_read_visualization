@@ -1,3 +1,6 @@
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
+
 use super::AlignedRead;
 
 /// A row in a pileup layout. Each row contains non-overlapping reads
@@ -14,7 +17,10 @@ pub struct PileupRow {
 const READ_GAP: u64 = 5;
 
 /// Default indel threshold for suppression (base pairs).
-pub const DEFAULT_INDEL_THRESHOLD: u32 = 3;
+///
+/// Set to 50 bp for long-read data where small indels are common sequencing
+/// noise and structural variants of interest are typically ≥50 bp.
+pub const DEFAULT_INDEL_THRESHOLD: u32 = 50;
 
 /// Display configuration for a pileup panel.
 #[derive(Debug, Clone)]
@@ -26,6 +32,12 @@ pub struct PileupDisplayConfig {
     pub hide_small_indels: bool,
     /// Indel size threshold (bp) below which indels are hidden.
     pub indel_threshold: u32,
+    /// If true, group reads by HP tag (hap1 → hap2 → unphased) before packing.
+    pub sort_by_haplotype: bool,
+    /// If true, render soft-clipped bases as semi-transparent extensions.
+    pub show_soft_clips: bool,
+    /// If true, render base-level mismatches with standard nucleotide coloring.
+    pub show_mismatches: bool,
 }
 
 impl Default for PileupDisplayConfig {
@@ -34,7 +46,19 @@ impl Default for PileupDisplayConfig {
             squished: true,
             hide_small_indels: true,
             indel_threshold: DEFAULT_INDEL_THRESHOLD,
+            sort_by_haplotype: false,
+            show_soft_clips: false,
+            show_mismatches: false,
         }
+    }
+}
+
+impl PileupDisplayConfig {
+    /// Return a copy with `squished` overridden.
+    pub fn with_squished(&self, squished: bool) -> Self {
+        let mut cfg = self.clone();
+        cfg.squished = squished;
+        cfg
     }
 }
 
@@ -75,10 +99,13 @@ pub fn visible_indels(read: &AlignedRead, config: &PileupDisplayConfig) -> Vec<s
 }
 
 /// Pack a set of aligned reads into pileup rows using a greedy
-/// interval-scheduling algorithm.
+/// interval-scheduling algorithm with a min-heap for O(n log n) performance.
 ///
 /// Reads are sorted by start position, then each read is assigned to
-/// the lowest row whose last read ends before `read.start - READ_GAP`.
+/// the row whose last read ended earliest (if the gap constraint is met).
+/// If no existing row has room, a new row is created.
+///
+/// Complexity: O(n log n) sort + O(n log R) packing where R = row count.
 pub fn pack_reads(mut reads: Vec<AlignedRead>) -> Vec<PileupRow> {
     if reads.is_empty() {
         return Vec::new();
@@ -86,23 +113,24 @@ pub fn pack_reads(mut reads: Vec<AlignedRead>) -> Vec<PileupRow> {
 
     reads.sort_by_key(|r| r.start);
 
-    // Track the rightmost end position in each row.
-    let mut row_ends: Vec<u64> = Vec::new();
+    // Min-heap of (end_position, row_index) — earliest-ending row on top.
+    let mut heap: BinaryHeap<Reverse<(u64, usize)>> = BinaryHeap::new();
     let mut rows: Vec<Vec<AlignedRead>> = Vec::new();
 
     for read in reads {
-        let assigned = row_ends.iter().position(|&end| read.start > end + READ_GAP);
-
-        match assigned {
-            Some(idx) => {
-                row_ends[idx] = read.end;
-                rows[idx].push(read);
-            }
-            None => {
-                row_ends.push(read.end);
-                rows.push(vec![read]);
-            }
+        if let Some(&Reverse((end, idx))) = heap.peek()
+            && read.start > end + READ_GAP
+        {
+            // Reuse the row with the earliest end.
+            heap.pop();
+            heap.push(Reverse((read.end, idx)));
+            rows[idx].push(read);
+            continue;
         }
+        // No row available — create a new one.
+        let idx = rows.len();
+        heap.push(Reverse((read.end, idx)));
+        rows.push(vec![read]);
     }
 
     rows.into_iter()
@@ -112,6 +140,71 @@ pub fn pack_reads(mut reads: Vec<AlignedRead>) -> Vec<PileupRow> {
             reads,
         })
         .collect()
+}
+
+/// Pack reads grouped by haplotype: HP=1 first, then HP=2, then unphased.
+///
+/// Within each haplotype group, reads are packed using the standard greedy
+/// interval-scheduling algorithm.  A separator row is inserted between groups
+/// when the group is non-empty.
+pub fn pack_reads_by_haplotype(reads: Vec<AlignedRead>) -> Vec<PileupRow> {
+    if reads.is_empty() {
+        return Vec::new();
+    }
+
+    let mut hap1 = Vec::new();
+    let mut hap2 = Vec::new();
+    let mut unphased = Vec::new();
+
+    for read in reads {
+        match read.haplotype {
+            Some(1) => hap1.push(read),
+            Some(2) => hap2.push(read),
+            _ => unphased.push(read),
+        }
+    }
+
+    let mut all_rows: Vec<PileupRow> = Vec::new();
+    let mut y = 0u32;
+
+    for group in [hap1, hap2, unphased] {
+        if group.is_empty() {
+            continue;
+        }
+        if y > 0 {
+            // Visual separator: skip a y-offset value so the renderer leaves
+            // a blank row gap between haplotype groups.
+            y += 1;
+        }
+        let packed = pack_reads(group);
+        for row in packed {
+            all_rows.push(PileupRow {
+                y_offset: y,
+                reads: row.reads,
+            });
+            y += 1;
+        }
+    }
+
+    all_rows
+}
+
+/// Map a nucleotide base to a display color following standard genomics conventions.
+///
+/// - A → green
+/// - C → blue
+/// - G → orange/yellow
+/// - T → red
+/// - Other → grey
+#[inline]
+pub fn nucleotide_color(base: u8) -> [u8; 3] {
+    match base.to_ascii_uppercase() {
+        b'A' => [0, 180, 0],    // green
+        b'C' => [0, 0, 200],    // blue
+        b'G' => [209, 159, 0],  // orange/yellow
+        b'T' => [200, 0, 0],    // red
+        _ => [128, 128, 128],   // grey (N or unknown)
+    }
 }
 
 /// Compute the pixel rectangles for all reads in the pileup.
@@ -157,6 +250,70 @@ pub fn layout_read_rects(
                 color,
                 read_name: read.name.clone(),
             });
+
+            // Draw soft-clip overlays (semi-transparent extensions beyond alignment)
+            if config.show_soft_clips {
+                for clip in &read.soft_clips {
+                    let clip_color = [180, 180, 220]; // light blue-grey
+                    if clip.is_leading {
+                        // Leading clip: extends to the left of the alignment start
+                        let clip_end = clip.ref_pos;
+                        let clip_start = clip_end.saturating_sub(clip.length as u64);
+                        let cs = clip_start.max(view_start);
+                        let ce = clip_end.min(view_end);
+                        if cs < ce {
+                            let cx = (cs - view_start) as f32 * bp_per_px;
+                            let cw = ((ce - cs) as f32 * bp_per_px).max(1.0);
+                            rects.push(ReadRect {
+                                x: cx,
+                                y,
+                                width: cw,
+                                height: row_h,
+                                color: clip_color,
+                                read_name: read.name.clone(),
+                            });
+                        }
+                    } else {
+                        // Trailing clip: extends to the right of the alignment end
+                        let clip_start = clip.ref_pos;
+                        let clip_end = clip_start + clip.length as u64;
+                        let cs = clip_start.max(view_start);
+                        let ce = clip_end.min(view_end);
+                        if cs < ce {
+                            let cx = (cs - view_start) as f32 * bp_per_px;
+                            let cw = ((ce - cs) as f32 * bp_per_px).max(1.0);
+                            rects.push(ReadRect {
+                                x: cx,
+                                y,
+                                width: cw,
+                                height: row_h,
+                                color: clip_color,
+                                read_name: read.name.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+
+            // Draw mismatch markers (nucleotide-colored overlays)
+            if config.show_mismatches {
+                for mm in &read.mismatches {
+                    if mm.ref_pos < view_start || mm.ref_pos > view_end {
+                        continue;
+                    }
+                    let mx = (mm.ref_pos - view_start) as f32 * bp_per_px;
+                    let mw = bp_per_px.max(1.0);
+                    let mc = nucleotide_color(mm.read_base);
+                    rects.push(ReadRect {
+                        x: mx,
+                        y,
+                        width: mw,
+                        height: row_h,
+                        color: mc,
+                        read_name: read.name.clone(),
+                    });
+                }
+            }
 
             // Draw indel markers
             let vis_indels = visible_indels(read, config);
@@ -220,6 +377,8 @@ mod tests {
             haplotype: None,
             flags: 0,
             indels: Vec::new(),
+            mismatches: Vec::new(),
+            soft_clips: Vec::new(),
         }
     }
 
@@ -233,6 +392,8 @@ mod tests {
             haplotype: hp,
             flags: 0,
             indels: Vec::new(),
+            mismatches: Vec::new(),
+            soft_clips: Vec::new(),
         }
     }
 
@@ -789,6 +950,375 @@ mod tests {
                 !matching.is_empty(),
                 "read {name} should have color {expected_color:?} in layout"
             );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Long-read indel threshold (DEFAULT_INDEL_THRESHOLD = 50)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_default_indel_threshold_is_50() {
+        assert_eq!(
+            DEFAULT_INDEL_THRESHOLD, 50,
+            "default indel threshold should be 50 bp for long-read data"
+        );
+    }
+
+    #[test]
+    fn test_long_read_indel_threshold_hides_small_indels() {
+        let mut read = make_read("r1", 100, 1000);
+        read.indels = vec![
+            Indel {
+                ref_pos: 200,
+                length: 5,
+                kind: IndelKind::Insertion,
+            },
+            Indel {
+                ref_pos: 400,
+                length: 49,
+                kind: IndelKind::Deletion,
+            },
+            Indel {
+                ref_pos: 600,
+                length: 50,
+                kind: IndelKind::Insertion,
+            },
+            Indel {
+                ref_pos: 800,
+                length: 100,
+                kind: IndelKind::Deletion,
+            },
+        ];
+        let config = PileupDisplayConfig::default(); // threshold = 50
+        let vis = visible_indels(&read, &config);
+        // Only indels > 50 bp should be visible (length 100)
+        assert_eq!(vis.len(), 1, "only indels > 50bp visible with default");
+        assert_eq!(vis[0].length, 100);
+    }
+
+    // -----------------------------------------------------------------------
+    // Haplotype-based read sorting
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_pack_reads_by_haplotype_empty() {
+        let rows = pack_reads_by_haplotype(vec![]);
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn test_pack_reads_by_haplotype_groups_correctly() {
+        let reads = vec![
+            make_read_hp("u1", 100, 200, None),
+            make_read_hp("h2a", 100, 200, Some(2)),
+            make_read_hp("h1a", 100, 200, Some(1)),
+            make_read_hp("h1b", 300, 400, Some(1)),
+            make_read_hp("h2b", 300, 400, Some(2)),
+            make_read_hp("u2", 300, 400, None),
+        ];
+        let rows = pack_reads_by_haplotype(reads);
+
+        // Collect all read names in order
+        let all_names: Vec<String> = rows
+            .iter()
+            .flat_map(|r| r.reads.iter().map(|rd| rd.name.clone()))
+            .collect();
+
+        // HP1 reads should come first, then HP2, then unphased
+        let h1_pos = all_names.iter().position(|n| n == "h1a").unwrap();
+        let h2_pos = all_names.iter().position(|n| n == "h2a").unwrap();
+        let u_pos = all_names.iter().position(|n| n == "u1").unwrap();
+        assert!(
+            h1_pos < h2_pos,
+            "HP1 reads should come before HP2 reads"
+        );
+        assert!(
+            h2_pos < u_pos,
+            "HP2 reads should come before unphased reads"
+        );
+    }
+
+    #[test]
+    fn test_pack_reads_by_haplotype_separator_rows() {
+        // Two groups of non-overlapping reads → each fits in 1 row.
+        // With separator, expect: row0 (hp1), gap, row2 (hp2) = y_offsets 0, 2
+        let reads = vec![
+            make_read_hp("h1", 100, 200, Some(1)),
+            make_read_hp("h2", 100, 200, Some(2)),
+        ];
+        let rows = pack_reads_by_haplotype(reads);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].y_offset, 0);
+        assert_eq!(rows[1].y_offset, 2, "separator gap between groups");
+    }
+
+    #[test]
+    fn test_pack_reads_by_haplotype_single_group() {
+        // Only HP1 reads → no separator needed
+        let reads = vec![
+            make_read_hp("h1a", 100, 200, Some(1)),
+            make_read_hp("h1b", 300, 400, Some(1)),
+        ];
+        let rows = pack_reads_by_haplotype(reads);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].y_offset, 0);
+        assert_eq!(rows[0].reads.len(), 2);
+    }
+
+    #[test]
+    fn test_pack_reads_by_haplotype_preserves_all_reads() {
+        let reads = vec![
+            make_read_hp("u1", 100, 200, None),
+            make_read_hp("h2", 100, 200, Some(2)),
+            make_read_hp("h1", 100, 200, Some(1)),
+            make_read_hp("u2", 300, 400, Some(3)), // Unknown HP → unphased
+        ];
+        let total: usize = pack_reads_by_haplotype(reads).iter().map(|r| r.reads.len()).sum();
+        assert_eq!(total, 4, "all reads must be preserved");
+    }
+
+    #[test]
+    fn test_pack_reads_by_haplotype_performance_10k() {
+        // Verify O(n log n) scalability with 10k mixed-HP reads
+        let reads: Vec<AlignedRead> = (0..10_000)
+            .map(|i| {
+                let hp = match i % 3 {
+                    0 => Some(1),
+                    1 => Some(2),
+                    _ => None,
+                };
+                let start = (i as u64 * 5) % 50_000;
+                make_read_hp(&format!("r{i}"), start, start + 1000, hp)
+            })
+            .collect();
+        let rows = pack_reads_by_haplotype(reads);
+        let total: usize = rows.iter().map(|r| r.reads.len()).sum();
+        assert_eq!(total, 10_000);
+    }
+
+    // -----------------------------------------------------------------------
+    // Nucleotide color tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_nucleotide_colors_distinct() {
+        let a = nucleotide_color(b'A');
+        let c = nucleotide_color(b'C');
+        let g = nucleotide_color(b'G');
+        let t = nucleotide_color(b'T');
+        assert_ne!(a, c);
+        assert_ne!(a, g);
+        assert_ne!(a, t);
+        assert_ne!(c, g);
+        assert_ne!(c, t);
+        assert_ne!(g, t);
+    }
+
+    #[test]
+    fn test_nucleotide_color_case_insensitive() {
+        assert_eq!(nucleotide_color(b'a'), nucleotide_color(b'A'));
+        assert_eq!(nucleotide_color(b't'), nucleotide_color(b'T'));
+    }
+
+    #[test]
+    fn test_nucleotide_color_unknown_is_grey() {
+        let n = nucleotide_color(b'N');
+        assert_eq!(n[0], n[1]);
+        assert_eq!(n[1], n[2]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Soft-clip rendering tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_layout_soft_clips_hidden_by_default() {
+        use crate::genome::SoftClip;
+
+        let mut read = make_read("r1", 100, 500);
+        read.soft_clips = vec![SoftClip {
+            ref_pos: 100,
+            length: 50,
+            is_leading: true,
+        }];
+        let rows = pack_reads(vec![read]);
+        let config = PileupDisplayConfig::default(); // show_soft_clips = false
+        let rects = layout_read_rects(&rows, &config, 50, 600, 1000.0);
+        // Should have only 1 rect (the read), no soft-clip overlay
+        assert_eq!(rects.len(), 1);
+    }
+
+    #[test]
+    fn test_layout_soft_clips_shown_when_enabled() {
+        use crate::genome::SoftClip;
+
+        let mut read = make_read("r1", 100, 500);
+        read.soft_clips = vec![
+            SoftClip {
+                ref_pos: 100,
+                length: 50,
+                is_leading: true,
+            },
+            SoftClip {
+                ref_pos: 501,
+                length: 30,
+                is_leading: false,
+            },
+        ];
+        let rows = pack_reads(vec![read]);
+        let config = PileupDisplayConfig {
+            show_soft_clips: true,
+            ..Default::default()
+        };
+        let rects = layout_read_rects(&rows, &config, 50, 600, 1000.0);
+        // Should have 3 rects: 1 read + 2 soft-clip overlays
+        assert_eq!(rects.len(), 3);
+        // Soft clips should have the clip color [180, 180, 220]
+        assert_eq!(rects[1].color, [180, 180, 220]);
+        assert_eq!(rects[2].color, [180, 180, 220]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Mismatch rendering tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_layout_mismatches_hidden_by_default() {
+        use crate::genome::Mismatch;
+
+        let mut read = make_read("r1", 100, 500);
+        read.mismatches = vec![Mismatch {
+            ref_pos: 200,
+            read_base: b'A',
+        }];
+        let rows = pack_reads(vec![read]);
+        let config = PileupDisplayConfig::default(); // show_mismatches = false
+        let rects = layout_read_rects(&rows, &config, 100, 500, 800.0);
+        assert_eq!(rects.len(), 1, "mismatches should be hidden by default");
+    }
+
+    #[test]
+    fn test_layout_mismatches_shown_when_enabled() {
+        use crate::genome::Mismatch;
+
+        let mut read = make_read("r1", 100, 500);
+        read.mismatches = vec![
+            Mismatch {
+                ref_pos: 200,
+                read_base: b'A',
+            },
+            Mismatch {
+                ref_pos: 300,
+                read_base: b'T',
+            },
+        ];
+        let rows = pack_reads(vec![read]);
+        let config = PileupDisplayConfig {
+            show_mismatches: true,
+            ..Default::default()
+        };
+        let rects = layout_read_rects(&rows, &config, 100, 500, 800.0);
+        // 1 read rect + 2 mismatch markers
+        assert_eq!(rects.len(), 3);
+        // Mismatch colors should correspond to nucleotide coloring
+        assert_eq!(rects[1].color, nucleotide_color(b'A'));
+        assert_eq!(rects[2].color, nucleotide_color(b'T'));
+    }
+
+    #[test]
+    fn test_layout_mismatches_outside_view_skipped() {
+        use crate::genome::Mismatch;
+
+        let mut read = make_read("r1", 100, 500);
+        read.mismatches = vec![
+            Mismatch {
+                ref_pos: 50,
+                read_base: b'C',
+            }, // Before view
+            Mismatch {
+                ref_pos: 600,
+                read_base: b'G',
+            }, // After view
+            Mismatch {
+                ref_pos: 300,
+                read_base: b'T',
+            }, // In view
+        ];
+        let rows = pack_reads(vec![read]);
+        let config = PileupDisplayConfig {
+            show_mismatches: true,
+            ..Default::default()
+        };
+        let rects = layout_read_rects(&rows, &config, 100, 500, 800.0);
+        // 1 read rect + 1 visible mismatch (only ref_pos=300 is in view)
+        assert_eq!(rects.len(), 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // Display config new fields tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_display_config_new_defaults() {
+        let cfg = PileupDisplayConfig::default();
+        assert!(!cfg.sort_by_haplotype, "HP sort should be off by default");
+        assert!(!cfg.show_soft_clips, "soft clips should be hidden by default");
+        assert!(!cfg.show_mismatches, "mismatches should be hidden by default");
+    }
+
+    // -----------------------------------------------------------------------
+    // Min-heap packer correctness under various conditions
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_pack_heap_optimal_row_count() {
+        // 3 reads all at same position → needs 3 rows (optimal)
+        let reads = vec![
+            make_read("a", 100, 200),
+            make_read("b", 100, 200),
+            make_read("c", 100, 200),
+        ];
+        let rows = pack_reads(reads);
+        assert_eq!(rows.len(), 3, "heap packer should use optimal row count");
+    }
+
+    #[test]
+    fn test_pack_heap_reuses_earliest_ending_row() {
+        // r1: 100-200, r2: 100-500, r3: 210-300
+        // r3 should reuse r1's row (ends at 200) not r2's (ends at 500)
+        let reads = vec![
+            make_read("r1", 100, 200),
+            make_read("r2", 100, 500),
+            make_read("r3", 210, 300),
+        ];
+        let rows = pack_reads(reads);
+        assert_eq!(rows.len(), 2, "should only need 2 rows");
+        // r3 should be in same row as r1 (the earlier-ending row)
+        let row_with_r1 = rows.iter().find(|r| r.reads.iter().any(|rd| rd.name == "r1")).unwrap();
+        assert!(
+            row_with_r1.reads.iter().any(|rd| rd.name == "r3"),
+            "r3 should share row with r1 (earlier end)"
+        );
+    }
+
+    #[test]
+    fn test_pack_heap_stress_50k_reads() {
+        let reads: Vec<AlignedRead> = (0..50_000)
+            .map(|i| {
+                let start = (i as u64 * 3) % 100_000;
+                let end = start + 500;
+                make_read(&format!("r{i}"), start, end)
+            })
+            .collect();
+        let rows = pack_reads(reads);
+        let total: usize = rows.iter().map(|r| r.reads.len()).sum();
+        assert_eq!(total, 50_000);
+        // Verify packing invariant
+        for row in &rows {
+            for w in row.reads.windows(2) {
+                assert!(w[1].start > w[0].end + READ_GAP);
+            }
         }
     }
 }
