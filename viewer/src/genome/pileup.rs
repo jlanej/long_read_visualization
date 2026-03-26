@@ -53,6 +53,15 @@ impl Default for PileupDisplayConfig {
     }
 }
 
+impl PileupDisplayConfig {
+    /// Return a copy with `squished` overridden.
+    pub fn with_squished(&self, squished: bool) -> Self {
+        let mut cfg = self.clone();
+        cfg.squished = squished;
+        cfg
+    }
+}
+
 /// Row heights (in pixels) for the two display modes.
 pub const SQUISHED_ROW_HEIGHT: f32 = 3.0;
 pub const EXPANDED_ROW_HEIGHT: f32 = 10.0;
@@ -163,7 +172,8 @@ pub fn pack_reads_by_haplotype(reads: Vec<AlignedRead>) -> Vec<PileupRow> {
             continue;
         }
         if y > 0 {
-            // Insert a separator (empty row) between groups
+            // Visual separator: skip a y-offset value so the renderer leaves
+            // a blank row gap between haplotype groups.
             y += 1;
         }
         let packed = pack_reads(group);

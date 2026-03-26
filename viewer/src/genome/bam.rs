@@ -210,11 +210,16 @@ fn extract_cigar_features_bam(
             }
             Kind::SequenceMismatch => {
                 is_first_op = false;
-                // Each base in an X operation is a mismatch
+                // Each base in an X operation is a mismatch.  The actual read
+                // base requires accessing the BAM sequence field, which is not
+                // available through the CIGAR iterator alone.  We store `b'X'`
+                // as a sentinel; the renderer uses this to display a generic
+                // mismatch marker (grey) rather than a nucleotide-specific
+                // color, which is sufficient for identifying mismatch positions.
                 for i in 0..len {
                     mismatches.push(Mismatch {
                         ref_pos: ref_pos + i as u64,
-                        read_base: b'X', // Placeholder; actual base requires sequence data
+                        read_base: b'X',
                     });
                 }
                 ref_pos += len as u64;
@@ -448,6 +453,7 @@ fn extract_cigar_features_buf(
             }
             Kind::SequenceMismatch => {
                 is_first_op = false;
+                // Sentinel `b'X'` — see comment in extract_cigar_features_bam().
                 for i in 0..len {
                     mismatches.push(Mismatch {
                         ref_pos: ref_pos + i as u64,

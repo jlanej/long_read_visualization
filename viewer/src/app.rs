@@ -899,10 +899,7 @@ impl ViewerApp {
                             )),
                     );
                     // Assembly tracks always use squished display
-                    let asm_config = PileupDisplayConfig {
-                        squished: true,
-                        ..params.config.clone()
-                    };
+                    let asm_config = params.config.with_squished(true);
                     let panel_width = ui.available_width();
                     let rects = pileup::layout_read_rects(
                         &track.rows,
