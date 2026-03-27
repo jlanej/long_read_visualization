@@ -86,7 +86,7 @@ pub struct DataLoader {
 
 impl DataLoader {
     /// Spawn a new background loader thread tied to the given egui context.
-    pub fn new(ctx: egui::Context) -> Self {
+    pub fn new(ctx: egui::Context, log: crate::verbose::LogBuffer) -> Self {
         let (request_tx, request_rx) = mpsc::channel::<LoadRequest>();
         let (result_tx, result_rx) = mpsc::channel::<LoadResult>();
         let cancel_flag = Arc::new(AtomicBool::new(false));
@@ -97,7 +97,7 @@ impl DataLoader {
         let repaint_ctx = ctx.clone();
 
         thread::spawn(move || {
-            loader_thread(request_rx, result_tx, cancel, id_tracker, repaint_ctx);
+            loader_thread(request_rx, result_tx, cancel, id_tracker, repaint_ctx, log);
         });
 
         Self {
@@ -157,20 +157,31 @@ fn loader_thread(
     cancel: Arc<AtomicBool>,
     current_id: Arc<AtomicU64>,
     ctx: egui::Context,
+    log: crate::verbose::LogBuffer,
 ) {
+    use crate::verbose::vlog;
     while let Ok(req) = rx.recv() {
         // Skip if a newer request has already been submitted.
         if req.id < current_id.load(Ordering::SeqCst) {
+            vlog!(log, "[loader] Skipping stale request id={}", req.id);
             continue;
         }
         if cancel.load(Ordering::SeqCst) {
+            vlog!(log, "[loader] Skipping cancelled request id={}", req.id);
             continue;
         }
 
-        let result = execute_load(&req, &cancel);
+        vlog!(
+            log,
+            "[loader] Starting load id={} ref={}",
+            req.id,
+            req.ref_region
+        );
+        let result = execute_load(&req, &cancel, &log);
 
         // Only send if still the current request.
         if !cancel.load(Ordering::SeqCst) && req.id >= current_id.load(Ordering::SeqCst) {
+            vlog!(log, "[loader] Load id={} complete, sending result", req.id);
             let _ = tx.send(LoadResult {
                 id: req.id,
                 cache_key: req.cache_key.clone(),
@@ -182,7 +193,12 @@ fn loader_thread(
 }
 
 /// Execute the actual data loading (BAM queries, FASTA loads, packing).
-fn execute_load(req: &LoadRequest, cancel: &Arc<AtomicBool>) -> CachedRegion {
+fn execute_load(
+    req: &LoadRequest,
+    cancel: &Arc<AtomicBool>,
+    log: &crate::verbose::LogBuffer,
+) -> CachedRegion {
+    use crate::verbose::vlog;
     let mut ref_data = CachedPanelData::default();
     let mut hap1_data = CachedPanelData::default();
     let mut hap2_data = CachedPanelData::default();
@@ -193,6 +209,11 @@ fn execute_load(req: &LoadRequest, cancel: &Arc<AtomicBool>) -> CachedRegion {
         && let Some(reads_path) = &req.paths.reads_bam
     {
         let region_str = req.ref_region.to_string();
+        vlog!(
+            log,
+            "[loader] Ref panel: querying reads from {} @ {region_str}",
+            reads_path.display()
+        );
         let cram_ref = req
             .paths
             .cram_ref
@@ -224,20 +245,55 @@ fn execute_load(req: &LoadRequest, cancel: &Arc<AtomicBool>) -> CachedRegion {
                     "{n_reads} reads ({n_reverse} rev, {n_flagged} secondary, avg MAPQ {})",
                     avg_mapq.map_or("N/A".to_string(), |q| q.to_string()),
                 );
+                vlog!(log, "[loader] Ref panel: {status_message}");
             }
             Err(e) => {
                 status_message = format!("Reads error: {e}");
+                vlog!(log, "[loader] Ref panel: ERROR querying reads: {e}");
             }
         }
+    } else if req.paths.reads_bam.is_none() {
+        vlog!(
+            log,
+            "[loader] Ref panel: no reads_bam configured, skipping reads"
+        );
     }
     if !cancel.load(Ordering::SeqCst)
         && let Some(fasta_path) = &req.paths.reference_fasta
     {
+        vlog!(
+            log,
+            "[loader] Ref panel: loading FASTA from {}",
+            fasta_path.display()
+        );
         ref_data.sequence = load_fasta_for_region(fasta_path, &req.ref_region);
+        vlog!(
+            log,
+            "[loader] Ref panel: FASTA {}",
+            if ref_data.sequence.is_some() {
+                "loaded"
+            } else {
+                "not found / empty"
+            }
+        );
     }
     // Assembly tracks for reference panel
     if !cancel.load(Ordering::SeqCst) {
         let region_str = req.ref_region.to_string();
+        vlog!(
+            log,
+            "[loader] Ref panel: loading assembly tracks (hap1_to_ref={}, hap2_to_ref={})",
+            if req.paths.hap1_to_ref_bam.is_some() {
+                "YES"
+            } else {
+                "no"
+            },
+            if req.paths.hap2_to_ref_bam.is_some() {
+                "YES"
+            } else {
+                "no"
+            }
+        );
         ref_data.assembly_tracks = load_assembly_tracks_cached(
             &[
                 (
@@ -253,16 +309,35 @@ fn execute_load(req: &LoadRequest, cancel: &Arc<AtomicBool>) -> CachedRegion {
             ],
             &region_str,
         );
+        vlog!(
+            log,
+            "[loader] Ref panel: {} assembly track(s) loaded",
+            ref_data.assembly_tracks.len()
+        );
     }
 
     // -- Haplotype 1 panel --
     if let Some(region) = &req.hap1_region {
+        vlog!(log, "[loader] Hap1 panel: region={region}");
         if !cancel.load(Ordering::SeqCst) {
             if let Some(bam_path) = &req.paths.reads_to_hap1_bam {
                 let region_str = region.to_string();
-                if let Ok(reads) = genome::bam::query_bam(bam_path, &region_str) {
-                    hap1_data.rows = pack_for_config(reads, req.sort_by_haplotype);
+                vlog!(
+                    log,
+                    "[loader] Hap1 panel: querying reads_to_hap1 from {} @ {region_str}",
+                    bam_path.display()
+                );
+                match genome::bam::query_bam(bam_path, &region_str) {
+                    Ok(reads) => {
+                        vlog!(log, "[loader] Hap1 panel: {} reads", reads.len());
+                        hap1_data.rows = pack_for_config(reads, req.sort_by_haplotype);
+                    }
+                    Err(e) => {
+                        vlog!(log, "[loader] Hap1 panel: ERROR querying reads: {e}");
+                    }
                 }
+            } else {
+                vlog!(log, "[loader] Hap1 panel: no reads_to_hap1_bam configured");
             }
             if let Some(fasta_path) = &req.paths.hap1_fasta {
                 hap1_data.sequence = load_fasta_for_region(fasta_path, region);
@@ -270,6 +345,20 @@ fn execute_load(req: &LoadRequest, cancel: &Arc<AtomicBool>) -> CachedRegion {
         }
         if !cancel.load(Ordering::SeqCst) {
             let region_str = region.to_string();
+            vlog!(
+                log,
+                "[loader] Hap1 panel: loading assembly tracks (ref_to_hap1={}, hap2_to_hap1={})",
+                if req.paths.ref_to_hap1_bam.is_some() {
+                    "YES"
+                } else {
+                    "no"
+                },
+                if req.paths.hap2_to_hap1_bam.is_some() {
+                    "YES"
+                } else {
+                    "no"
+                }
+            );
             hap1_data.assembly_tracks = load_assembly_tracks_cached(
                 &[
                     (
@@ -285,17 +374,38 @@ fn execute_load(req: &LoadRequest, cancel: &Arc<AtomicBool>) -> CachedRegion {
                 ],
                 &region_str,
             );
+            vlog!(
+                log,
+                "[loader] Hap1 panel: {} assembly track(s) loaded",
+                hap1_data.assembly_tracks.len()
+            );
         }
+    } else {
+        vlog!(log, "[loader] Hap1 panel: SKIPPED (no hap1 region mapped)");
     }
 
     // -- Haplotype 2 panel --
     if let Some(region) = &req.hap2_region {
+        vlog!(log, "[loader] Hap2 panel: region={region}");
         if !cancel.load(Ordering::SeqCst) {
             if let Some(bam_path) = &req.paths.reads_to_hap2_bam {
                 let region_str = region.to_string();
-                if let Ok(reads) = genome::bam::query_bam(bam_path, &region_str) {
-                    hap2_data.rows = pack_for_config(reads, req.sort_by_haplotype);
+                vlog!(
+                    log,
+                    "[loader] Hap2 panel: querying reads_to_hap2 from {} @ {region_str}",
+                    bam_path.display()
+                );
+                match genome::bam::query_bam(bam_path, &region_str) {
+                    Ok(reads) => {
+                        vlog!(log, "[loader] Hap2 panel: {} reads", reads.len());
+                        hap2_data.rows = pack_for_config(reads, req.sort_by_haplotype);
+                    }
+                    Err(e) => {
+                        vlog!(log, "[loader] Hap2 panel: ERROR querying reads: {e}");
+                    }
                 }
+            } else {
+                vlog!(log, "[loader] Hap2 panel: no reads_to_hap2_bam configured");
             }
             if let Some(fasta_path) = &req.paths.hap2_fasta {
                 hap2_data.sequence = load_fasta_for_region(fasta_path, region);
@@ -303,6 +413,20 @@ fn execute_load(req: &LoadRequest, cancel: &Arc<AtomicBool>) -> CachedRegion {
         }
         if !cancel.load(Ordering::SeqCst) {
             let region_str = region.to_string();
+            vlog!(
+                log,
+                "[loader] Hap2 panel: loading assembly tracks (ref_to_hap2={}, hap1_to_hap2={})",
+                if req.paths.ref_to_hap2_bam.is_some() {
+                    "YES"
+                } else {
+                    "no"
+                },
+                if req.paths.hap1_to_hap2_bam.is_some() {
+                    "YES"
+                } else {
+                    "no"
+                }
+            );
             hap2_data.assembly_tracks = load_assembly_tracks_cached(
                 &[
                     (
@@ -318,7 +442,14 @@ fn execute_load(req: &LoadRequest, cancel: &Arc<AtomicBool>) -> CachedRegion {
                 ],
                 &region_str,
             );
+            vlog!(
+                log,
+                "[loader] Hap2 panel: {} assembly track(s) loaded",
+                hap2_data.assembly_tracks.len()
+            );
         }
+    } else {
+        vlog!(log, "[loader] Hap2 panel: SKIPPED (no hap2 region mapped)");
     }
 
     CachedRegion {
@@ -584,7 +715,8 @@ mod tests {
         };
         // Even with cancellation set, execute_load should not panic — it
         // just skips the actual file I/O and returns empty data.
-        let result = execute_load(&req, &cancel);
+        let log = crate::verbose::LogBuffer::new();
+        let result = execute_load(&req, &cancel, &log);
         assert!(result.ref_data.rows.is_empty());
         assert!(result.status_message.is_empty());
     }
@@ -619,7 +751,8 @@ mod tests {
             },
             cache_key: "test".to_string(),
         };
-        let result = execute_load(&req, &cancel);
+        let log = crate::verbose::LogBuffer::new();
+        let result = execute_load(&req, &cancel, &log);
         // No files → empty data, no error
         assert!(result.ref_data.rows.is_empty());
         assert!(result.hap1_data.rows.is_empty());
