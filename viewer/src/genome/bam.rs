@@ -1,6 +1,9 @@
+use std::collections::HashMap;
 use std::io;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
 use noodles::bam;
 use noodles::core::Region;
@@ -15,6 +18,18 @@ use super::{AlignedRead, GenomeError, Indel, IndelKind, Mismatch, SoftClip};
 
 /// Extracted CIGAR features: (indels, mismatches, soft_clips).
 type CigarFeatures = (Vec<Indel>, Vec<Mismatch>, Vec<SoftClip>);
+
+static LENIENT_CRAM_HEADERS: OnceLock<Mutex<HashMap<PathBuf, sam::Header>>> = OnceLock::new();
+
+fn lenient_cram_headers() -> &'static Mutex<HashMap<PathBuf, sam::Header>> {
+    LENIENT_CRAM_HEADERS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn cram_crai_path(cram_path: &Path) -> PathBuf {
+    let mut sidecar = cram_path.as_os_str().to_os_string();
+    sidecar.push(".crai");
+    PathBuf::from(sidecar)
+}
 
 // ---------------------------------------------------------------------------
 // Lenient SAM header parsing helpers
@@ -330,6 +345,7 @@ pub fn query_cram(
     reference_path: Option<&Path>,
     region_str: &str,
 ) -> Result<Vec<AlignedRead>, GenomeError> {
+    let started_at = Instant::now();
     if !cram_path.exists() {
         return Err(GenomeError::Io(io::Error::new(
             io::ErrorKind::NotFound,
@@ -350,36 +366,68 @@ pub fn query_cram(
             .unwrap_or_default())
     };
 
+    let repo_start = Instant::now();
     let repo = build_repo()?;
+    let repo_elapsed = repo_start.elapsed();
 
+    let reader_open_start = Instant::now();
     let mut reader = cram::io::indexed_reader::Builder::default()
         .set_reference_sequence_repository(repo)
         .build_from_path(cram_path)
         .map_err(|e| match e.kind() {
             io::ErrorKind::NotFound => {
-                let crai = cram_path.with_extension("cram.crai");
+                let crai = cram_crai_path(cram_path);
                 GenomeError::IndexNotFound(crai)
             }
             _ => GenomeError::Io(e),
         })?;
+    let reader_open_elapsed = reader_open_start.elapsed();
 
-    let header = match reader.read_header() {
-        Ok(h) => h,
-        Err(e) if e.to_string().contains("duplicate program") => {
-            let raw = read_cram_raw_header(cram_path)?;
-            let header = parse_header_lenient(&raw)?;
-            let repo = build_repo()?;
-            reader = cram::io::indexed_reader::Builder::default()
-                .set_reference_sequence_repository(repo)
-                .build_from_path(cram_path)
-                .map_err(GenomeError::Io)?;
-            header
+    let header_start = Instant::now();
+    let (header, header_source) = if let Ok(guard) = lenient_cram_headers().lock() {
+        if let Some(h) = guard.get(cram_path).cloned() {
+            (h, "lenient-cache")
+        } else {
+            match reader.read_header() {
+                Ok(h) => (h, "strict"),
+                Err(e) if e.to_string().contains("duplicate program") => {
+                    let raw = read_cram_raw_header(cram_path)?;
+                    let header = parse_header_lenient(&raw)?;
+                    if let Ok(mut cache) = lenient_cram_headers().lock() {
+                        cache.insert(cram_path.to_path_buf(), header.clone());
+                    }
+                    let repo = build_repo()?;
+                    reader = cram::io::indexed_reader::Builder::default()
+                        .set_reference_sequence_repository(repo)
+                        .build_from_path(cram_path)
+                        .map_err(GenomeError::Io)?;
+                    (header, "lenient-fallback")
+                }
+                Err(e) => return Err(GenomeError::ParseError(format!("CRAM header: {e}"))),
+            }
         }
-        Err(e) => return Err(GenomeError::ParseError(format!("CRAM header: {e}"))),
+    } else {
+        match reader.read_header() {
+            Ok(h) => (h, "strict"),
+            Err(e) if e.to_string().contains("duplicate program") => {
+                let raw = read_cram_raw_header(cram_path)?;
+                let header = parse_header_lenient(&raw)?;
+                let repo = build_repo()?;
+                reader = cram::io::indexed_reader::Builder::default()
+                    .set_reference_sequence_repository(repo)
+                    .build_from_path(cram_path)
+                    .map_err(GenomeError::Io)?;
+                (header, "lenient-fallback")
+            }
+            Err(e) => return Err(GenomeError::ParseError(format!("CRAM header: {e}"))),
+        }
     };
+    let header_elapsed = header_start.elapsed();
 
     let mut reads = Vec::new();
+    let mut decode_errors = 0usize;
 
+    let query_start = Instant::now();
     for result in reader.query(&header, &region)? {
         match result {
             Ok(record) => {
@@ -387,8 +435,28 @@ pub fn query_cram(
                     reads.push(r);
                 }
             }
-            Err(_) => continue,
+            Err(_) => {
+                decode_errors += 1;
+                continue;
+            }
         }
+    }
+    let query_elapsed = query_start.elapsed();
+
+    if crate::verbose::is_verbose() {
+        eprintln!(
+            "[viewer] [bam] query_cram diagnostics: file={}, region={}, header_source={}, reads={}, decode_errors={}, repo_ms={}, open_ms={}, header_ms={}, query_ms={}, total_ms={}",
+            cram_path.display(),
+            region_str,
+            header_source,
+            reads.len(),
+            decode_errors,
+            repo_elapsed.as_millis(),
+            reader_open_elapsed.as_millis(),
+            header_elapsed.as_millis(),
+            query_elapsed.as_millis(),
+            started_at.elapsed().as_millis()
+        );
     }
 
     Ok(reads)
@@ -663,6 +731,12 @@ mod tests {
     fn test_query_cram_missing_file() {
         let result = query_cram(Path::new("/nonexistent/file.cram"), None, "chr1:1-100");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cram_crai_path_appends_sidecar() {
+        let p = Path::new("sample.cram");
+        assert_eq!(cram_crai_path(p), PathBuf::from("sample.cram.crai"));
     }
 
     // -- Lenient header parsing tests --

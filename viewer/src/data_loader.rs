@@ -11,6 +11,8 @@ use crate::genome::pileup::{self, PileupRow};
 use crate::region::GenomicRegion;
 use crate::region_cache::{CachedAssemblyTrack, CachedPanelData, CachedRegion};
 
+const SLOW_CRAM_QUERY_THRESHOLD_SECS: f64 = 1.0;
+
 // ---------------------------------------------------------------------------
 // Load request & result types
 // ---------------------------------------------------------------------------
@@ -225,7 +227,9 @@ fn execute_load(
             .and_then(|e| e.to_str())
             .is_some_and(|e| e.eq_ignore_ascii_case("cram"));
         if is_cram {
-            let crai_path = reads_path.with_extension("cram.crai");
+            let mut crai_os = reads_path.as_os_str().to_os_string();
+            crai_os.push(".crai");
+            let crai_path = PathBuf::from(crai_os);
             let cram_ref_str = cram_ref
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| "<none>".to_string());
@@ -253,7 +257,7 @@ fn execute_load(
             query_elapsed.as_millis(),
             if is_cram { "CRAM" } else { "BAM" }
         );
-        if is_cram && query_elapsed.as_secs_f64() >= 1.0 {
+        if is_cram && query_elapsed.as_secs_f64() >= SLOW_CRAM_QUERY_THRESHOLD_SECS {
             vlog!(
                 log,
                 "[loader] Ref panel: CRAM query exceeded 1s; confirm CRAI presence and reference accessibility"
