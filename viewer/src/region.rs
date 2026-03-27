@@ -87,8 +87,7 @@ pub struct RegionEntry {
     pub genotype: String,
     /// SV size in base pairs.
     pub sv_size: u64,
-    /// Free-form description.
-    #[allow(dead_code)]
+    /// Free-form description from manifest (retained for future UI display).
     pub description: String,
 }
 
@@ -206,7 +205,7 @@ impl RegionNavigator {
                 hap2_region,
                 genotype: v.genotype.clone(),
                 sv_size: v.size,
-                description: String::new(),
+                description: manifest.description.clone(),
             });
         }
 
@@ -782,7 +781,7 @@ mod tests {
         let e0 = nav.current().unwrap();
         assert_eq!(e0.genotype, "0|1");
         assert_eq!(e0.sv_size, 5000);
-        assert_eq!(e0.description, "");
+        assert_eq!(e0.description, "Test manifest");
 
         nav.next();
         let e1 = nav.current().unwrap();

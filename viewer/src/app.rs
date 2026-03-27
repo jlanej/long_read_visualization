@@ -390,11 +390,11 @@ pub struct SvAnnotation {
     pub event_type: genome::coordinate_mapper::EventType,
     pub ref_start: u64,
     pub ref_end: u64,
-    #[allow(dead_code)]
+    /// Assembly start coordinate (retained for future tooltip/detail display).
     pub asm_start: u64,
-    #[allow(dead_code)]
+    /// Assembly end coordinate (retained for future tooltip/detail display).
     pub asm_end: u64,
-    #[allow(dead_code)]
+    /// Gap size in base pairs (retained for future tooltip/detail display).
     pub gap_size: Option<u64>,
     pub label: String,
 }
@@ -1008,6 +1008,9 @@ impl ViewerApp {
             egui::Color32::from_rgba_premultiplied(30, 30, 40, 200),
         );
 
+        let mut tooltip_text: Option<String> = None;
+        let hover_pos = response.hover_pos();
+
         for ann in &self.sv_annotations {
             let x_start = (ann.ref_start.saturating_sub(ref_view.view_start)) as f32 / view_span
                 * panel_width;
@@ -1030,6 +1033,31 @@ impl ViewerApp {
                     egui::Color32::WHITE,
                 );
             }
+            // Tooltip on hover
+            if tooltip_text.is_none()
+                && let Some(hp) = hover_pos
+                && rect.contains(hp)
+            {
+                let mut tip = format!(
+                    "{}\nRef: {}-{}\nAsm: {}-{}",
+                    ann.label, ann.ref_start, ann.ref_end, ann.asm_start, ann.asm_end,
+                );
+                if let Some(gs) = ann.gap_size {
+                    tip.push_str(&format!("\nGap: {} bp", gs));
+                }
+                tooltip_text = Some(tip);
+            }
+        }
+
+        if let Some(tip) = tooltip_text {
+            egui::show_tooltip_at_pointer(
+                ui.ctx(),
+                ui.layer_id(),
+                ui.id().with("sv_tooltip"),
+                |ui| {
+                    ui.label(egui::RichText::new(tip).monospace().size(10.0));
+                },
+            );
         }
     }
 
@@ -1107,7 +1135,7 @@ impl ViewerApp {
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("Export PNG…").clicked() {
+                if ui.button("Export Image…").clicked() {
                     self.pending_screenshot = true;
                     ui.close_menu();
                 }
@@ -1911,6 +1939,9 @@ impl ViewerApp {
             }
             if entry.sv_size > 0 {
                 msg.push_str(&format!(" | size: {} bp", entry.sv_size));
+            }
+            if !entry.description.is_empty() {
+                msg.push_str(&format!(" | {}", entry.description));
             }
 
             // Show coordinate mapper info if available (legacy single index
