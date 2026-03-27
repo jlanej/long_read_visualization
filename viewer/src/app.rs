@@ -9,7 +9,10 @@ use crate::genome::pileup::{self, PileupDisplayConfig, PileupRow, ReadRect};
 use crate::genome::{self, FastaSequence};
 use crate::panel_sync::{PanelId, PanelSyncManager};
 use crate::region::RegionNavigator;
-use crate::region_cache::{CachedAssemblyTrack, CachedPanelData, CachedRegion, RegionCache, DEFAULT_CACHE_CAPACITY};
+use crate::region_cache::{
+    CachedAssemblyTrack, CachedPanelData, CachedRegion, DEFAULT_CACHE_CAPACITY, RegionCache,
+};
+use crate::ruler;
 
 // ---------------------------------------------------------------------------
 // Data file paths
@@ -193,7 +196,11 @@ impl PanelData {
         Self {
             rows: c.rows.clone(),
             sequence: c.sequence.clone(),
-            assembly_tracks: c.assembly_tracks.iter().map(AssemblyTrack::from_cached).collect(),
+            assembly_tracks: c
+                .assembly_tracks
+                .iter()
+                .map(AssemblyTrack::from_cached)
+                .collect(),
         }
     }
 }
@@ -341,6 +348,15 @@ struct PanelRenderParams<'a> {
     coord_info: Option<&'a str>,
 }
 
+/// Result of mouse interaction within a panel.
+#[derive(Debug, Default)]
+struct PanelInteraction {
+    /// Pan delta in base pairs (positive = right).
+    pan_delta: i64,
+    /// Zoom factor (>1 = zoom in) and cursor fraction for cursor-centric zoom.
+    zoom: Option<(f64, f64)>,
+}
+
 impl ViewerApp {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
@@ -414,10 +430,7 @@ impl ViewerApp {
 
     /// Pack reads using the current display config (position-based or
     /// haplotype-grouped).
-    fn pack_reads_for_config(
-        &self,
-        reads: Vec<genome::AlignedRead>,
-    ) -> Vec<pileup::PileupRow> {
+    fn pack_reads_for_config(&self, reads: Vec<genome::AlignedRead>) -> Vec<pileup::PileupRow> {
         if self.display_config.sort_by_haplotype {
             pileup::pack_reads_by_haplotype(reads)
         } else {
@@ -513,7 +526,11 @@ impl ViewerApp {
         }
 
         // -- Fallback: synchronous load (unit tests without GUI context) --
-        self.load_region_data_sync(&entry.ref_region, hap1_region.as_ref(), hap2_region.as_ref());
+        self.load_region_data_sync(
+            &entry.ref_region,
+            hap1_region.as_ref(),
+            hap2_region.as_ref(),
+        );
     }
 
     /// Apply a cached region result to the panel data.
@@ -596,10 +613,21 @@ impl ViewerApp {
         // Assembly cross-alignment tracks for reference panel
         {
             let region_str = ref_region.to_string();
-            self.ref_data.assembly_tracks = load_assembly_tracks(&[
-                ("Hap1 → Ref", [60, 160, 80], self.data_paths.hap1_to_ref_bam.as_deref()),
-                ("Hap2 → Ref", [180, 100, 60], self.data_paths.hap2_to_ref_bam.as_deref()),
-            ], &region_str);
+            self.ref_data.assembly_tracks = load_assembly_tracks(
+                &[
+                    (
+                        "Hap1 → Ref",
+                        [60, 160, 80],
+                        self.data_paths.hap1_to_ref_bam.as_deref(),
+                    ),
+                    (
+                        "Hap2 → Ref",
+                        [180, 100, 60],
+                        self.data_paths.hap2_to_ref_bam.as_deref(),
+                    ),
+                ],
+                &region_str,
+            );
         }
 
         // -- Haplotype 1 panel: BAM reads + FASTA sequence --
@@ -616,10 +644,21 @@ impl ViewerApp {
             }
             // Assembly cross-alignment tracks for hap1 panel
             let region_str = region.to_string();
-            self.hap1_data.assembly_tracks = load_assembly_tracks(&[
-                ("Ref → Hap1", [70, 130, 180], self.data_paths.ref_to_hap1_bam.as_deref()),
-                ("Hap2 → Hap1", [180, 100, 60], self.data_paths.hap2_to_hap1_bam.as_deref()),
-            ], &region_str);
+            self.hap1_data.assembly_tracks = load_assembly_tracks(
+                &[
+                    (
+                        "Ref → Hap1",
+                        [70, 130, 180],
+                        self.data_paths.ref_to_hap1_bam.as_deref(),
+                    ),
+                    (
+                        "Hap2 → Hap1",
+                        [180, 100, 60],
+                        self.data_paths.hap2_to_hap1_bam.as_deref(),
+                    ),
+                ],
+                &region_str,
+            );
         }
 
         // -- Haplotype 2 panel: BAM reads + FASTA sequence --
@@ -636,10 +675,21 @@ impl ViewerApp {
             }
             // Assembly cross-alignment tracks for hap2 panel
             let region_str = region.to_string();
-            self.hap2_data.assembly_tracks = load_assembly_tracks(&[
-                ("Ref → Hap2", [70, 130, 180], self.data_paths.ref_to_hap2_bam.as_deref()),
-                ("Hap1 → Hap2", [60, 160, 80], self.data_paths.hap1_to_hap2_bam.as_deref()),
-            ], &region_str);
+            self.hap2_data.assembly_tracks = load_assembly_tracks(
+                &[
+                    (
+                        "Ref → Hap2",
+                        [70, 130, 180],
+                        self.data_paths.ref_to_hap2_bam.as_deref(),
+                    ),
+                    (
+                        "Hap1 → Hap2",
+                        [60, 160, 80],
+                        self.data_paths.hap1_to_hap2_bam.as_deref(),
+                    ),
+                ],
+                &region_str,
+            );
         }
 
         // -- Dot plot: recompute if visible --
@@ -877,10 +927,23 @@ impl ViewerApp {
                 .on_hover_text("Toggle haplotype-based read grouping")
                 .clicked()
             {
-                self.display_config.sort_by_haplotype =
-                    !self.display_config.sort_by_haplotype;
+                self.display_config.sort_by_haplotype = !self.display_config.sort_by_haplotype;
                 // Re-pack reads with the new sort mode
                 self.load_region_data();
+            }
+
+            // Display toggle: show coverage histogram
+            let cov_label = if self.display_config.show_coverage {
+                "Coverage: on"
+            } else {
+                "Coverage: off"
+            };
+            if ui
+                .button(cov_label)
+                .on_hover_text("Toggle coverage depth histogram")
+                .clicked()
+            {
+                self.display_config.show_coverage = !self.display_config.show_coverage;
             }
 
             ui.separator();
@@ -944,7 +1007,9 @@ impl ViewerApp {
     // -- Panel rendering ----------------------------------------------------
 
     /// Render a single panel with pileup reads drawn on a canvas.
-    fn show_panel(ui: &mut egui::Ui, params: &PanelRenderParams<'_>) {
+    /// Returns mouse interaction events (pan/zoom) for the app to process.
+    fn show_panel(ui: &mut egui::Ui, params: &PanelRenderParams<'_>) -> PanelInteraction {
+        let mut interaction = PanelInteraction::default();
         let header_color = params.panel.color();
 
         // Panel header
@@ -962,6 +1027,10 @@ impl ViewerApp {
             egui::FontId::proportional(13.0),
             egui::Color32::WHITE,
         );
+
+        // Coordinate ruler
+        let panel_width = ui.available_width();
+        Self::paint_ruler(ui, params.view_start, params.view_end, panel_width);
 
         // Panel body: dark background with pileup rendering
         let body = egui::Frame::new()
@@ -985,37 +1054,63 @@ impl ViewerApp {
                     );
                 });
             } else {
-                // Render FASTA sequence summary if available
+                // Render base-level sequence at high zoom
                 if let Some(seq) = &params.data.sequence {
-                    let seq_info = format!(
-                        "{}: {} ({} bp)",
-                        seq.name,
-                        if seq.sequence.len() > 40 {
-                            format!("{}…", &seq.sequence[..40])
-                        } else {
-                            seq.sequence.clone()
-                        },
-                        seq.sequence.len()
+                    let view_span = params.view_end.saturating_sub(params.view_start);
+                    let bp_per_px = if view_span > 0 {
+                        ui.available_width() / view_span as f32
+                    } else {
+                        0.0
+                    };
+
+                    if bp_per_px >= 5.0 {
+                        // High zoom: render individual nucleotide letters
+                        Self::paint_base_sequence(ui, seq, params.view_start, params.view_end);
+                    } else {
+                        // Low zoom: show text summary
+                        let seq_info = format!(
+                            "{}: {} ({} bp)",
+                            seq.name,
+                            if seq.sequence.len() > 40 {
+                                format!("{}…", &seq.sequence[..40])
+                            } else {
+                                seq.sequence.clone()
+                            },
+                            seq.sequence.len()
+                        );
+                        ui.label(
+                            egui::RichText::new(seq_info)
+                                .small()
+                                .color(egui::Color32::from_gray(170))
+                                .monospace(),
+                        );
+                    }
+                }
+
+                // Coverage histogram
+                if params.config.show_coverage && has_reads {
+                    let cov_panel_width = ui.available_width();
+                    let num_bins = (cov_panel_width as usize).clamp(10, 500);
+                    let bins = pileup::compute_coverage(
+                        &params.data.rows,
+                        params.view_start,
+                        params.view_end,
+                        num_bins,
                     );
-                    ui.label(
-                        egui::RichText::new(seq_info)
-                            .small()
-                            .color(egui::Color32::from_gray(170))
-                            .monospace(),
-                    );
+                    Self::paint_coverage(ui, &bins, cov_panel_width);
                 }
 
                 // Render pileup reads
                 if has_reads {
-                    let panel_width = ui.available_width();
+                    let pw = ui.available_width();
                     let rects = pileup::layout_read_rects(
                         &params.data.rows,
                         params.config,
                         params.view_start,
                         params.view_end,
-                        panel_width,
+                        pw,
                     );
-                    Self::paint_pileup(ui, &rects);
+                    Self::paint_pileup_with_tooltips(ui, &rects);
                 }
 
                 // Render assembly cross-alignment tracks below reads
@@ -1024,24 +1119,18 @@ impl ViewerApp {
                         continue;
                     }
                     // Small label for the assembly track
-                    ui.label(
-                        egui::RichText::new(&track.label)
-                            .small()
-                            .color(egui::Color32::from_rgb(
-                                track.color[0],
-                                track.color[1],
-                                track.color[2],
-                            )),
-                    );
+                    ui.label(egui::RichText::new(&track.label).small().color(
+                        egui::Color32::from_rgb(track.color[0], track.color[1], track.color[2]),
+                    ));
                     // Assembly tracks always use squished display
                     let asm_config = params.config.with_squished(true);
-                    let panel_width = ui.available_width();
+                    let asm_pw = ui.available_width();
                     let rects = pileup::layout_read_rects(
                         &track.rows,
                         &asm_config,
                         params.view_start,
                         params.view_end,
-                        panel_width,
+                        asm_pw,
                     );
                     // Override colors with the track's distinct color
                     let colored_rects: Vec<ReadRect> = rects
@@ -1051,14 +1140,47 @@ impl ViewerApp {
                             r
                         })
                         .collect();
-                    Self::paint_pileup(ui, &colored_rects);
+                    Self::paint_pileup_with_tooltips(ui, &colored_rects);
                 }
             }
+
+            // Mouse interaction: capture drag (pan) and scroll (zoom) on the panel body
+            let panel_rect = ui.min_rect();
+            let panel_resp = ui.interact(
+                panel_rect,
+                ui.id().with("mouse"),
+                egui::Sense::click_and_drag(),
+            );
+
+            // Drag → pan
+            if panel_resp.dragged() {
+                let drag_dx = panel_resp.drag_delta().x;
+                let body_width = panel_rect.width();
+                if body_width > 0.0 {
+                    let view_span = params.view_end.saturating_sub(params.view_start);
+                    let bp_per_px = view_span as f64 / body_width as f64;
+                    // Drag right → view moves left (pan_delta < 0)
+                    interaction.pan_delta = -(drag_dx as f64 * bp_per_px) as i64;
+                }
+            }
+
+            // Scroll → zoom (cursor-centric)
+            let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
+            if scroll_delta.abs() > 0.1
+                && let Some(hover_pos) = ui.input(|i| i.pointer.hover_pos())
+            {
+                let frac =
+                    ((hover_pos.x - panel_rect.left()) / panel_rect.width()).clamp(0.0, 1.0) as f64;
+                // Scroll up → zoom in, scroll down → zoom out
+                let factor = if scroll_delta > 0.0 { 1.2 } else { 1.0 / 1.2 };
+                interaction.zoom = Some((factor, frac));
+            }
         });
+        interaction
     }
 
-    /// Paint pre-computed read rectangles onto the UI using egui painter.
-    fn paint_pileup(ui: &mut egui::Ui, rects: &[ReadRect]) {
+    /// Paint pre-computed read rectangles onto the UI with hover tooltips.
+    fn paint_pileup_with_tooltips(ui: &mut egui::Ui, rects: &[ReadRect]) {
         if rects.is_empty() {
             return;
         }
@@ -1079,6 +1201,217 @@ impl ViewerApp {
             let max = min + egui::vec2(rect.width, rect.height);
             let color = egui::Color32::from_rgb(rect.color[0], rect.color[1], rect.color[2]);
             painter.rect_filled(egui::Rect::from_min_max(min, max), 0.0, color);
+        }
+
+        // Hover tooltip: find the read under cursor
+        if let Some(hover_pos) = response.hover_pos() {
+            for rect in rects {
+                if let Some(ref tip) = rect.tooltip {
+                    let min = origin + egui::vec2(rect.x, rect.y);
+                    let max = min + egui::vec2(rect.width, rect.height);
+                    let r = egui::Rect::from_min_max(min, max);
+                    if r.contains(hover_pos) {
+                        egui::show_tooltip_at_pointer(
+                            ui.ctx(),
+                            ui.layer_id(),
+                            ui.id().with("read_tooltip"),
+                            |ui| {
+                                ui.label(
+                                    egui::RichText::new(tip.tooltip_text())
+                                        .monospace()
+                                        .size(11.0),
+                                );
+                            },
+                        );
+                        break; // show only one tooltip
+                    }
+                }
+            }
+        }
+    }
+
+    /// Paint the genomic coordinate ruler.
+    fn paint_ruler(ui: &mut egui::Ui, view_start: u64, view_end: u64, panel_width: f32) {
+        let ticks = ruler::compute_ticks(view_start, view_end, panel_width);
+        if ticks.is_empty() {
+            return;
+        }
+
+        let (response, painter) = ui.allocate_painter(
+            egui::vec2(panel_width, ruler::RULER_HEIGHT),
+            egui::Sense::hover(),
+        );
+        let origin = response.rect.left_top();
+        let bottom = response.rect.bottom();
+
+        // Background
+        painter.rect_filled(response.rect, 0.0, egui::Color32::from_gray(40));
+
+        for tick in &ticks {
+            let x = origin.x + tick.x;
+            let tick_top = if tick.is_major {
+                bottom - 10.0
+            } else {
+                bottom - 5.0
+            };
+            let tick_color = if tick.is_major {
+                egui::Color32::from_gray(200)
+            } else {
+                egui::Color32::from_gray(100)
+            };
+            painter.line_segment(
+                [egui::pos2(x, tick_top), egui::pos2(x, bottom)],
+                egui::Stroke::new(1.0, tick_color),
+            );
+            if let Some(ref label) = tick.label {
+                painter.text(
+                    egui::pos2(x + 2.0, origin.y + 2.0),
+                    egui::Align2::LEFT_TOP,
+                    label,
+                    egui::FontId::monospace(9.0),
+                    egui::Color32::from_gray(200),
+                );
+            }
+        }
+    }
+
+    /// Paint the coverage depth histogram.
+    fn paint_coverage(ui: &mut egui::Ui, bins: &[pileup::CoverageBin], panel_width: f32) {
+        if bins.is_empty() {
+            return;
+        }
+
+        let track_height = pileup::COVERAGE_TRACK_HEIGHT;
+        let max_depth = bins.iter().map(|b| b.depth).max().unwrap_or(1).max(1);
+        let bin_width = panel_width / bins.len() as f32;
+
+        let (response, painter) =
+            ui.allocate_painter(egui::vec2(panel_width, track_height), egui::Sense::hover());
+        let origin = response.rect.left_top();
+        let bottom = response.rect.bottom();
+
+        // Background
+        painter.rect_filled(
+            response.rect,
+            0.0,
+            egui::Color32::from_rgba_premultiplied(20, 20, 30, 200),
+        );
+
+        for (i, bin) in bins.iter().enumerate() {
+            let x = origin.x + i as f32 * bin_width;
+            let total_h = (bin.depth as f32 / max_depth as f32) * track_height;
+
+            // HP-stratified: hap1 (green) at bottom, hap2 (orange) on top, grey for rest
+            let h1_h = (bin.hap1_depth as f32 / max_depth as f32) * track_height;
+            let h2_h = (bin.hap2_depth as f32 / max_depth as f32) * track_height;
+            let other_h = total_h - h1_h - h2_h;
+
+            // Draw HP1 (green) at bottom
+            if h1_h > 0.1 {
+                let r = egui::Rect::from_min_max(
+                    egui::pos2(x, bottom - h1_h),
+                    egui::pos2(x + bin_width, bottom),
+                );
+                painter.rect_filled(
+                    r,
+                    0.0,
+                    egui::Color32::from_rgba_premultiplied(80, 180, 80, 180),
+                );
+            }
+            // Draw HP2 (orange) above HP1
+            if h2_h > 0.1 {
+                let r = egui::Rect::from_min_max(
+                    egui::pos2(x, bottom - h1_h - h2_h),
+                    egui::pos2(x + bin_width, bottom - h1_h),
+                );
+                painter.rect_filled(
+                    r,
+                    0.0,
+                    egui::Color32::from_rgba_premultiplied(200, 140, 50, 180),
+                );
+            }
+            // Draw unphased (grey) on top
+            if other_h > 0.1 {
+                let r = egui::Rect::from_min_max(
+                    egui::pos2(x, bottom - total_h),
+                    egui::pos2(x + bin_width, bottom - h1_h - h2_h),
+                );
+                painter.rect_filled(
+                    r,
+                    0.0,
+                    egui::Color32::from_rgba_premultiplied(140, 140, 140, 160),
+                );
+            }
+        }
+
+        // Depth label
+        painter.text(
+            origin + egui::vec2(2.0, 1.0),
+            egui::Align2::LEFT_TOP,
+            format!("max: {max_depth}×"),
+            egui::FontId::monospace(9.0),
+            egui::Color32::from_gray(200),
+        );
+    }
+
+    /// Paint per-base nucleotide letters for a reference sequence at high zoom.
+    fn paint_base_sequence(ui: &mut egui::Ui, seq: &FastaSequence, view_start: u64, view_end: u64) {
+        let panel_width = ui.available_width();
+        let view_span = view_end.saturating_sub(view_start);
+        if view_span == 0 {
+            return;
+        }
+        let bp_per_px = panel_width / view_span as f32;
+        let base_height = 14.0_f32;
+
+        let (response, painter) = ui.allocate_painter(
+            egui::vec2(panel_width, base_height + 2.0),
+            egui::Sense::hover(),
+        );
+        let origin = response.rect.left_top();
+
+        // Background
+        painter.rect_filled(response.rect, 0.0, egui::Color32::from_gray(24));
+
+        // Determine which bases from the sequence fall in the view
+        let seq_start = seq.start;
+        let seq_bytes = seq.sequence.as_bytes();
+
+        for pos in view_start..view_end {
+            if pos < seq_start {
+                continue;
+            }
+            let idx = (pos - seq_start) as usize;
+            if idx >= seq_bytes.len() {
+                break;
+            }
+            let base = seq_bytes[idx];
+            let x = (pos - view_start) as f32 * bp_per_px;
+
+            let color = pileup::nucleotide_color(base);
+            let base_char = (base as char).to_ascii_uppercase();
+
+            if bp_per_px >= 8.0 {
+                // Draw letter
+                painter.text(
+                    origin + egui::vec2(x + bp_per_px * 0.5, base_height * 0.5 + 1.0),
+                    egui::Align2::CENTER_CENTER,
+                    base_char.to_string(),
+                    egui::FontId::monospace(11.0),
+                    egui::Color32::from_rgb(color[0], color[1], color[2]),
+                );
+            } else {
+                // Draw colored bar
+                let r = egui::Rect::from_min_size(
+                    origin + egui::vec2(x, 1.0),
+                    egui::vec2(bp_per_px.max(1.0), base_height),
+                );
+                painter.rect_filled(
+                    r,
+                    0.0,
+                    egui::Color32::from_rgb(color[0], color[1], color[2]),
+                );
+            }
         }
     }
 
@@ -1205,19 +1538,11 @@ impl ViewerApp {
                     };
                     let events: Vec<String> = results
                         .iter()
-                        .filter(|r| {
-                            r.event_type
-                                == genome::coordinate_mapper::EventType::Alignment
-                        })
-                        .map(|r| {
-                            format!("{}:{}-{}", r.asm_chrom, r.asm_start, r.asm_end)
-                        })
+                        .filter(|r| r.event_type == genome::coordinate_mapper::EventType::Alignment)
+                        .map(|r| format!("{}:{}-{}", r.asm_chrom, r.asm_start, r.asm_end))
                         .collect();
                     if !events.is_empty() {
-                        msg.push_str(&format!(
-                            " | {prefix}: {}",
-                            events.join(", ")
-                        ));
+                        msg.push_str(&format!(" | {prefix}: {}", events.join(", ")));
                     }
                 }
             }
@@ -1343,6 +1668,7 @@ impl eframe::App for ViewerApp {
         let config = self.display_config.clone();
 
         // Central area: 3 panels + optional dot plot
+        let mut interactions: Vec<(PanelId, PanelInteraction)> = Vec::new();
         egui::CentralPanel::default().show(ctx, |ui| {
             let current = self.navigator.current();
             let ref_text = current
@@ -1414,7 +1740,7 @@ impl eframe::App for ViewerApp {
             let panel_height = (available - 16.0) / 3.0; // 16px for spacing
 
             ui.allocate_ui(egui::vec2(ui.available_width(), panel_height), |ui| {
-                Self::show_panel(
+                let inter = Self::show_panel(
                     ui,
                     &PanelRenderParams {
                         panel: Panel::Reference,
@@ -1426,12 +1752,13 @@ impl eframe::App for ViewerApp {
                         coord_info: ref_coord_info.as_deref(),
                     },
                 );
+                interactions.push((PanelId::Reference, inter));
             });
 
             ui.add_space(4.0);
 
             ui.allocate_ui(egui::vec2(ui.available_width(), panel_height), |ui| {
-                Self::show_panel(
+                let inter = Self::show_panel(
                     ui,
                     &PanelRenderParams {
                         panel: Panel::Haplotype1,
@@ -1443,12 +1770,13 @@ impl eframe::App for ViewerApp {
                         coord_info: hap1_coord_info.as_deref(),
                     },
                 );
+                interactions.push((PanelId::Haplotype1, inter));
             });
 
             ui.add_space(4.0);
 
             ui.allocate_ui(egui::vec2(ui.available_width(), panel_height), |ui| {
-                Self::show_panel(
+                let inter = Self::show_panel(
                     ui,
                     &PanelRenderParams {
                         panel: Panel::Haplotype2,
@@ -1460,6 +1788,7 @@ impl eframe::App for ViewerApp {
                         coord_info: hap2_coord_info.as_deref(),
                     },
                 );
+                interactions.push((PanelId::Haplotype2, inter));
             });
 
             // Dot plot panel
@@ -1471,6 +1800,22 @@ impl eframe::App for ViewerApp {
                 });
             }
         });
+
+        // Process mouse interactions from panels
+        for (panel_id, inter) in interactions {
+            let mut needs_reload = false;
+            if inter.pan_delta != 0 {
+                self.sync_manager.pan(panel_id, inter.pan_delta);
+                needs_reload = true;
+            }
+            if let Some((factor, cursor_frac)) = inter.zoom {
+                self.sync_manager.zoom_at(panel_id, factor, cursor_frac);
+                needs_reload = true;
+            }
+            if needs_reload {
+                self.schedule_debounced_reload();
+            }
+        }
     }
 }
 
@@ -1974,18 +2319,20 @@ mod tests {
             Some(std::path::Path::new("/cram_ref.fa.gz"))
         );
         // Verify discovered file names contain expected suffix
-        assert!(dp
-            .hap1_coord_index
-            .as_ref()
-            .unwrap()
-            .to_string_lossy()
-            .ends_with("_hap1_to_ref.mapping.json.gz"));
-        assert!(dp
-            .reads_to_hap2_bam
-            .as_ref()
-            .unwrap()
-            .to_string_lossy()
-            .ends_with("_reads_to_hap2.bam"));
+        assert!(
+            dp.hap1_coord_index
+                .as_ref()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with("_hap1_to_ref.mapping.json.gz")
+        );
+        assert!(
+            dp.reads_to_hap2_bam
+                .as_ref()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with("_reads_to_hap2.bam")
+        );
     }
 
     #[test]
@@ -2156,19 +2503,20 @@ mod tests {
             ],
             "chr1:100-200",
         );
-        assert!(tracks.is_empty(), "should gracefully return empty when no BAMs");
+        assert!(
+            tracks.is_empty(),
+            "should gracefully return empty when no BAMs"
+        );
     }
 
     #[test]
     fn test_load_assembly_tracks_with_nonexistent_bam() {
         let tracks = load_assembly_tracks(
-            &[
-                (
-                    "Hap1 → Ref",
-                    [60, 160, 80],
-                    Some(std::path::Path::new("/nonexistent/file.bam")),
-                ),
-            ],
+            &[(
+                "Hap1 → Ref",
+                [60, 160, 80],
+                Some(std::path::Path::new("/nonexistent/file.bam")),
+            )],
             "chr1:100-200",
         );
         assert!(
@@ -2184,9 +2532,18 @@ mod tests {
     #[test]
     fn test_viewer_app_default_new_toggles() {
         let app = ViewerApp::default();
-        assert!(!app.display_config.show_mismatches, "mismatches off by default");
-        assert!(!app.display_config.show_soft_clips, "soft clips off by default");
-        assert!(!app.display_config.sort_by_haplotype, "HP sort off by default");
+        assert!(
+            !app.display_config.show_mismatches,
+            "mismatches off by default"
+        );
+        assert!(
+            !app.display_config.show_soft_clips,
+            "soft clips off by default"
+        );
+        assert!(
+            !app.display_config.sort_by_haplotype,
+            "HP sort off by default"
+        );
         assert_eq!(
             app.display_config.indel_threshold,
             pileup::DEFAULT_INDEL_THRESHOLD

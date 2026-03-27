@@ -5,6 +5,7 @@ mod genome;
 mod panel_sync;
 mod region;
 mod region_cache;
+mod ruler;
 
 use std::path::PathBuf;
 
@@ -46,9 +47,7 @@ fn main() -> eframe::Result<()> {
             eprintln!("     For SSH:       ssh -X user@host  (enable X11 forwarding)");
             eprintln!("  3. Software rendering is not enabled.");
             eprintln!("     Set:  export LIBGL_ALWAYS_SOFTWARE=1");
-            eprintln!(
-                "  4. Running inside a container without GPU passthrough or X11 forwarding."
-            );
+            eprintln!("  4. Running inside a container without GPU passthrough or X11 forwarding.");
         }
     }
 

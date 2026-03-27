@@ -121,8 +121,7 @@ impl RegionNavigator {
     pub fn load_regions(&mut self, path: &Path) -> Result<(), String> {
         let path_str = path.to_string_lossy();
         if path_str.ends_with(".vcf.gz") {
-            let file = std::fs::File::open(path)
-                .map_err(|e| format!("Failed to open VCF: {e}"))?;
+            let file = std::fs::File::open(path).map_err(|e| format!("Failed to open VCF: {e}"))?;
             let mut decoder = flate2::read::MultiGzDecoder::new(file);
             let mut text = String::new();
             decoder
@@ -130,8 +129,8 @@ impl RegionNavigator {
                 .map_err(|e| format!("Failed to decompress VCF: {e}"))?;
             self.load_vcf_str(&text)
         } else if path_str.ends_with(".vcf") {
-            let text = std::fs::read_to_string(path)
-                .map_err(|e| format!("Failed to read VCF: {e}"))?;
+            let text =
+                std::fs::read_to_string(path).map_err(|e| format!("Failed to read VCF: {e}"))?;
             self.load_vcf_str(&text)
         } else {
             // Default: treat as manifest JSON
@@ -257,11 +256,7 @@ impl RegionNavigator {
 
             // Parse genotype if available (column 10).
             let gt = if cols.len() >= 10 {
-                cols[9]
-                    .split(':')
-                    .next()
-                    .unwrap_or("")
-                    .replace('/', "|")
+                cols[9].split(':').next().unwrap_or("").replace('/', "|")
             } else {
                 String::new()
             };
@@ -657,10 +652,7 @@ mod tests {
                 "chr1\t460749\t.\t{}\tA\t.\t.\tSVLEN=834\tGT\t0|1",
                 "A".repeat(835)
             ),
-            &format!(
-                "chr2\t100000\t.\t{}\tC\t.\t.\t.\tGT\t1/0",
-                "C".repeat(1501)
-            ),
+            &format!("chr2\t100000\t.\t{}\tC\t.\t.\t.\tGT\t1/0", "C".repeat(1501)),
             // Small SV (< 500 bp) – should be skipped
             "chr3\t200000\t.\tATCG\tA\t.\t.\tSVLEN=3\tGT\t0|1",
         ]
@@ -741,8 +733,8 @@ mod tests {
 
     #[test]
     fn test_load_regions_vcf_gz() {
-        use flate2::write::GzEncoder;
         use flate2::Compression;
+        use flate2::write::GzEncoder;
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.vcf.gz");

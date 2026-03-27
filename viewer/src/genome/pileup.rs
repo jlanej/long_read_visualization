@@ -38,6 +38,8 @@ pub struct PileupDisplayConfig {
     pub show_soft_clips: bool,
     /// If true, render base-level mismatches with standard nucleotide coloring.
     pub show_mismatches: bool,
+    /// If true, show coverage histogram above reads.
+    pub show_coverage: bool,
 }
 
 impl Default for PileupDisplayConfig {
@@ -49,6 +51,7 @@ impl Default for PileupDisplayConfig {
             sort_by_haplotype: false,
             show_soft_clips: false,
             show_mismatches: false,
+            show_coverage: false,
         }
     }
 }
@@ -199,11 +202,11 @@ pub fn pack_reads_by_haplotype(reads: Vec<AlignedRead>) -> Vec<PileupRow> {
 #[inline]
 pub fn nucleotide_color(base: u8) -> [u8; 3] {
     match base.to_ascii_uppercase() {
-        b'A' => [0, 180, 0],    // green
-        b'C' => [0, 0, 200],    // blue
-        b'G' => [209, 159, 0],  // orange/yellow
-        b'T' => [200, 0, 0],    // red
-        _ => [128, 128, 128],   // grey (N or unknown)
+        b'A' => [0, 180, 0],   // green
+        b'C' => [0, 0, 200],   // blue
+        b'G' => [209, 159, 0], // orange/yellow
+        b'T' => [200, 0, 0],   // red
+        _ => [128, 128, 128],  // grey (N or unknown)
     }
 }
 
@@ -249,6 +252,7 @@ pub fn layout_read_rects(
                 height: row_h,
                 color,
                 read_name: read.name.clone(),
+                tooltip: Some(ReadTooltipInfo::from_read(read)),
             });
 
             // Draw soft-clip overlays (semi-transparent extensions beyond alignment)
@@ -271,6 +275,7 @@ pub fn layout_read_rects(
                                 height: row_h,
                                 color: clip_color,
                                 read_name: read.name.clone(),
+                                tooltip: None,
                             });
                         }
                     } else {
@@ -289,6 +294,7 @@ pub fn layout_read_rects(
                                 height: row_h,
                                 color: clip_color,
                                 read_name: read.name.clone(),
+                                tooltip: None,
                             });
                         }
                     }
@@ -311,6 +317,7 @@ pub fn layout_read_rects(
                         height: row_h,
                         color: mc,
                         read_name: read.name.clone(),
+                        tooltip: None,
                     });
                 }
             }
@@ -337,6 +344,7 @@ pub fn layout_read_rects(
                     height: row_h,
                     color: ic,
                     read_name: read.name.clone(),
+                    tooltip: None,
                 });
             }
         }
@@ -356,7 +364,152 @@ pub struct ReadRect {
     /// Source read name (for tooltips / identification).
     #[allow(dead_code)]
     pub read_name: String,
+    /// Optional rich tooltip metadata (populated for read body rects).
+    pub tooltip: Option<ReadTooltipInfo>,
 }
+
+/// Rich metadata for hover tooltips on reads.
+#[derive(Debug, Clone)]
+pub struct ReadTooltipInfo {
+    /// Read name (QNAME).
+    pub name: String,
+    /// Mapping quality.
+    pub mapq: Option<u8>,
+    /// Haplotype assignment (HP tag).
+    pub haplotype: Option<u8>,
+    /// True if reverse strand.
+    pub is_reverse: bool,
+    /// Alignment start (1-based).
+    pub start: u64,
+    /// Alignment end (1-based, inclusive).
+    pub end: u64,
+    /// Number of indels in the read.
+    pub indel_count: usize,
+    /// Alignment length in bases.
+    pub alignment_length: u64,
+}
+
+impl ReadTooltipInfo {
+    /// Build tooltip info from an `AlignedRead`.
+    pub fn from_read(read: &super::AlignedRead) -> Self {
+        Self {
+            name: read.name.clone(),
+            mapq: read.mapping_quality,
+            haplotype: read.haplotype,
+            is_reverse: read.is_reverse,
+            start: read.start,
+            end: read.end,
+            indel_count: read.indels.len(),
+            alignment_length: read.end.saturating_sub(read.start) + 1,
+        }
+    }
+
+    /// Format as multi-line tooltip text.
+    pub fn tooltip_text(&self) -> String {
+        let strand = if self.is_reverse {
+            "reverse (−)"
+        } else {
+            "forward (+)"
+        };
+        let hp = match self.haplotype {
+            Some(1) => "HP:1 (hap1)".to_string(),
+            Some(2) => "HP:2 (hap2)".to_string(),
+            Some(v) => format!("HP:{v}"),
+            None => "unphased".to_string(),
+        };
+        let mapq = self.mapq.map_or("N/A".to_string(), |q| q.to_string());
+        format!(
+            "{}\n  {}:{}-{} ({} bp)\n  MAPQ: {} | {} | {}\n  Indels: {}",
+            self.name,
+            strand,
+            self.start,
+            self.end,
+            self.alignment_length,
+            mapq,
+            hp,
+            if self.is_reverse { "rev" } else { "fwd" },
+            self.indel_count,
+        )
+    }
+}
+
+/// A single bin in a coverage histogram.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoverageBin {
+    /// Start position of this bin (genomic coordinate).
+    pub start: u64,
+    /// End position of this bin (genomic coordinate, exclusive).
+    pub end: u64,
+    /// Total coverage depth in this bin.
+    pub depth: u32,
+    /// HP=1 coverage depth.
+    pub hap1_depth: u32,
+    /// HP=2 coverage depth.
+    pub hap2_depth: u32,
+}
+
+/// Compute binned coverage from pileup rows.
+///
+/// `view_start` / `view_end`: the visible genomic coordinate range.
+/// `num_bins`: number of bins to divide the view into.
+///
+/// Returns a vector of `CoverageBin` entries with total and per-HP depth.
+pub fn compute_coverage(
+    rows: &[PileupRow],
+    view_start: u64,
+    view_end: u64,
+    num_bins: usize,
+) -> Vec<CoverageBin> {
+    let span = view_end.saturating_sub(view_start);
+    if span == 0 || num_bins == 0 {
+        return Vec::new();
+    }
+
+    let bin_size = (span as f64 / num_bins as f64).ceil() as u64;
+    let bin_size = bin_size.max(1);
+
+    let mut bins: Vec<CoverageBin> = (0..num_bins)
+        .map(|i| {
+            let bin_start = view_start + i as u64 * bin_size;
+            let bin_end = (bin_start + bin_size).min(view_end);
+            CoverageBin {
+                start: bin_start,
+                end: bin_end,
+                depth: 0,
+                hap1_depth: 0,
+                hap2_depth: 0,
+            }
+        })
+        .collect();
+
+    for row in rows {
+        for read in &row.reads {
+            // Determine which bins this read overlaps
+            if read.end < view_start || read.start > view_end {
+                continue;
+            }
+            let r_start = read.start.max(view_start);
+            let r_end = read.end.min(view_end);
+
+            let first_bin = ((r_start - view_start) / bin_size) as usize;
+            let last_bin = (((r_end - view_start).saturating_sub(1)) / bin_size) as usize;
+
+            for bin_idx in first_bin..=last_bin.min(bins.len() - 1) {
+                bins[bin_idx].depth += 1;
+                match read.haplotype {
+                    Some(1) => bins[bin_idx].hap1_depth += 1,
+                    Some(2) => bins[bin_idx].hap2_depth += 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    bins
+}
+
+/// Default height for coverage track in pixels.
+pub const COVERAGE_TRACK_HEIGHT: f32 = 40.0;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -1029,10 +1182,7 @@ mod tests {
         let h1_pos = all_names.iter().position(|n| n == "h1a").unwrap();
         let h2_pos = all_names.iter().position(|n| n == "h2a").unwrap();
         let u_pos = all_names.iter().position(|n| n == "u1").unwrap();
-        assert!(
-            h1_pos < h2_pos,
-            "HP1 reads should come before HP2 reads"
-        );
+        assert!(h1_pos < h2_pos, "HP1 reads should come before HP2 reads");
         assert!(
             h2_pos < u_pos,
             "HP2 reads should come before unphased reads"
@@ -1074,7 +1224,10 @@ mod tests {
             make_read_hp("h1", 100, 200, Some(1)),
             make_read_hp("u2", 300, 400, Some(3)), // Unknown HP → unphased
         ];
-        let total: usize = pack_reads_by_haplotype(reads).iter().map(|r| r.reads.len()).sum();
+        let total: usize = pack_reads_by_haplotype(reads)
+            .iter()
+            .map(|r| r.reads.len())
+            .sum();
         assert_eq!(total, 4, "all reads must be preserved");
     }
 
@@ -1263,8 +1416,14 @@ mod tests {
     fn test_display_config_new_defaults() {
         let cfg = PileupDisplayConfig::default();
         assert!(!cfg.sort_by_haplotype, "HP sort should be off by default");
-        assert!(!cfg.show_soft_clips, "soft clips should be hidden by default");
-        assert!(!cfg.show_mismatches, "mismatches should be hidden by default");
+        assert!(
+            !cfg.show_soft_clips,
+            "soft clips should be hidden by default"
+        );
+        assert!(
+            !cfg.show_mismatches,
+            "mismatches should be hidden by default"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1295,7 +1454,10 @@ mod tests {
         let rows = pack_reads(reads);
         assert_eq!(rows.len(), 2, "should only need 2 rows");
         // r3 should be in same row as r1 (the earlier-ending row)
-        let row_with_r1 = rows.iter().find(|r| r.reads.iter().any(|rd| rd.name == "r1")).unwrap();
+        let row_with_r1 = rows
+            .iter()
+            .find(|r| r.reads.iter().any(|rd| rd.name == "r1"))
+            .unwrap();
         assert!(
             row_with_r1.reads.iter().any(|rd| rd.name == "r3"),
             "r3 should share row with r1 (earlier end)"
@@ -1320,5 +1482,133 @@ mod tests {
                 assert!(w[1].start > w[0].end + READ_GAP);
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Coverage computation tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_compute_coverage_empty() {
+        let bins = compute_coverage(&[], 100, 200, 10);
+        assert!(bins.is_empty() || bins.iter().all(|b| b.depth == 0));
+    }
+
+    #[test]
+    fn test_compute_coverage_zero_span() {
+        let rows = pack_reads(vec![make_read("r1", 100, 200)]);
+        let bins = compute_coverage(&rows, 100, 100, 10);
+        assert!(bins.is_empty());
+    }
+
+    #[test]
+    fn test_compute_coverage_single_read() {
+        let rows = pack_reads(vec![make_read("r1", 100, 200)]);
+        let bins = compute_coverage(&rows, 100, 200, 10);
+        assert_eq!(bins.len(), 10);
+        // All bins should have depth 1 since the read spans the entire view
+        for bin in &bins {
+            assert_eq!(bin.depth, 1, "bin {:?} should have depth 1", bin);
+        }
+    }
+
+    #[test]
+    fn test_compute_coverage_hp_stratified() {
+        let reads = vec![
+            make_read_hp("h1a", 100, 200, Some(1)),
+            make_read_hp("h2a", 100, 200, Some(2)),
+            make_read_hp("u1", 100, 200, None),
+        ];
+        let rows = pack_reads(reads);
+        let bins = compute_coverage(&rows, 100, 200, 5);
+        for bin in &bins {
+            assert_eq!(bin.depth, 3);
+            assert_eq!(bin.hap1_depth, 1);
+            assert_eq!(bin.hap2_depth, 1);
+        }
+    }
+
+    #[test]
+    fn test_compute_coverage_partial_overlap() {
+        // Read covers only left half of view
+        let rows = pack_reads(vec![make_read("r1", 100, 150)]);
+        let bins = compute_coverage(&rows, 100, 200, 10);
+        // Bins in first half should have depth 1, second half depth 0
+        let nonzero: Vec<_> = bins.iter().filter(|b| b.depth > 0).collect();
+        let zero: Vec<_> = bins.iter().filter(|b| b.depth == 0).collect();
+        assert!(!nonzero.is_empty());
+        assert!(!zero.is_empty());
+    }
+
+    #[test]
+    fn test_compute_coverage_read_outside_view() {
+        let rows = pack_reads(vec![make_read("r1", 500, 600)]);
+        let bins = compute_coverage(&rows, 100, 200, 10);
+        for bin in &bins {
+            assert_eq!(bin.depth, 0);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Tooltip info tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_tooltip_info_from_read() {
+        let mut read = make_read_hp("test_read", 100, 500, Some(1));
+        read.is_reverse = true;
+        read.mapping_quality = Some(42);
+        read.indels = vec![
+            Indel {
+                ref_pos: 200,
+                length: 10,
+                kind: IndelKind::Insertion,
+            },
+            Indel {
+                ref_pos: 300,
+                length: 20,
+                kind: IndelKind::Deletion,
+            },
+        ];
+        let info = ReadTooltipInfo::from_read(&read);
+        assert_eq!(info.name, "test_read");
+        assert_eq!(info.mapq, Some(42));
+        assert_eq!(info.haplotype, Some(1));
+        assert!(info.is_reverse);
+        assert_eq!(info.start, 100);
+        assert_eq!(info.end, 500);
+        assert_eq!(info.indel_count, 2);
+        assert_eq!(info.alignment_length, 401);
+    }
+
+    #[test]
+    fn test_tooltip_text_content() {
+        let read = make_read_hp("my_read", 1000, 2000, Some(2));
+        let info = ReadTooltipInfo::from_read(&read);
+        let text = info.tooltip_text();
+        assert!(text.contains("my_read"));
+        assert!(text.contains("HP:2"));
+        assert!(text.contains("forward"));
+        assert!(text.contains("1000"));
+        assert!(text.contains("2000"));
+    }
+
+    #[test]
+    fn test_read_rect_has_tooltip_on_body() {
+        let rows = pack_reads(vec![make_read("r1", 100, 200)]);
+        let config = PileupDisplayConfig::default();
+        let rects = layout_read_rects(&rows, &config, 100, 200, 800.0);
+        assert_eq!(rects.len(), 1);
+        assert!(rects[0].tooltip.is_some(), "body rect should have tooltip");
+    }
+
+    // -----------------------------------------------------------------------
+    // Display config coverage field test
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_display_config_coverage_default_off() {
+        let cfg = PileupDisplayConfig::default();
+        assert!(!cfg.show_coverage, "coverage should be off by default");
     }
 }

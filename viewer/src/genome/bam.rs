@@ -414,8 +414,7 @@ fn extract_cram_read(record: &sam::alignment::RecordBuf) -> Option<AlignedRead> 
     let mq = record.mapping_quality().map(u8::from);
     let hp = hp_from_record_buf(record);
 
-    let (indels, mismatches, soft_clips) =
-        extract_cigar_features_buf(record.cigar(), start);
+    let (indels, mismatches, soft_clips) = extract_cigar_features_buf(record.cigar(), start);
 
     Some(AlignedRead {
         name,

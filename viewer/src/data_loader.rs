@@ -1,12 +1,12 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
 use std::thread;
 
 use crate::genome;
-use crate::genome::pileup::{self, PileupRow};
 use crate::genome::FastaSequence;
+use crate::genome::pileup::{self, PileupRow};
 use crate::region::GenomicRegion;
 use crate::region_cache::{CachedAssemblyTrack, CachedPanelData, CachedRegion};
 
@@ -240,8 +240,16 @@ fn execute_load(req: &LoadRequest, cancel: &Arc<AtomicBool>) -> CachedRegion {
         let region_str = req.ref_region.to_string();
         ref_data.assembly_tracks = load_assembly_tracks_cached(
             &[
-                ("Hap1 → Ref", [60, 160, 80], req.paths.hap1_to_ref_bam.as_deref()),
-                ("Hap2 → Ref", [180, 100, 60], req.paths.hap2_to_ref_bam.as_deref()),
+                (
+                    "Hap1 → Ref",
+                    [60, 160, 80],
+                    req.paths.hap1_to_ref_bam.as_deref(),
+                ),
+                (
+                    "Hap2 → Ref",
+                    [180, 100, 60],
+                    req.paths.hap2_to_ref_bam.as_deref(),
+                ),
             ],
             &region_str,
         );
@@ -264,8 +272,16 @@ fn execute_load(req: &LoadRequest, cancel: &Arc<AtomicBool>) -> CachedRegion {
             let region_str = region.to_string();
             hap1_data.assembly_tracks = load_assembly_tracks_cached(
                 &[
-                    ("Ref → Hap1", [70, 130, 180], req.paths.ref_to_hap1_bam.as_deref()),
-                    ("Hap2 → Hap1", [180, 100, 60], req.paths.hap2_to_hap1_bam.as_deref()),
+                    (
+                        "Ref → Hap1",
+                        [70, 130, 180],
+                        req.paths.ref_to_hap1_bam.as_deref(),
+                    ),
+                    (
+                        "Hap2 → Hap1",
+                        [180, 100, 60],
+                        req.paths.hap2_to_hap1_bam.as_deref(),
+                    ),
                 ],
                 &region_str,
             );
@@ -289,8 +305,16 @@ fn execute_load(req: &LoadRequest, cancel: &Arc<AtomicBool>) -> CachedRegion {
             let region_str = region.to_string();
             hap2_data.assembly_tracks = load_assembly_tracks_cached(
                 &[
-                    ("Ref → Hap2", [70, 130, 180], req.paths.ref_to_hap2_bam.as_deref()),
-                    ("Hap1 → Hap2", [60, 160, 80], req.paths.hap1_to_hap2_bam.as_deref()),
+                    (
+                        "Ref → Hap2",
+                        [70, 130, 180],
+                        req.paths.ref_to_hap2_bam.as_deref(),
+                    ),
+                    (
+                        "Hap1 → Hap2",
+                        [60, 160, 80],
+                        req.paths.hap1_to_hap2_bam.as_deref(),
+                    ),
                 ],
                 &region_str,
             );
@@ -310,10 +334,7 @@ fn execute_load(req: &LoadRequest, cancel: &Arc<AtomicBool>) -> CachedRegion {
 // pure functions that only depend on genome::* types)
 // ---------------------------------------------------------------------------
 
-fn pack_for_config(
-    reads: Vec<genome::AlignedRead>,
-    sort_by_haplotype: bool,
-) -> Vec<PileupRow> {
+fn pack_for_config(reads: Vec<genome::AlignedRead>, sort_by_haplotype: bool) -> Vec<PileupRow> {
     if sort_by_haplotype {
         pileup::pack_reads_by_haplotype(reads)
     } else {
@@ -345,8 +366,7 @@ fn load_fasta_for_region(
                 .ok();
             }
             if name.starts_with(&region.chrom)
-                && name[region.chrom.len()..]
-                    .starts_with(|c: char| !c.is_ascii_alphanumeric())
+                && name[region.chrom.len()..].starts_with(|c: char| !c.is_ascii_alphanumeric())
             {
                 let end = (*len).min(region.end - region.start + 1);
                 return genome::fasta::query_fasta_region(fasta_path, name, 1, end).ok();
