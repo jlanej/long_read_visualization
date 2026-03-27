@@ -57,6 +57,11 @@ pub struct DataPaths {
     pub hap1_to_hap2_bam: Option<PathBuf>,
     /// Hap2 aligned to hap1 (BAM, indexed) — cross-haplotype track in hap1 panel.
     pub hap2_to_hap1_bam: Option<PathBuf>,
+    // -- Discovery context (for diagnostic logging) --
+    /// Output directory used for file discovery (if provided in TSV).
+    pub output_dir: Option<PathBuf>,
+    /// Sample ID used for file discovery (if provided in TSV).
+    pub sample_id: Option<String>,
 }
 
 impl DataPaths {
@@ -177,6 +182,8 @@ impl DataPaths {
             ref_to_hap2_bam: discover("_ref_to_hap2.bam"),
             hap1_to_hap2_bam: discover("_hap1_to_hap2.bam"),
             hap2_to_hap1_bam: discover("_hap2_to_hap1.bam"),
+            output_dir: output_dir.clone(),
+            sample_id: sample_id.as_ref().map(|s| s.to_string_lossy().to_string()),
         };
 
         if is_verbose() {
@@ -189,7 +196,26 @@ impl DataPaths {
     /// Print a summary of configured paths to stderr.
     fn log_summary_stderr(p: &Self) {
         let yn = |opt: &Option<PathBuf>| -> &str { if opt.is_some() { "YES" } else { "no" } };
+
+        // Helper: for a discovered field, show the path if found or the
+        // expected path if not, so users can see exactly what was looked for.
+        let discovered = |opt: &Option<PathBuf>, suffix: &str| -> String {
+            if let Some(path) = opt {
+                format!("YES {}", path.display())
+            } else if let (Some(dir), Some(sid)) = (&p.output_dir, &p.sample_id) {
+                format!(
+                    "no  (expected: {})",
+                    dir.join(format!("{sid}{suffix}")).display()
+                )
+            } else {
+                "no  (no output_dir/sample_id for discovery)".to_string()
+            }
+        };
+
         eprintln!("[viewer] ── Data paths summary ──");
+        if let (Some(dir), Some(sid)) = (&p.output_dir, &p.sample_id) {
+            eprintln!("[viewer]   discovery prefix    : {}/{}", dir.display(), sid);
+        }
         eprintln!(
             "[viewer]   reference_fasta     : {} {}",
             yn(&p.reference_fasta),
@@ -224,43 +250,43 @@ impl DataPaths {
         );
         eprintln!(
             "[viewer]   hap1_coord_index    : {}",
-            yn(&p.hap1_coord_index)
+            discovered(&p.hap1_coord_index, "_hap1_to_ref.mapping.json.gz")
         );
         eprintln!(
             "[viewer]   hap2_coord_index    : {}",
-            yn(&p.hap2_coord_index)
+            discovered(&p.hap2_coord_index, "_hap2_to_ref.mapping.json.gz")
         );
         eprintln!(
             "[viewer]   reads_to_hap1_bam   : {}",
-            yn(&p.reads_to_hap1_bam)
+            discovered(&p.reads_to_hap1_bam, "_reads_to_hap1.bam")
         );
         eprintln!(
             "[viewer]   reads_to_hap2_bam   : {}",
-            yn(&p.reads_to_hap2_bam)
+            discovered(&p.reads_to_hap2_bam, "_reads_to_hap2.bam")
         );
         eprintln!(
             "[viewer]   hap1_to_ref_bam     : {}",
-            yn(&p.hap1_to_ref_bam)
+            discovered(&p.hap1_to_ref_bam, "_hap1_to_ref.bam")
         );
         eprintln!(
             "[viewer]   hap2_to_ref_bam     : {}",
-            yn(&p.hap2_to_ref_bam)
+            discovered(&p.hap2_to_ref_bam, "_hap2_to_ref.bam")
         );
         eprintln!(
             "[viewer]   ref_to_hap1_bam     : {}",
-            yn(&p.ref_to_hap1_bam)
+            discovered(&p.ref_to_hap1_bam, "_ref_to_hap1.bam")
         );
         eprintln!(
             "[viewer]   ref_to_hap2_bam     : {}",
-            yn(&p.ref_to_hap2_bam)
+            discovered(&p.ref_to_hap2_bam, "_ref_to_hap2.bam")
         );
         eprintln!(
             "[viewer]   hap1_to_hap2_bam    : {}",
-            yn(&p.hap1_to_hap2_bam)
+            discovered(&p.hap1_to_hap2_bam, "_hap1_to_hap2.bam")
         );
         eprintln!(
             "[viewer]   hap2_to_hap1_bam    : {}",
-            yn(&p.hap2_to_hap1_bam)
+            discovered(&p.hap2_to_hap1_bam, "_hap2_to_hap1.bam")
         );
         eprintln!("[viewer]   cram_ref            : {}", yn(&p.cram_ref));
     }
@@ -269,7 +295,26 @@ impl DataPaths {
     pub fn log_summary(&self, log: &crate::verbose::LogBuffer) {
         use crate::verbose::vlog;
         let yn = |opt: &Option<PathBuf>| -> &str { if opt.is_some() { "YES" } else { "no" } };
+
+        // Helper: for a discovered field, show the path if found or the
+        // expected path if not, so users can see exactly what was looked for.
+        let discovered = |opt: &Option<PathBuf>, suffix: &str| -> String {
+            if let Some(path) = opt {
+                format!("YES {}", path.display())
+            } else if let (Some(dir), Some(sid)) = (&self.output_dir, &self.sample_id) {
+                format!(
+                    "no  (expected: {})",
+                    dir.join(format!("{sid}{suffix}")).display()
+                )
+            } else {
+                "no  (no output_dir/sample_id for discovery)".to_string()
+            }
+        };
+
         vlog!(log, "── Data paths summary ──");
+        if let (Some(dir), Some(sid)) = (&self.output_dir, &self.sample_id) {
+            vlog!(log, "  discovery prefix    : {}/{}", dir.display(), sid);
+        }
         vlog!(
             log,
             "  reference_fasta     : {} {}",
@@ -309,36 +354,52 @@ impl DataPaths {
         vlog!(
             log,
             "  hap1_coord_index    : {}",
-            yn(&self.hap1_coord_index)
+            discovered(&self.hap1_coord_index, "_hap1_to_ref.mapping.json.gz")
         );
         vlog!(
             log,
             "  hap2_coord_index    : {}",
-            yn(&self.hap2_coord_index)
+            discovered(&self.hap2_coord_index, "_hap2_to_ref.mapping.json.gz")
         );
         vlog!(
             log,
             "  reads_to_hap1_bam   : {}",
-            yn(&self.reads_to_hap1_bam)
+            discovered(&self.reads_to_hap1_bam, "_reads_to_hap1.bam")
         );
         vlog!(
             log,
             "  reads_to_hap2_bam   : {}",
-            yn(&self.reads_to_hap2_bam)
+            discovered(&self.reads_to_hap2_bam, "_reads_to_hap2.bam")
         );
-        vlog!(log, "  hap1_to_ref_bam     : {}", yn(&self.hap1_to_ref_bam));
-        vlog!(log, "  hap2_to_ref_bam     : {}", yn(&self.hap2_to_ref_bam));
-        vlog!(log, "  ref_to_hap1_bam     : {}", yn(&self.ref_to_hap1_bam));
-        vlog!(log, "  ref_to_hap2_bam     : {}", yn(&self.ref_to_hap2_bam));
+        vlog!(
+            log,
+            "  hap1_to_ref_bam     : {}",
+            discovered(&self.hap1_to_ref_bam, "_hap1_to_ref.bam")
+        );
+        vlog!(
+            log,
+            "  hap2_to_ref_bam     : {}",
+            discovered(&self.hap2_to_ref_bam, "_hap2_to_ref.bam")
+        );
+        vlog!(
+            log,
+            "  ref_to_hap1_bam     : {}",
+            discovered(&self.ref_to_hap1_bam, "_ref_to_hap1.bam")
+        );
+        vlog!(
+            log,
+            "  ref_to_hap2_bam     : {}",
+            discovered(&self.ref_to_hap2_bam, "_ref_to_hap2.bam")
+        );
         vlog!(
             log,
             "  hap1_to_hap2_bam    : {}",
-            yn(&self.hap1_to_hap2_bam)
+            discovered(&self.hap1_to_hap2_bam, "_hap1_to_hap2.bam")
         );
         vlog!(
             log,
             "  hap2_to_hap1_bam    : {}",
-            yn(&self.hap2_to_hap1_bam)
+            discovered(&self.hap2_to_hap1_bam, "_hap2_to_hap1.bam")
         );
         vlog!(log, "  cram_ref            : {}", yn(&self.cram_ref));
     }
@@ -435,6 +496,8 @@ pub fn parse_all_samples(tsv_path: &std::path::Path) -> Result<Vec<(String, Data
             ref_to_hap2_bam: discover("_ref_to_hap2.bam"),
             hap1_to_hap2_bam: discover("_hap1_to_hap2.bam"),
             hap2_to_hap1_bam: discover("_hap2_to_hap1.bam"),
+            output_dir: output_dir.clone(),
+            sample_id: Some(sample_id.clone()),
         };
         samples.push((sample_id, dp));
     }
@@ -3313,6 +3376,9 @@ mod tests {
                 .to_string_lossy()
                 .ends_with("_reads_to_hap2.bam")
         );
+        // Verify discovery context is stored for diagnostic logging
+        assert_eq!(dp.output_dir.as_deref(), Some(output_dir.as_path()));
+        assert_eq!(dp.sample_id.as_deref(), Some("NA21110"));
     }
 
     #[test]
@@ -3332,6 +3398,37 @@ mod tests {
         assert!(dp.hap2_coord_index.is_none());
         assert!(dp.reads_to_hap1_bam.is_none());
         assert!(dp.reads_to_hap2_bam.is_none());
+        // Discovery context fields should be None when output_dir is absent
+        assert!(dp.output_dir.is_none());
+    }
+
+    #[test]
+    fn test_log_summary_shows_expected_paths_for_missing_files() {
+        let dp = DataPaths {
+            output_dir: Some(std::path::PathBuf::from("/work/output/NA21110")),
+            sample_id: Some("NA21110".to_string()),
+            hap1_to_ref_bam: None,
+            hap2_to_ref_bam: None,
+            ref_to_hap1_bam: None,
+            ..DataPaths::default()
+        };
+        let log = crate::verbose::LogBuffer::new();
+        dp.log_summary(&log);
+        let lines = log.lines().join("\n");
+        // Verify the summary shows the discovery prefix
+        assert!(
+            lines.contains("discovery prefix"),
+            "should show discovery prefix"
+        );
+        // Verify "no" entries show the expected path
+        assert!(
+            lines.contains("expected: /work/output/NA21110/NA21110_hap1_to_ref.bam"),
+            "should show expected path for missing hap1_to_ref_bam, got:\n{lines}"
+        );
+        assert!(
+            lines.contains("expected: /work/output/NA21110/NA21110_ref_to_hap1.bam"),
+            "should show expected path for missing ref_to_hap1_bam, got:\n{lines}"
+        );
     }
 
     #[test]
