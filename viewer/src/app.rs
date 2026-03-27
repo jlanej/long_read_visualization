@@ -3404,9 +3404,11 @@ mod tests {
 
     #[test]
     fn test_log_summary_shows_expected_paths_for_missing_files() {
+        let output_dir = std::path::PathBuf::from("/work/output/NA21110");
+        let sample_id = "NA21110";
         let dp = DataPaths {
-            output_dir: Some(std::path::PathBuf::from("/work/output/NA21110")),
-            sample_id: Some("NA21110".to_string()),
+            output_dir: Some(output_dir.clone()),
+            sample_id: Some(sample_id.to_string()),
             hap1_to_ref_bam: None,
             hap2_to_ref_bam: None,
             ref_to_hap1_bam: None,
@@ -3423,8 +3425,8 @@ mod tests {
         // Verify "no" entries show the expected path
         let expected_hap1_to_ref = format!(
             "expected: {}",
-            std::path::PathBuf::from("/work/output/NA21110")
-                .join("NA21110_hap1_to_ref.bam")
+            output_dir
+                .join(format!("{sample_id}_hap1_to_ref.bam"))
                 .display()
         );
         assert!(
@@ -3433,8 +3435,8 @@ mod tests {
         );
         let expected_ref_to_hap1 = format!(
             "expected: {}",
-            std::path::PathBuf::from("/work/output/NA21110")
-                .join("NA21110_ref_to_hap1.bam")
+            output_dir
+                .join(format!("{sample_id}_ref_to_hap1.bam"))
                 .display()
         );
         assert!(
