@@ -260,7 +260,7 @@ fn execute_load(
         if is_cram && query_elapsed.as_secs_f64() >= SLOW_CRAM_QUERY_THRESHOLD_SECS {
             vlog!(
                 log,
-                "[loader] Ref panel: CRAM query exceeded 1s; confirm CRAI presence and reference accessibility"
+                "[loader] Ref panel: CRAM query exceeded 1s; check CRAM phase timings and reference I/O accessibility"
             );
         }
         match result {

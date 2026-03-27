@@ -31,6 +31,31 @@ fn cram_crai_path(cram_path: &Path) -> PathBuf {
     PathBuf::from(sidecar)
 }
 
+fn read_cram_header(
+    reader: &mut cram::io::IndexedReader<std::fs::File>,
+    cram_path: &Path,
+    build_repo: impl Fn() -> io::Result<fasta::Repository>,
+    cache_lenient: bool,
+) -> Result<(sam::Header, &'static str), GenomeError> {
+    match reader.read_header() {
+        Ok(h) => Ok((h, "strict")),
+        Err(e) if e.to_string().contains("duplicate program") => {
+            let raw = read_cram_raw_header(cram_path)?;
+            let header = parse_header_lenient(&raw)?;
+            if cache_lenient && let Ok(mut cache) = lenient_cram_headers().lock() {
+                cache.insert(cram_path.to_path_buf(), header.clone());
+            }
+            let repo = build_repo()?;
+            *reader = cram::io::indexed_reader::Builder::default()
+                .set_reference_sequence_repository(repo)
+                .build_from_path(cram_path)
+                .map_err(GenomeError::Io)?;
+            Ok((header, "lenient-fallback"))
+        }
+        Err(e) => Err(GenomeError::ParseError(format!("CRAM header: {e}"))),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Lenient SAM header parsing helpers
 // ---------------------------------------------------------------------------
@@ -388,44 +413,15 @@ pub fn query_cram(
         if let Some(h) = guard.get(cram_path).cloned() {
             (h, "lenient-cache")
         } else {
-            match reader.read_header() {
-                Ok(h) => (h, "strict"),
-                Err(e) if e.to_string().contains("duplicate program") => {
-                    let raw = read_cram_raw_header(cram_path)?;
-                    let header = parse_header_lenient(&raw)?;
-                    if let Ok(mut cache) = lenient_cram_headers().lock() {
-                        cache.insert(cram_path.to_path_buf(), header.clone());
-                    }
-                    let repo = build_repo()?;
-                    reader = cram::io::indexed_reader::Builder::default()
-                        .set_reference_sequence_repository(repo)
-                        .build_from_path(cram_path)
-                        .map_err(GenomeError::Io)?;
-                    (header, "lenient-fallback")
-                }
-                Err(e) => return Err(GenomeError::ParseError(format!("CRAM header: {e}"))),
-            }
+            read_cram_header(&mut reader, cram_path, build_repo, true)?
         }
     } else {
-        match reader.read_header() {
-            Ok(h) => (h, "strict"),
-            Err(e) if e.to_string().contains("duplicate program") => {
-                let raw = read_cram_raw_header(cram_path)?;
-                let header = parse_header_lenient(&raw)?;
-                let repo = build_repo()?;
-                reader = cram::io::indexed_reader::Builder::default()
-                    .set_reference_sequence_repository(repo)
-                    .build_from_path(cram_path)
-                    .map_err(GenomeError::Io)?;
-                (header, "lenient-fallback")
-            }
-            Err(e) => return Err(GenomeError::ParseError(format!("CRAM header: {e}"))),
-        }
+        read_cram_header(&mut reader, cram_path, build_repo, false)?
     };
     let header_elapsed = header_start.elapsed();
 
     let mut reads = Vec::new();
-    let mut decode_errors = 0usize;
+    let mut query_errors = 0usize;
 
     let query_start = Instant::now();
     for result in reader.query(&header, &region)? {
@@ -436,7 +432,7 @@ pub fn query_cram(
                 }
             }
             Err(_) => {
-                decode_errors += 1;
+                query_errors += 1;
                 continue;
             }
         }
@@ -450,7 +446,7 @@ pub fn query_cram(
             region_str,
             header_source,
             reads.len(),
-            decode_errors,
+            query_errors,
             repo_elapsed.as_millis(),
             reader_open_elapsed.as_millis(),
             header_elapsed.as_millis(),
