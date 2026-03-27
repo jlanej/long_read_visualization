@@ -3404,9 +3404,11 @@ mod tests {
 
     #[test]
     fn test_log_summary_shows_expected_paths_for_missing_files() {
+        let output_dir = std::path::PathBuf::from("/work/output/NA21110");
+        let sample_id = "NA21110";
         let dp = DataPaths {
-            output_dir: Some(std::path::PathBuf::from("/work/output/NA21110")),
-            sample_id: Some("NA21110".to_string()),
+            output_dir: Some(output_dir.clone()),
+            sample_id: Some(sample_id.to_string()),
             hap1_to_ref_bam: None,
             hap2_to_ref_bam: None,
             ref_to_hap1_bam: None,
@@ -3421,12 +3423,24 @@ mod tests {
             "should show discovery prefix"
         );
         // Verify "no" entries show the expected path
-        assert!(
-            lines.contains("expected: /work/output/NA21110/NA21110_hap1_to_ref.bam"),
-            "should show expected path for missing hap1_to_ref_bam, got:\n{lines}"
+        let expected_hap1_to_ref = format!(
+            "expected: {}",
+            output_dir
+                .join(format!("{sample_id}_hap1_to_ref.bam"))
+                .display()
         );
         assert!(
-            lines.contains("expected: /work/output/NA21110/NA21110_ref_to_hap1.bam"),
+            lines.contains(&expected_hap1_to_ref),
+            "should show expected path for missing hap1_to_ref_bam, got:\n{lines}"
+        );
+        let expected_ref_to_hap1 = format!(
+            "expected: {}",
+            output_dir
+                .join(format!("{sample_id}_ref_to_hap1.bam"))
+                .display()
+        );
+        assert!(
+            lines.contains(&expected_ref_to_hap1),
             "should show expected path for missing ref_to_hap1_bam, got:\n{lines}"
         );
     }
