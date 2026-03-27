@@ -528,6 +528,48 @@ struct PanelInteraction {
 }
 
 impl ViewerApp {
+    fn format_loading_status(
+        ref_region: &crate::region::GenomicRegion,
+        paths: &LoadPaths,
+    ) -> String {
+        let reads_src = if paths
+            .reads_bam
+            .as_ref()
+            .is_some_and(|p| p.extension().is_some_and(|e| e == "cram"))
+        {
+            "CRAM"
+        } else if paths.reads_bam.is_some() {
+            "BAM"
+        } else {
+            "alignment"
+        };
+        let mut sources = Vec::new();
+        if paths.reads_bam.is_some() {
+            sources.push(reads_src);
+        }
+        if paths.reference_fasta.is_some() {
+            sources.push("reference FASTA");
+        }
+        if paths.hap1_fasta.is_some() || paths.hap2_fasta.is_some() {
+            sources.push("haplotype FASTA");
+        }
+        if paths.hap1_to_ref_bam.is_some()
+            || paths.hap2_to_ref_bam.is_some()
+            || paths.ref_to_hap1_bam.is_some()
+            || paths.ref_to_hap2_bam.is_some()
+            || paths.hap1_to_hap2_bam.is_some()
+            || paths.hap2_to_hap1_bam.is_some()
+        {
+            sources.push("assembly tracks");
+        }
+        let source_text = if sources.is_empty() {
+            "viewer data".to_string()
+        } else {
+            sources.join(", ")
+        };
+        format!("Loading {ref_region} from {source_text}… initial load can take up to 1 minute")
+    }
+
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         manifest_path: Option<&std::path::Path>,
@@ -682,6 +724,7 @@ impl ViewerApp {
                 hap1_to_hap2_bam: self.data_paths.hap1_to_hap2_bam.clone(),
                 hap2_to_hap1_bam: self.data_paths.hap2_to_hap1_bam.clone(),
             };
+            let loading_status = Self::format_loading_status(&entry.ref_region, &paths);
             let request = LoadRequest {
                 id,
                 ref_region: entry.ref_region.clone(),
@@ -693,7 +736,7 @@ impl ViewerApp {
             };
             loader.submit(request);
             self.is_loading = true;
-            self.status_message = "Loading…".to_string();
+            self.status_message = loading_status;
             return;
         }
 
@@ -2145,7 +2188,7 @@ impl eframe::App for ViewerApp {
                 if self.is_loading {
                     ui.spinner();
                     ui.label(
-                        egui::RichText::new("Loading…")
+                        egui::RichText::new(&self.status_message)
                             .small()
                             .color(egui::Color32::from_gray(180)),
                     );
@@ -2553,6 +2596,36 @@ mod tests {
         // Verify sync manager was updated
         assert_eq!(app.sync_manager.view(PanelId::Reference).view_start, 100);
         assert_eq!(app.sync_manager.view(PanelId::Reference).view_end, 150);
+    }
+
+    #[test]
+    fn test_format_loading_status_mentions_region_and_sources() {
+        let region = crate::region::GenomicRegion {
+            chrom: "chr1".to_string(),
+            start: 100,
+            end: 200,
+        };
+        let paths = LoadPaths {
+            reads_bam: Some(PathBuf::from("reads.cram")),
+            reference_fasta: Some(PathBuf::from("ref.fa.gz")),
+            hap1_fasta: None,
+            hap2_fasta: Some(PathBuf::from("hap2.fa.gz")),
+            reads_to_hap1_bam: None,
+            reads_to_hap2_bam: None,
+            cram_ref: None,
+            hap1_to_ref_bam: Some(PathBuf::from("h1_to_ref.bam")),
+            hap2_to_ref_bam: None,
+            ref_to_hap1_bam: None,
+            ref_to_hap2_bam: None,
+            hap1_to_hap2_bam: None,
+            hap2_to_hap1_bam: None,
+        };
+        let msg = ViewerApp::format_loading_status(&region, &paths);
+        assert!(msg.contains("chr1:100-200"));
+        assert!(msg.contains("CRAM"));
+        assert!(msg.contains("reference FASTA"));
+        assert!(msg.contains("haplotype FASTA"));
+        assert!(msg.contains("assembly tracks"));
     }
 
     #[test]

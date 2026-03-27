@@ -124,6 +124,7 @@ fi
 echo "Starting viewer..."
 echo "  Config:  ${CONFIG}"
 echo "  Binary:  ${VIEWER_BIN}"
+echo "  Status:  Initial GUI load can take up to 1 minute while indexes/data warm up"
 
 # Enable Mesa software rendering when no GPU is available (typical in
 # containers / Apptainer on HPC login nodes).  Users with a real GPU can
