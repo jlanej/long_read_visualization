@@ -169,6 +169,34 @@ impl PanelSyncManager {
         }
     }
 
+    /// Zoom centered on a specific genomic position (cursor-centric zoom).
+    ///
+    /// `cursor_frac`: the cursor position as a fraction of the panel width
+    /// (0.0 = left edge, 1.0 = right edge).  The genomic position under
+    /// the cursor remains fixed while the view scales around it.
+    pub fn zoom_at(&mut self, panel: PanelId, factor: f64, cursor_frac: f64) {
+        let idx = Self::idx(panel);
+        let pv = &self.panels[idx];
+        let span = pv.span();
+        // Genomic position under cursor
+        let cursor_pos = pv.view_start as f64 + span as f64 * cursor_frac.clamp(0.0, 1.0);
+        let new_span = ((span as f64 / factor).round() as u64).max(10);
+        // Keep cursor_pos at the same fractional position in the new view
+        let new_start_f = cursor_pos - new_span as f64 * cursor_frac.clamp(0.0, 1.0);
+        let new_start = if new_start_f < 0.0 {
+            0u64
+        } else {
+            new_start_f.round() as u64
+        };
+        let new_end = new_start + new_span;
+        self.panels[idx].view_start = new_start;
+        self.panels[idx].view_end = new_end;
+
+        if self.sync_enabled {
+            self.propagate_zoom(panel, factor);
+        }
+    }
+
     /// Pan the given panel by `delta` base pairs (positive = right).
     pub fn pan(&mut self, panel: PanelId, delta: i64) {
         let idx = Self::idx(panel);
@@ -610,5 +638,87 @@ mod tests {
             (mgr.view(PanelId::Reference).view_end as i64 - orig_end as i64).unsigned_abs();
         assert!(delta_start <= 1, "start drifted by {delta_start}");
         assert!(delta_end <= 1, "end drifted by {delta_end}");
+    }
+
+    // -- Cursor-centric zoom ------------------------------------------------
+
+    #[test]
+    fn test_zoom_at_center_same_as_zoom() {
+        let mut mgr1 = PanelSyncManager::new();
+        let mut mgr2 = PanelSyncManager::new();
+        let ref_r = make_region("chr1", 1000, 3000);
+        mgr1.set_regions(&ref_r, None, None);
+        mgr2.set_regions(&ref_r, None, None);
+        mgr1.sync_enabled = false;
+        mgr2.sync_enabled = false;
+
+        mgr1.zoom(PanelId::Reference, 2.0);
+        mgr2.zoom_at(PanelId::Reference, 2.0, 0.5);
+
+        // With cursor at center (0.5), should produce same result
+        assert_eq!(
+            mgr1.view(PanelId::Reference).view_start,
+            mgr2.view(PanelId::Reference).view_start
+        );
+        assert_eq!(
+            mgr1.view(PanelId::Reference).view_end,
+            mgr2.view(PanelId::Reference).view_end
+        );
+    }
+
+    #[test]
+    fn test_zoom_at_left_edge() {
+        let mut mgr = PanelSyncManager::new();
+        let ref_r = make_region("chr1", 1000, 3000);
+        mgr.set_regions(&ref_r, None, None);
+        mgr.sync_enabled = false;
+
+        // Zoom in at left edge — left should stay near 1000
+        mgr.zoom_at(PanelId::Reference, 2.0, 0.0);
+
+        let v = mgr.view(PanelId::Reference);
+        assert_eq!(v.view_start, 1000);
+        assert_eq!(v.span(), 1000); // 2000/2
+    }
+
+    #[test]
+    fn test_zoom_at_right_edge() {
+        let mut mgr = PanelSyncManager::new();
+        let ref_r = make_region("chr1", 1000, 3000);
+        mgr.set_regions(&ref_r, None, None);
+        mgr.sync_enabled = false;
+
+        // Zoom in at right edge — right should stay near 3000
+        mgr.zoom_at(PanelId::Reference, 2.0, 1.0);
+
+        let v = mgr.view(PanelId::Reference);
+        assert_eq!(v.view_end, 3000);
+        assert_eq!(v.span(), 1000);
+    }
+
+    #[test]
+    fn test_zoom_at_syncs_other_panels() {
+        let mut mgr = PanelSyncManager::new();
+        let ref_r = make_region("chr1", 1000, 3000);
+        let h1 = make_region("ctg1", 5000, 7000);
+        mgr.set_regions(&ref_r, Some(&h1), None);
+
+        mgr.zoom_at(PanelId::Reference, 2.0, 0.5);
+
+        // All panels should have matching spans
+        assert!(mgr.all_spans_match());
+        assert_eq!(mgr.view(PanelId::Reference).span(), 1000);
+    }
+
+    #[test]
+    fn test_zoom_at_minimum_span() {
+        let mut mgr = PanelSyncManager::new();
+        let ref_r = make_region("chr1", 1000, 1020);
+        mgr.set_regions(&ref_r, None, None);
+        mgr.sync_enabled = false;
+
+        mgr.zoom_at(PanelId::Reference, 100.0, 0.3);
+
+        assert!(mgr.view(PanelId::Reference).span() >= 10);
     }
 }

@@ -5,6 +5,7 @@ mod genome;
 mod panel_sync;
 mod region;
 mod region_cache;
+mod ruler;
 
 use std::path::PathBuf;
 
