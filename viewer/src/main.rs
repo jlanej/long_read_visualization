@@ -140,38 +140,7 @@ fn parse_args() -> CliArgs {
     if let Some(tsv_path) = &config_tsv {
         match DataPaths::from_tsv(tsv_path) {
             Ok(tsv_paths) => {
-                if data_paths.reference_fasta.is_none() {
-                    data_paths.reference_fasta = tsv_paths.reference_fasta;
-                }
-                if data_paths.hap1_fasta.is_none() {
-                    data_paths.hap1_fasta = tsv_paths.hap1_fasta;
-                }
-                if data_paths.hap2_fasta.is_none() {
-                    data_paths.hap2_fasta = tsv_paths.hap2_fasta;
-                }
-                if data_paths.reads_bam.is_none() {
-                    data_paths.reads_bam = tsv_paths.reads_bam;
-                }
-                // Discovered preprocessing output (always from TSV output_dir)
-                if data_paths.hap1_coord_index.is_none() {
-                    data_paths.hap1_coord_index = tsv_paths.hap1_coord_index;
-                }
-                if data_paths.hap2_coord_index.is_none() {
-                    data_paths.hap2_coord_index = tsv_paths.hap2_coord_index;
-                }
-                if data_paths.reads_to_hap1_bam.is_none() {
-                    data_paths.reads_to_hap1_bam = tsv_paths.reads_to_hap1_bam;
-                }
-                if data_paths.reads_to_hap2_bam.is_none() {
-                    data_paths.reads_to_hap2_bam = tsv_paths.reads_to_hap2_bam;
-                }
-                if data_paths.cram_ref.is_none() {
-                    data_paths.cram_ref = tsv_paths.cram_ref;
-                }
-                // Use regions from config if no manifest given on CLI
-                if manifest.is_none() {
-                    manifest = tsv_paths.regions;
-                }
+                merge_tsv_defaults(&mut data_paths, &mut manifest, tsv_paths);
             }
             Err(e) => {
                 eprintln!("Warning: failed to load config TSV: {e}");
@@ -190,5 +159,117 @@ fn parse_args() -> CliArgs {
         data_paths,
         samples,
         verbose,
+    }
+}
+
+fn merge_tsv_defaults(
+    data_paths: &mut DataPaths,
+    manifest: &mut Option<PathBuf>,
+    tsv_paths: DataPaths,
+) {
+    if data_paths.reference_fasta.is_none() {
+        data_paths.reference_fasta = tsv_paths.reference_fasta;
+    }
+    if data_paths.hap1_fasta.is_none() {
+        data_paths.hap1_fasta = tsv_paths.hap1_fasta;
+    }
+    if data_paths.hap2_fasta.is_none() {
+        data_paths.hap2_fasta = tsv_paths.hap2_fasta;
+    }
+    if data_paths.reads_bam.is_none() {
+        data_paths.reads_bam = tsv_paths.reads_bam;
+    }
+    // Discovered preprocessing output (always from TSV output_dir)
+    if data_paths.hap1_coord_index.is_none() {
+        data_paths.hap1_coord_index = tsv_paths.hap1_coord_index;
+    }
+    if data_paths.hap2_coord_index.is_none() {
+        data_paths.hap2_coord_index = tsv_paths.hap2_coord_index;
+    }
+    if data_paths.reads_to_hap1_bam.is_none() {
+        data_paths.reads_to_hap1_bam = tsv_paths.reads_to_hap1_bam;
+    }
+    if data_paths.reads_to_hap2_bam.is_none() {
+        data_paths.reads_to_hap2_bam = tsv_paths.reads_to_hap2_bam;
+    }
+    if data_paths.cram_ref.is_none() {
+        data_paths.cram_ref = tsv_paths.cram_ref;
+    }
+    if data_paths.hap1_to_ref_bam.is_none() {
+        data_paths.hap1_to_ref_bam = tsv_paths.hap1_to_ref_bam;
+    }
+    if data_paths.hap2_to_ref_bam.is_none() {
+        data_paths.hap2_to_ref_bam = tsv_paths.hap2_to_ref_bam;
+    }
+    if data_paths.ref_to_hap1_bam.is_none() {
+        data_paths.ref_to_hap1_bam = tsv_paths.ref_to_hap1_bam;
+    }
+    if data_paths.ref_to_hap2_bam.is_none() {
+        data_paths.ref_to_hap2_bam = tsv_paths.ref_to_hap2_bam;
+    }
+    if data_paths.hap1_to_hap2_bam.is_none() {
+        data_paths.hap1_to_hap2_bam = tsv_paths.hap1_to_hap2_bam;
+    }
+    if data_paths.hap2_to_hap1_bam.is_none() {
+        data_paths.hap2_to_hap1_bam = tsv_paths.hap2_to_hap1_bam;
+    }
+    if data_paths.output_dir.is_none() {
+        data_paths.output_dir = tsv_paths.output_dir;
+    }
+    if data_paths.sample_id.is_none() {
+        data_paths.sample_id = tsv_paths.sample_id;
+    }
+    // Use regions from config if no manifest given on CLI
+    if manifest.is_none() {
+        *manifest = tsv_paths.regions;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_merge_tsv_defaults_includes_discovery_context_and_cross_bams() {
+        let mut data_paths = DataPaths::default();
+        let mut manifest = None;
+
+        let tsv_paths = DataPaths {
+            output_dir: Some(PathBuf::from("/work/output/NA21110")),
+            sample_id: Some("NA21110".to_string()),
+            hap1_to_ref_bam: Some(PathBuf::from(
+                "/work/output/NA21110/NA21110_hap1_to_ref.bam",
+            )),
+            hap2_to_ref_bam: Some(PathBuf::from(
+                "/work/output/NA21110/NA21110_hap2_to_ref.bam",
+            )),
+            ref_to_hap1_bam: Some(PathBuf::from(
+                "/work/output/NA21110/NA21110_ref_to_hap1.bam",
+            )),
+            ref_to_hap2_bam: Some(PathBuf::from(
+                "/work/output/NA21110/NA21110_ref_to_hap2.bam",
+            )),
+            hap1_to_hap2_bam: Some(PathBuf::from(
+                "/work/output/NA21110/NA21110_hap1_to_hap2.bam",
+            )),
+            hap2_to_hap1_bam: Some(PathBuf::from(
+                "/work/output/NA21110/NA21110_hap2_to_hap1.bam",
+            )),
+            ..DataPaths::default()
+        };
+
+        merge_tsv_defaults(&mut data_paths, &mut manifest, tsv_paths);
+
+        assert_eq!(
+            data_paths.output_dir.as_deref(),
+            Some(std::path::Path::new("/work/output/NA21110"))
+        );
+        assert_eq!(data_paths.sample_id.as_deref(), Some("NA21110"));
+        assert!(data_paths.hap1_to_ref_bam.is_some());
+        assert!(data_paths.hap2_to_ref_bam.is_some());
+        assert!(data_paths.ref_to_hap1_bam.is_some());
+        assert!(data_paths.ref_to_hap2_bam.is_some());
+        assert!(data_paths.hap1_to_hap2_bam.is_some());
+        assert!(data_paths.hap2_to_hap1_bam.is_some());
     }
 }
