@@ -69,6 +69,10 @@ impl DataPaths {
     ///
     /// If the TSV contains multiple samples, only the first is loaded.
     pub fn from_tsv(tsv_path: &std::path::Path) -> Result<Self, String> {
+        use crate::verbose::is_verbose;
+        if is_verbose() {
+            eprintln!("[viewer] Loading config TSV: {}", tsv_path.display());
+        }
         let content = std::fs::read_to_string(tsv_path)
             .map_err(|e| format!("Failed to read config TSV: {e}"))?;
 
@@ -122,18 +126,39 @@ impl DataPaths {
         let output_dir = non_empty("output_dir");
         let sample_id = non_empty("sample_id");
 
+        if is_verbose() {
+            let sid = sample_id
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<none>".into());
+            let odir = output_dir
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<none>".into());
+            eprintln!("[viewer] TSV sample_id={sid}, output_dir={odir}");
+        }
+
         let discover = |suffix: &str| -> Option<PathBuf> {
             let dir = output_dir.as_ref()?;
             let sid = sample_id.as_ref()?.to_string_lossy().to_string();
             let candidate = dir.join(format!("{sid}{suffix}"));
             if candidate.is_file() {
+                if is_verbose() {
+                    eprintln!("[viewer]   FOUND  {suffix} -> {}", candidate.display());
+                }
                 Some(candidate)
             } else {
+                if is_verbose() {
+                    eprintln!(
+                        "[viewer]   MISS   {suffix} -> {} (not found)",
+                        candidate.display()
+                    );
+                }
                 None
             }
         };
 
-        Ok(Self {
+        let paths = Self {
             reference_fasta: non_empty("reference"),
             hap1_fasta: non_empty("hap1_assembly"),
             hap2_fasta: non_empty("hap2_assembly"),
@@ -152,13 +177,180 @@ impl DataPaths {
             ref_to_hap2_bam: discover("_ref_to_hap2.bam"),
             hap1_to_hap2_bam: discover("_hap1_to_hap2.bam"),
             hap2_to_hap1_bam: discover("_hap2_to_hap1.bam"),
-        })
+        };
+
+        if is_verbose() {
+            Self::log_summary_stderr(&paths);
+        }
+
+        Ok(paths)
+    }
+
+    /// Print a summary of configured paths to stderr.
+    fn log_summary_stderr(p: &Self) {
+        let yn = |opt: &Option<PathBuf>| -> &str { if opt.is_some() { "YES" } else { "no" } };
+        eprintln!("[viewer] ── Data paths summary ──");
+        eprintln!(
+            "[viewer]   reference_fasta     : {} {}",
+            yn(&p.reference_fasta),
+            p.reference_fasta
+                .as_deref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
+        );
+        eprintln!(
+            "[viewer]   hap1_fasta          : {} {}",
+            yn(&p.hap1_fasta),
+            p.hap1_fasta
+                .as_deref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
+        );
+        eprintln!(
+            "[viewer]   hap2_fasta          : {} {}",
+            yn(&p.hap2_fasta),
+            p.hap2_fasta
+                .as_deref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
+        );
+        eprintln!(
+            "[viewer]   reads_bam           : {} {}",
+            yn(&p.reads_bam),
+            p.reads_bam
+                .as_deref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
+        );
+        eprintln!(
+            "[viewer]   hap1_coord_index    : {}",
+            yn(&p.hap1_coord_index)
+        );
+        eprintln!(
+            "[viewer]   hap2_coord_index    : {}",
+            yn(&p.hap2_coord_index)
+        );
+        eprintln!(
+            "[viewer]   reads_to_hap1_bam   : {}",
+            yn(&p.reads_to_hap1_bam)
+        );
+        eprintln!(
+            "[viewer]   reads_to_hap2_bam   : {}",
+            yn(&p.reads_to_hap2_bam)
+        );
+        eprintln!(
+            "[viewer]   hap1_to_ref_bam     : {}",
+            yn(&p.hap1_to_ref_bam)
+        );
+        eprintln!(
+            "[viewer]   hap2_to_ref_bam     : {}",
+            yn(&p.hap2_to_ref_bam)
+        );
+        eprintln!(
+            "[viewer]   ref_to_hap1_bam     : {}",
+            yn(&p.ref_to_hap1_bam)
+        );
+        eprintln!(
+            "[viewer]   ref_to_hap2_bam     : {}",
+            yn(&p.ref_to_hap2_bam)
+        );
+        eprintln!(
+            "[viewer]   hap1_to_hap2_bam    : {}",
+            yn(&p.hap1_to_hap2_bam)
+        );
+        eprintln!(
+            "[viewer]   hap2_to_hap1_bam    : {}",
+            yn(&p.hap2_to_hap1_bam)
+        );
+        eprintln!("[viewer]   cram_ref            : {}", yn(&p.cram_ref));
+    }
+
+    /// Write a summary of configured paths to a [`LogBuffer`].
+    pub fn log_summary(&self, log: &crate::verbose::LogBuffer) {
+        use crate::verbose::vlog;
+        let yn = |opt: &Option<PathBuf>| -> &str { if opt.is_some() { "YES" } else { "no" } };
+        vlog!(log, "── Data paths summary ──");
+        vlog!(
+            log,
+            "  reference_fasta     : {} {}",
+            yn(&self.reference_fasta),
+            self.reference_fasta
+                .as_deref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
+        );
+        vlog!(
+            log,
+            "  hap1_fasta          : {} {}",
+            yn(&self.hap1_fasta),
+            self.hap1_fasta
+                .as_deref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
+        );
+        vlog!(
+            log,
+            "  hap2_fasta          : {} {}",
+            yn(&self.hap2_fasta),
+            self.hap2_fasta
+                .as_deref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
+        );
+        vlog!(
+            log,
+            "  reads_bam           : {} {}",
+            yn(&self.reads_bam),
+            self.reads_bam
+                .as_deref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
+        );
+        vlog!(
+            log,
+            "  hap1_coord_index    : {}",
+            yn(&self.hap1_coord_index)
+        );
+        vlog!(
+            log,
+            "  hap2_coord_index    : {}",
+            yn(&self.hap2_coord_index)
+        );
+        vlog!(
+            log,
+            "  reads_to_hap1_bam   : {}",
+            yn(&self.reads_to_hap1_bam)
+        );
+        vlog!(
+            log,
+            "  reads_to_hap2_bam   : {}",
+            yn(&self.reads_to_hap2_bam)
+        );
+        vlog!(log, "  hap1_to_ref_bam     : {}", yn(&self.hap1_to_ref_bam));
+        vlog!(log, "  hap2_to_ref_bam     : {}", yn(&self.hap2_to_ref_bam));
+        vlog!(log, "  ref_to_hap1_bam     : {}", yn(&self.ref_to_hap1_bam));
+        vlog!(log, "  ref_to_hap2_bam     : {}", yn(&self.ref_to_hap2_bam));
+        vlog!(
+            log,
+            "  hap1_to_hap2_bam    : {}",
+            yn(&self.hap1_to_hap2_bam)
+        );
+        vlog!(
+            log,
+            "  hap2_to_hap1_bam    : {}",
+            yn(&self.hap2_to_hap1_bam)
+        );
+        vlog!(log, "  cram_ref            : {}", yn(&self.cram_ref));
     }
 }
 
 /// Parse ALL samples from a TSV config file, returning (sample_id, DataPaths)
 /// for each data row.
 pub fn parse_all_samples(tsv_path: &std::path::Path) -> Result<Vec<(String, DataPaths)>, String> {
+    use crate::verbose::is_verbose;
+    if is_verbose() {
+        eprintln!("[viewer] parse_all_samples: {}", tsv_path.display());
+    }
     let content =
         std::fs::read_to_string(tsv_path).map_err(|e| format!("Failed to read config TSV: {e}"))?;
 
@@ -206,6 +398,14 @@ pub fn parse_all_samples(tsv_path: &std::path::Path) -> Result<Vec<(String, Data
         let output_dir = non_empty("output_dir");
         let sid_for_discover = non_empty("sample_id");
 
+        if is_verbose() {
+            let odir = output_dir
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<none>".into());
+            eprintln!("[viewer] parse_all_samples: row sample_id={sample_id}, output_dir={odir}");
+        }
+
         let discover = |suffix: &str| -> Option<PathBuf> {
             let dir = output_dir.as_ref()?;
             let sid = sid_for_discover.as_ref()?.to_string_lossy().to_string();
@@ -241,6 +441,12 @@ pub fn parse_all_samples(tsv_path: &std::path::Path) -> Result<Vec<(String, Data
 
     if samples.is_empty() {
         return Err("No data rows found in TSV".to_string());
+    }
+    if is_verbose() {
+        eprintln!(
+            "[viewer] parse_all_samples: found {} sample(s)",
+            samples.len()
+        );
     }
     Ok(samples)
 }
@@ -470,6 +676,10 @@ pub struct ViewerApp {
     sv_annotations: Vec<SvAnnotation>,
     /// Whether a PNG screenshot export is pending.
     pending_screenshot: bool,
+    /// Shared log buffer for verbose diagnostic messages (GUI + stderr).
+    pub log: crate::verbose::LogBuffer,
+    /// Whether the log panel is expanded in the GUI.
+    show_log_panel: bool,
 }
 
 impl Default for ViewerApp {
@@ -501,6 +711,8 @@ impl Default for ViewerApp {
             show_sv_overlay: false,
             sv_annotations: Vec::new(),
             pending_screenshot: false,
+            log: crate::verbose::LogBuffer::new(),
+            show_log_panel: true,
         }
     }
 }
@@ -575,22 +787,39 @@ impl ViewerApp {
         manifest_path: Option<&std::path::Path>,
         data_paths: DataPaths,
         samples: Vec<(String, DataPaths)>,
+        log: crate::verbose::LogBuffer,
     ) -> Self {
+        use crate::verbose::vlog;
         configure_fonts(&cc.egui_ctx);
+
+        vlog!(log, "Initializing ViewerApp");
+        data_paths.log_summary(&log);
+
+        if !samples.is_empty() {
+            vlog!(log, "Loaded {} sample(s) from config TSV", samples.len());
+            for (i, (sid, _)) in samples.iter().enumerate() {
+                vlog!(log, "  sample[{i}]: {sid}");
+            }
+        }
+
         let mut app = Self {
             data_paths,
-            loader: Some(DataLoader::new(cc.egui_ctx.clone())),
+            loader: Some(DataLoader::new(cc.egui_ctx.clone(), log.clone())),
             samples,
+            log: log.clone(),
             ..Self::default()
         };
 
         // Load coordinate mapping index if provided (legacy single index).
         if let Some(idx_path) = &app.data_paths.coordinate_index {
+            vlog!(log, "Loading legacy coord index: {}", idx_path.display());
             match genome::coordinate_mapper::load_index(&idx_path.to_string_lossy()) {
                 Ok(index) => {
+                    vlog!(log, "  coord index loaded OK ({} contigs)", index.len());
                     app.coord_index = Some(index);
                 }
                 Err(e) => {
+                    vlog!(log, "  WARNING: failed to load coord index: {e}");
                     app.status_message = format!("Warning: failed to load coord index: {e}");
                 }
             }
@@ -598,32 +827,55 @@ impl ViewerApp {
 
         // Load hap1 coordinate mapping index.
         if let Some(idx_path) = &app.data_paths.hap1_coord_index {
+            vlog!(log, "Loading hap1 coord index: {}", idx_path.display());
             match genome::coordinate_mapper::load_index(&idx_path.to_string_lossy()) {
                 Ok(index) => {
+                    vlog!(
+                        log,
+                        "  hap1 coord index loaded OK ({} contigs)",
+                        index.len()
+                    );
                     app.hap1_coord_index = Some(index);
                 }
                 Err(e) => {
-                    eprintln!("Warning: failed to load hap1 coord index: {e}");
+                    vlog!(log, "  WARNING: failed to load hap1 coord index: {e}");
                 }
             }
+        } else {
+            vlog!(log, "No hap1 coord index configured");
         }
 
         // Load hap2 coordinate mapping index.
         if let Some(idx_path) = &app.data_paths.hap2_coord_index {
+            vlog!(log, "Loading hap2 coord index: {}", idx_path.display());
             match genome::coordinate_mapper::load_index(&idx_path.to_string_lossy()) {
                 Ok(index) => {
+                    vlog!(
+                        log,
+                        "  hap2 coord index loaded OK ({} contigs)",
+                        index.len()
+                    );
                     app.hap2_coord_index = Some(index);
                 }
                 Err(e) => {
-                    eprintln!("Warning: failed to load hap2 coord index: {e}");
+                    vlog!(log, "  WARNING: failed to load hap2 coord index: {e}");
                 }
             }
+        } else {
+            vlog!(log, "No hap2 coord index configured");
         }
 
         // Load manifest/regions if provided.
         if let Some(path) = manifest_path {
+            vlog!(log, "Loading manifest/regions: {}", path.display());
             match app.navigator.load_regions(path) {
                 Ok(()) => {
+                    vlog!(
+                        log,
+                        "Loaded {} regions from {}",
+                        app.navigator.len(),
+                        path.display()
+                    );
                     app.status_message = format!(
                         "Loaded {} regions from {}",
                         app.navigator.len(),
@@ -633,9 +885,12 @@ impl ViewerApp {
                     app.load_region_data();
                 }
                 Err(e) => {
+                    vlog!(log, "ERROR loading manifest: {e}");
                     app.status_message = format!("Error loading manifest: {e}");
                 }
             }
+        } else {
+            vlog!(log, "No manifest/regions path provided");
         }
         app
     }
@@ -659,10 +914,17 @@ impl ViewerApp {
     /// When no loader is present (unit tests), it falls back to synchronous
     /// loading so existing tests continue to pass without a GUI context.
     fn load_region_data(&mut self) {
+        use crate::verbose::vlog;
         let entry = match self.navigator.current() {
             Some(e) => e.clone(),
             None => return,
         };
+
+        vlog!(
+            self.log,
+            "load_region_data: ref_region={}",
+            entry.ref_region
+        );
 
         // -- Compute haplotype regions via coordinate mapper when missing --
         let hap1_region = entry.hap1_region.clone().or_else(|| {
@@ -686,6 +948,23 @@ impl ViewerApp {
             ))
         });
 
+        vlog!(
+            self.log,
+            "  hap1_region: {}",
+            hap1_region
+                .as_ref()
+                .map(|r| r.to_string())
+                .unwrap_or_else(|| "NONE (no coord index or no mapping found)".into())
+        );
+        vlog!(
+            self.log,
+            "  hap2_region: {}",
+            hap2_region
+                .as_ref()
+                .map(|r| r.to_string())
+                .unwrap_or_else(|| "NONE (no coord index or no mapping found)".into())
+        );
+
         // Sync panel views to the new region.
         self.sync_manager.set_regions(
             &entry.ref_region,
@@ -702,9 +981,11 @@ impl ViewerApp {
 
         // -- Check LRU cache first --
         if let Some(cached) = self.region_cache.get(&cache_key).cloned() {
+            vlog!(self.log, "  cache HIT for key={cache_key}");
             self.apply_cached_region(&cached);
             return;
         }
+        vlog!(self.log, "  cache MISS – dispatching load");
 
         // -- Dispatch to background loader if available --
         if let Some(loader) = &self.loader {
@@ -762,12 +1043,28 @@ impl ViewerApp {
 
     /// Poll the background loader for completed results.  Called each frame.
     fn poll_load_results(&mut self) {
+        use crate::verbose::vlog;
         let result = match &self.loader {
             Some(loader) => loader.try_recv(),
             None => None,
         };
         if let Some(result) = result {
             self.is_loading = false;
+            vlog!(
+                self.log,
+                "Background load complete (id={}, ref_rows={}, hap1_rows={}, hap2_rows={})",
+                result.id,
+                result.data.ref_data.rows.len(),
+                result.data.hap1_data.rows.len(),
+                result.data.hap2_data.rows.len()
+            );
+            vlog!(
+                self.log,
+                "  ref assembly_tracks={}, hap1 assembly_tracks={}, hap2 assembly_tracks={}",
+                result.data.ref_data.assembly_tracks.len(),
+                result.data.hap1_data.assembly_tracks.len(),
+                result.data.hap2_data.assembly_tracks.len()
+            );
             // Store in cache before applying
             self.region_cache
                 .insert(result.cache_key.clone(), result.data.clone());
@@ -1108,6 +1405,7 @@ impl ViewerApp {
 
     /// Render the top toolbar with navigation controls.
     fn show_toolbar(&mut self, ui: &mut egui::Ui) {
+        use crate::verbose::vlog;
         ui.horizontal(|ui| {
             // File menu
             ui.menu_button("File", |ui| {
@@ -1293,6 +1591,11 @@ impl ViewerApp {
                 .clicked()
             {
                 self.display_config.squished = !self.display_config.squished;
+                vlog!(
+                    self.log,
+                    "Toggle display: squished={}",
+                    self.display_config.squished
+                );
             }
 
             // Display toggle: hide small indels
@@ -1307,6 +1610,11 @@ impl ViewerApp {
                 .clicked()
             {
                 self.display_config.hide_small_indels = !self.display_config.hide_small_indels;
+                vlog!(
+                    self.log,
+                    "Toggle display: hide_small_indels={}",
+                    self.display_config.hide_small_indels
+                );
             }
 
             // Display toggle: show mismatches
@@ -1321,6 +1629,11 @@ impl ViewerApp {
                 .clicked()
             {
                 self.display_config.show_mismatches = !self.display_config.show_mismatches;
+                vlog!(
+                    self.log,
+                    "Toggle display: show_mismatches={}",
+                    self.display_config.show_mismatches
+                );
             }
 
             // Display toggle: show soft clips
@@ -1335,6 +1648,11 @@ impl ViewerApp {
                 .clicked()
             {
                 self.display_config.show_soft_clips = !self.display_config.show_soft_clips;
+                vlog!(
+                    self.log,
+                    "Toggle display: show_soft_clips={}",
+                    self.display_config.show_soft_clips
+                );
             }
 
             // Display toggle: sort by haplotype
@@ -1349,6 +1667,11 @@ impl ViewerApp {
                 .clicked()
             {
                 self.display_config.sort_by_haplotype = !self.display_config.sort_by_haplotype;
+                vlog!(
+                    self.log,
+                    "Toggle display: sort_by_haplotype={}",
+                    self.display_config.sort_by_haplotype
+                );
                 // Re-pack reads with the new sort mode
                 self.load_region_data();
             }
@@ -1365,6 +1688,11 @@ impl ViewerApp {
                 .clicked()
             {
                 self.display_config.show_coverage = !self.display_config.show_coverage;
+                vlog!(
+                    self.log,
+                    "Toggle display: show_coverage={}",
+                    self.display_config.show_coverage
+                );
             }
 
             // Display toggle: colorblind palette
@@ -1380,6 +1708,11 @@ impl ViewerApp {
             {
                 self.display_config.use_colorblind_palette =
                     !self.display_config.use_colorblind_palette;
+                vlog!(
+                    self.log,
+                    "Toggle display: colorblind_palette={}",
+                    self.display_config.use_colorblind_palette
+                );
             }
 
             // Display toggle: SV overlay
@@ -1394,6 +1727,11 @@ impl ViewerApp {
                 .clicked()
             {
                 self.show_sv_overlay = !self.show_sv_overlay;
+                vlog!(
+                    self.log,
+                    "Toggle display: show_sv_overlay={}",
+                    self.show_sv_overlay
+                );
             }
 
             ui.separator();
@@ -1410,6 +1748,11 @@ impl ViewerApp {
                 .clicked()
             {
                 self.sync_manager.sync_enabled = !self.sync_manager.sync_enabled;
+                vlog!(
+                    self.log,
+                    "Toggle sync: enabled={}",
+                    self.sync_manager.sync_enabled
+                );
             }
 
             // Zoom controls
@@ -1447,6 +1790,7 @@ impl ViewerApp {
                 .clicked()
             {
                 self.dot_plot.show = !self.dot_plot.show;
+                vlog!(self.log, "Toggle dot_plot: show={}", self.dot_plot.show);
                 if self.dot_plot.show {
                     self.recompute_dot_plot();
                 }
@@ -1458,6 +1802,7 @@ impl ViewerApp {
                 .on_hover_text("Compare read names across all three panels")
                 .clicked()
             {
+                vlog!(self.log, "Compare Reads triggered");
                 self.compare_result = Some(self.compare_reads());
                 self.show_compare_reads = true;
             }
@@ -2182,25 +2527,55 @@ impl eframe::App for ViewerApp {
             self.show_toolbar(ui);
         });
 
-        // Bottom status bar
-        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if self.is_loading {
-                    ui.spinner();
+        // Bottom status bar + log panel
+        egui::TopBottomPanel::bottom("status_bar")
+            .resizable(true)
+            .min_height(24.0)
+            .default_height(if self.show_log_panel { 120.0 } else { 24.0 })
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if self.is_loading {
+                        ui.spinner();
+                    }
                     ui.label(
                         egui::RichText::new(&self.status_message)
                             .small()
                             .color(egui::Color32::from_gray(180)),
                     );
-                } else {
-                    ui.label(
-                        egui::RichText::new(&self.status_message)
-                            .small()
-                            .color(egui::Color32::from_gray(180)),
-                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let toggle_label = if self.show_log_panel {
+                            "Log ▼"
+                        } else {
+                            "Log ▶"
+                        };
+                        if ui
+                            .small_button(toggle_label)
+                            .on_hover_text("Toggle verbose log panel")
+                            .clicked()
+                        {
+                            self.show_log_panel = !self.show_log_panel;
+                        }
+                    });
+                });
+
+                if self.show_log_panel {
+                    ui.separator();
+                    let log_lines = self.log.lines();
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .stick_to_bottom(true)
+                        .show(ui, |ui| {
+                            for line in &log_lines {
+                                ui.label(
+                                    egui::RichText::new(line)
+                                        .monospace()
+                                        .small()
+                                        .color(egui::Color32::from_gray(160)),
+                                );
+                            }
+                        });
                 }
             });
-        });
 
         // Clone display_config for immutable borrow inside closure
         let config = self.display_config.clone();

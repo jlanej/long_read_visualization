@@ -6,13 +6,24 @@ mod panel_sync;
 mod region;
 mod region_cache;
 mod ruler;
+mod verbose;
 
 use std::path::PathBuf;
 
 use app::{DataPaths, ViewerApp, parse_all_samples};
+use verbose::LogBuffer;
 
 fn main() -> eframe::Result<()> {
     let args = parse_args();
+
+    // Apply verbose/quiet setting before anything else.
+    verbose::set_verbose(args.verbose);
+
+    let log_buf = LogBuffer::new();
+
+    if args.verbose {
+        log_buf.log("Verbose logging enabled (use --quiet to suppress)");
+    }
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
@@ -31,6 +42,7 @@ fn main() -> eframe::Result<()> {
                 args.manifest.as_deref(),
                 args.data_paths,
                 args.samples,
+                log_buf.clone(),
             )))
         }),
     );
@@ -60,6 +72,8 @@ struct CliArgs {
     manifest: Option<PathBuf>,
     data_paths: DataPaths,
     samples: Vec<(String, DataPaths)>,
+    /// Verbose logging (default: true, disabled by --quiet).
+    verbose: bool,
 }
 
 fn parse_args() -> CliArgs {
@@ -67,10 +81,14 @@ fn parse_args() -> CliArgs {
     let mut manifest: Option<PathBuf> = None;
     let mut data_paths = DataPaths::default();
     let mut config_tsv: Option<PathBuf> = None;
+    let mut verbose = true;
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--quiet" | "-q" => {
+                verbose = false;
+            }
             "--config" => {
                 i += 1;
                 if i < args.len() {
@@ -171,5 +189,6 @@ fn parse_args() -> CliArgs {
         manifest,
         data_paths,
         samples,
+        verbose,
     }
 }
