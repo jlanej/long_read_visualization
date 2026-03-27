@@ -78,7 +78,6 @@ pub struct Manifest {
 
 /// Summary of the region currently being displayed.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct RegionEntry {
     pub label: String,
     pub ref_region: GenomicRegion,
@@ -89,6 +88,7 @@ pub struct RegionEntry {
     /// SV size in base pairs.
     pub sv_size: u64,
     /// Free-form description.
+    #[allow(dead_code)]
     pub description: String,
 }
 

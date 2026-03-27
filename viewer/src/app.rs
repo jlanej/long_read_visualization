@@ -386,13 +386,15 @@ pub struct CompareReadsResult {
 
 /// An SV gap event annotation for inter-panel display.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct SvAnnotation {
     pub event_type: genome::coordinate_mapper::EventType,
     pub ref_start: u64,
     pub ref_end: u64,
+    #[allow(dead_code)]
     pub asm_start: u64,
+    #[allow(dead_code)]
     pub asm_end: u64,
+    #[allow(dead_code)]
     pub gap_size: Option<u64>,
     pub label: String,
 }
@@ -1143,20 +1145,10 @@ impl ViewerApp {
                     if let Some((_, dp)) = self.samples.get(self.selected_sample_idx) {
                         self.data_paths = dp.clone();
                         self.coord_index = None;
-                        self.hap1_coord_index = None;
-                        self.hap2_coord_index = None;
-                        if let Some(idx_path) = &self.data_paths.hap1_coord_index
-                            && let Ok(index) =
-                                genome::coordinate_mapper::load_index(&idx_path.to_string_lossy())
-                        {
-                            self.hap1_coord_index = Some(index);
-                        }
-                        if let Some(idx_path) = &self.data_paths.hap2_coord_index
-                            && let Ok(index) =
-                                genome::coordinate_mapper::load_index(&idx_path.to_string_lossy())
-                        {
-                            self.hap2_coord_index = Some(index);
-                        }
+                        self.hap1_coord_index =
+                            try_load_coord_index(self.data_paths.hap1_coord_index.as_deref());
+                        self.hap2_coord_index =
+                            try_load_coord_index(self.data_paths.hap2_coord_index.as_deref());
                         self.region_cache.clear();
                         self.load_region_data();
                     }
@@ -2223,6 +2215,7 @@ impl eframe::App for ViewerApp {
                 0.0
             };
             let dot_plot_height = if self.dot_plot.show { 280.0 } else { 0.0 };
+            // *2.0 because the overlay appears between Ref↔Hap1 and Hap1↔Hap2
             let available = ui.available_height() - dot_plot_height - sv_overlay_height * 2.0;
             let panel_height = (available - 16.0) / 3.0;
 
@@ -2452,6 +2445,14 @@ fn load_assembly_tracks(
         }
     }
     tracks
+}
+
+/// Attempt to load a coordinate mapping index from an optional path.
+fn try_load_coord_index(
+    path: Option<&std::path::Path>,
+) -> Option<genome::coordinate_mapper::MappingIndex> {
+    let p = path?;
+    genome::coordinate_mapper::load_index(&p.to_string_lossy()).ok()
 }
 
 /// Configure default fonts/styles.
