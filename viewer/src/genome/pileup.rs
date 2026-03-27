@@ -40,6 +40,8 @@ pub struct PileupDisplayConfig {
     pub show_mismatches: bool,
     /// If true, show coverage histogram above reads.
     pub show_coverage: bool,
+    /// If true, use colorblind-safe palette for haplotype coloring.
+    pub use_colorblind_palette: bool,
 }
 
 impl Default for PileupDisplayConfig {
@@ -52,6 +54,7 @@ impl Default for PileupDisplayConfig {
             show_soft_clips: false,
             show_mismatches: false,
             show_coverage: false,
+            use_colorblind_palette: false,
         }
     }
 }
@@ -71,6 +74,15 @@ pub const EXPANDED_ROW_HEIGHT: f32 = 10.0;
 /// Gap between rows in pixels.
 pub const ROW_SPACING: f32 = 1.0;
 
+/// Color palette selection for haplotype read coloring.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorPalette {
+    /// Default green/orange palette.
+    Default,
+    /// Colorblind-safe blue/orange palette (ColorBrewer).
+    ColorblindSafe,
+}
+
 /// Map an HP (haplotype) tag value to a display color.
 ///
 /// - HP 1 → green
@@ -82,6 +94,29 @@ pub fn hp_color(haplotype: Option<u8>) -> [u8; 3] {
         Some(1) => [100, 200, 100], // green
         Some(2) => [230, 160, 60],  // orange
         _ => [160, 160, 160],       // grey (ambiguous / unphased)
+    }
+}
+
+/// Colorblind-safe HP colors using ColorBrewer blue/orange palette.
+///
+/// - HP 1 → blue  [55, 126, 184]
+/// - HP 2 → orange [255, 127, 0]
+/// - None / other → grey [160, 160, 160]
+#[inline]
+pub fn colorblind_hp_color(haplotype: Option<u8>) -> [u8; 3] {
+    match haplotype {
+        Some(1) => [55, 126, 184], // blue (ColorBrewer)
+        Some(2) => [255, 127, 0],  // orange (ColorBrewer)
+        _ => [160, 160, 160],      // grey
+    }
+}
+
+/// Return the HP color for a given palette.
+#[inline]
+pub fn hp_color_for_palette(haplotype: Option<u8>, palette: ColorPalette) -> [u8; 3] {
+    match palette {
+        ColorPalette::Default => hp_color(haplotype),
+        ColorPalette::ColorblindSafe => colorblind_hp_color(haplotype),
     }
 }
 
@@ -233,6 +268,11 @@ pub fn layout_read_rects(
     };
 
     let mut rects = Vec::new();
+    let palette = if config.use_colorblind_palette {
+        ColorPalette::ColorblindSafe
+    } else {
+        ColorPalette::Default
+    };
     for row in rows {
         let y = row.y_offset as f32 * (row_h + ROW_SPACING);
         for read in &row.reads {
@@ -244,7 +284,7 @@ pub fn layout_read_rects(
             }
             let x = (r_start - view_start) as f32 * bp_per_px;
             let w = ((r_end - r_start + 1) as f32 * bp_per_px).max(1.0);
-            let color = hp_color(read.haplotype);
+            let color = hp_color_for_palette(read.haplotype, palette);
             rects.push(ReadRect {
                 x,
                 y,
@@ -1610,5 +1650,90 @@ mod tests {
     fn test_display_config_coverage_default_off() {
         let cfg = PileupDisplayConfig::default();
         assert!(!cfg.show_coverage, "coverage should be off by default");
+    }
+
+    // -- Colorblind palette tests --
+
+    #[test]
+    fn test_colorblind_hp_color_hp1() {
+        assert_eq!(colorblind_hp_color(Some(1)), [55, 126, 184]);
+    }
+
+    #[test]
+    fn test_colorblind_hp_color_hp2() {
+        assert_eq!(colorblind_hp_color(Some(2)), [255, 127, 0]);
+    }
+
+    #[test]
+    fn test_colorblind_hp_color_none() {
+        assert_eq!(colorblind_hp_color(None), [160, 160, 160]);
+    }
+
+    #[test]
+    fn test_colorblind_hp_color_other() {
+        assert_eq!(colorblind_hp_color(Some(3)), [160, 160, 160]);
+    }
+
+    #[test]
+    fn test_color_palette_default_matches_hp_color() {
+        assert_eq!(
+            hp_color_for_palette(Some(1), ColorPalette::Default),
+            hp_color(Some(1))
+        );
+        assert_eq!(
+            hp_color_for_palette(Some(2), ColorPalette::Default),
+            hp_color(Some(2))
+        );
+        assert_eq!(
+            hp_color_for_palette(None, ColorPalette::Default),
+            hp_color(None)
+        );
+    }
+
+    #[test]
+    fn test_color_palette_colorblind_matches_colorblind_fn() {
+        assert_eq!(
+            hp_color_for_palette(Some(1), ColorPalette::ColorblindSafe),
+            colorblind_hp_color(Some(1))
+        );
+        assert_eq!(
+            hp_color_for_palette(Some(2), ColorPalette::ColorblindSafe),
+            colorblind_hp_color(Some(2))
+        );
+        assert_eq!(
+            hp_color_for_palette(None, ColorPalette::ColorblindSafe),
+            colorblind_hp_color(None)
+        );
+    }
+
+    #[test]
+    fn test_color_palette_enum_equality() {
+        assert_eq!(ColorPalette::Default, ColorPalette::Default);
+        assert_ne!(ColorPalette::Default, ColorPalette::ColorblindSafe);
+    }
+
+    #[test]
+    fn test_display_config_colorblind_default_off() {
+        let cfg = PileupDisplayConfig::default();
+        assert!(
+            !cfg.use_colorblind_palette,
+            "colorblind palette should be off by default"
+        );
+    }
+
+    #[test]
+    fn test_layout_read_rects_colorblind_palette() {
+        let reads = vec![make_read_hp("r1", 100, 200, Some(1))];
+        let rows = pack_reads(reads);
+        let mut config = PileupDisplayConfig::default();
+
+        // Default palette → green for HP1
+        let rects = layout_read_rects(&rows, &config, 100, 200, 100.0);
+        assert_eq!(rects[0].color, [100, 200, 100]);
+
+        // Colorblind palette → blue for HP1
+        config.use_colorblind_palette = true;
+        let rects = layout_read_rects(&rows, &config, 100, 200, 100.0);
+        assert_eq!(rects[0].color, [55, 126, 184]);
     }
 }
