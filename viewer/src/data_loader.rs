@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread;
+use std::time::Instant;
 
 use crate::genome;
 use crate::genome::FastaSequence;
@@ -219,11 +220,45 @@ fn execute_load(
             .cram_ref
             .as_deref()
             .or(req.paths.reference_fasta.as_deref());
-        let result = if reads_path.extension().is_some_and(|e| e == "cram") {
+        let is_cram = reads_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("cram"));
+        if is_cram {
+            let crai_path = reads_path.with_extension("cram.crai");
+            let cram_ref_str = cram_ref
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<none>".to_string());
+            vlog!(
+                log,
+                "[loader] Ref panel: CRAM diagnostics: cram_ref={cram_ref_str}, crai={} ({})",
+                crai_path.display(),
+                if crai_path.exists() {
+                    "exists"
+                } else {
+                    "MISSING"
+                }
+            );
+        }
+        let query_start = Instant::now();
+        let result = if is_cram {
             genome::bam::query_cram(reads_path, cram_ref, &region_str)
         } else {
             genome::bam::query_bam(reads_path, &region_str)
         };
+        let query_elapsed = query_start.elapsed();
+        vlog!(
+            log,
+            "[loader] Ref panel: read query finished in {} ms (mode={})",
+            query_elapsed.as_millis(),
+            if is_cram { "CRAM" } else { "BAM" }
+        );
+        if is_cram && query_elapsed.as_secs_f64() >= 1.0 {
+            vlog!(
+                log,
+                "[loader] Ref panel: CRAM query exceeded 1s; confirm CRAI presence and reference accessibility"
+            );
+        }
         match result {
             Ok(reads) => {
                 let n_reads = reads.len();
@@ -769,5 +804,52 @@ mod tests {
             "chr1:100-200",
         );
         assert!(tracks.is_empty());
+    }
+
+    #[test]
+    fn test_execute_load_logs_cram_diagnostics_and_timing() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let req = LoadRequest {
+            id: 1,
+            ref_region: GenomicRegion {
+                chrom: "chr1".to_string(),
+                start: 100,
+                end: 200,
+            },
+            hap1_region: None,
+            hap2_region: None,
+            sort_by_haplotype: false,
+            paths: LoadPaths {
+                reads_bam: Some(PathBuf::from("/definitely_missing_reads.cram")),
+                reference_fasta: None,
+                hap1_fasta: None,
+                hap2_fasta: None,
+                reads_to_hap1_bam: None,
+                reads_to_hap2_bam: None,
+                cram_ref: Some(PathBuf::from("/definitely_missing_ref.fa")),
+                hap1_to_ref_bam: None,
+                hap2_to_ref_bam: None,
+                ref_to_hap1_bam: None,
+                ref_to_hap2_bam: None,
+                hap1_to_hap2_bam: None,
+                hap2_to_hap1_bam: None,
+            },
+            cache_key: "test".to_string(),
+        };
+        let log = crate::verbose::LogBuffer::new();
+        let _ = execute_load(&req, &cancel, &log);
+        let lines = log.lines();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("CRAM diagnostics") && line.contains("crai=")),
+            "expected CRAM diagnostics log line, got: {lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("read query finished in") && line.contains("mode=CRAM")),
+            "expected query timing log line, got: {lines:?}"
+        );
     }
 }
