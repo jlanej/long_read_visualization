@@ -423,7 +423,7 @@ impl ReadTooltipInfo {
             self.alignment_length,
             mapq,
             hp,
-            strand,
+            if self.is_reverse { "rev" } else { "fwd" },
             self.indel_count,
         )
     }
