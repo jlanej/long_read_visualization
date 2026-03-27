@@ -202,11 +202,11 @@ pub fn pack_reads_by_haplotype(reads: Vec<AlignedRead>) -> Vec<PileupRow> {
 #[inline]
 pub fn nucleotide_color(base: u8) -> [u8; 3] {
     match base.to_ascii_uppercase() {
-        b'A' => [0, 180, 0],    // green
-        b'C' => [0, 0, 200],    // blue
-        b'G' => [209, 159, 0],  // orange/yellow
-        b'T' => [200, 0, 0],    // red
-        _ => [128, 128, 128],   // grey (N or unknown)
+        b'A' => [0, 180, 0],   // green
+        b'C' => [0, 0, 200],   // blue
+        b'G' => [209, 159, 0], // orange/yellow
+        b'T' => [200, 0, 0],   // red
+        _ => [128, 128, 128],  // grey (N or unknown)
     }
 }
 
@@ -406,7 +406,11 @@ impl ReadTooltipInfo {
 
     /// Format as multi-line tooltip text.
     pub fn tooltip_text(&self) -> String {
-        let strand = if self.is_reverse { "reverse (−)" } else { "forward (+)" };
+        let strand = if self.is_reverse {
+            "reverse (−)"
+        } else {
+            "forward (+)"
+        };
         let hp = match self.haplotype {
             Some(1) => "HP:1 (hap1)".to_string(),
             Some(2) => "HP:2 (hap2)".to_string(),
@@ -1178,10 +1182,7 @@ mod tests {
         let h1_pos = all_names.iter().position(|n| n == "h1a").unwrap();
         let h2_pos = all_names.iter().position(|n| n == "h2a").unwrap();
         let u_pos = all_names.iter().position(|n| n == "u1").unwrap();
-        assert!(
-            h1_pos < h2_pos,
-            "HP1 reads should come before HP2 reads"
-        );
+        assert!(h1_pos < h2_pos, "HP1 reads should come before HP2 reads");
         assert!(
             h2_pos < u_pos,
             "HP2 reads should come before unphased reads"
@@ -1223,7 +1224,10 @@ mod tests {
             make_read_hp("h1", 100, 200, Some(1)),
             make_read_hp("u2", 300, 400, Some(3)), // Unknown HP → unphased
         ];
-        let total: usize = pack_reads_by_haplotype(reads).iter().map(|r| r.reads.len()).sum();
+        let total: usize = pack_reads_by_haplotype(reads)
+            .iter()
+            .map(|r| r.reads.len())
+            .sum();
         assert_eq!(total, 4, "all reads must be preserved");
     }
 
@@ -1412,8 +1416,14 @@ mod tests {
     fn test_display_config_new_defaults() {
         let cfg = PileupDisplayConfig::default();
         assert!(!cfg.sort_by_haplotype, "HP sort should be off by default");
-        assert!(!cfg.show_soft_clips, "soft clips should be hidden by default");
-        assert!(!cfg.show_mismatches, "mismatches should be hidden by default");
+        assert!(
+            !cfg.show_soft_clips,
+            "soft clips should be hidden by default"
+        );
+        assert!(
+            !cfg.show_mismatches,
+            "mismatches should be hidden by default"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1444,7 +1454,10 @@ mod tests {
         let rows = pack_reads(reads);
         assert_eq!(rows.len(), 2, "should only need 2 rows");
         // r3 should be in same row as r1 (the earlier-ending row)
-        let row_with_r1 = rows.iter().find(|r| r.reads.iter().any(|rd| rd.name == "r1")).unwrap();
+        let row_with_r1 = rows
+            .iter()
+            .find(|r| r.reads.iter().any(|rd| rd.name == "r1"))
+            .unwrap();
         assert!(
             row_with_r1.reads.iter().any(|rd| rd.name == "r3"),
             "r3 should share row with r1 (earlier end)"
@@ -1546,8 +1559,16 @@ mod tests {
         read.is_reverse = true;
         read.mapping_quality = Some(42);
         read.indels = vec![
-            Indel { ref_pos: 200, length: 10, kind: IndelKind::Insertion },
-            Indel { ref_pos: 300, length: 20, kind: IndelKind::Deletion },
+            Indel {
+                ref_pos: 200,
+                length: 10,
+                kind: IndelKind::Insertion,
+            },
+            Indel {
+                ref_pos: 300,
+                length: 20,
+                kind: IndelKind::Deletion,
+            },
         ];
         let info = ReadTooltipInfo::from_read(&read);
         assert_eq!(info.name, "test_read");

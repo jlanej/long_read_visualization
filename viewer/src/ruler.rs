@@ -202,7 +202,11 @@ mod tests {
         let ticks = compute_ticks(0, 10_000, 1000.0);
         for t in &ticks {
             if t.is_major {
-                assert!(t.label.is_some(), "Major tick at {} has no label", t.position);
+                assert!(
+                    t.label.is_some(),
+                    "Major tick at {} has no label",
+                    t.position
+                );
             } else {
                 assert!(t.label.is_none());
             }

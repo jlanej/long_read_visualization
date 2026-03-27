@@ -9,7 +9,9 @@ use crate::genome::pileup::{self, PileupDisplayConfig, PileupRow, ReadRect};
 use crate::genome::{self, FastaSequence};
 use crate::panel_sync::{PanelId, PanelSyncManager};
 use crate::region::RegionNavigator;
-use crate::region_cache::{CachedAssemblyTrack, CachedPanelData, CachedRegion, RegionCache, DEFAULT_CACHE_CAPACITY};
+use crate::region_cache::{
+    CachedAssemblyTrack, CachedPanelData, CachedRegion, DEFAULT_CACHE_CAPACITY, RegionCache,
+};
 use crate::ruler;
 
 // ---------------------------------------------------------------------------
@@ -194,7 +196,11 @@ impl PanelData {
         Self {
             rows: c.rows.clone(),
             sequence: c.sequence.clone(),
-            assembly_tracks: c.assembly_tracks.iter().map(AssemblyTrack::from_cached).collect(),
+            assembly_tracks: c
+                .assembly_tracks
+                .iter()
+                .map(AssemblyTrack::from_cached)
+                .collect(),
         }
     }
 }
@@ -424,10 +430,7 @@ impl ViewerApp {
 
     /// Pack reads using the current display config (position-based or
     /// haplotype-grouped).
-    fn pack_reads_for_config(
-        &self,
-        reads: Vec<genome::AlignedRead>,
-    ) -> Vec<pileup::PileupRow> {
+    fn pack_reads_for_config(&self, reads: Vec<genome::AlignedRead>) -> Vec<pileup::PileupRow> {
         if self.display_config.sort_by_haplotype {
             pileup::pack_reads_by_haplotype(reads)
         } else {
@@ -523,7 +526,11 @@ impl ViewerApp {
         }
 
         // -- Fallback: synchronous load (unit tests without GUI context) --
-        self.load_region_data_sync(&entry.ref_region, hap1_region.as_ref(), hap2_region.as_ref());
+        self.load_region_data_sync(
+            &entry.ref_region,
+            hap1_region.as_ref(),
+            hap2_region.as_ref(),
+        );
     }
 
     /// Apply a cached region result to the panel data.
@@ -606,10 +613,21 @@ impl ViewerApp {
         // Assembly cross-alignment tracks for reference panel
         {
             let region_str = ref_region.to_string();
-            self.ref_data.assembly_tracks = load_assembly_tracks(&[
-                ("Hap1 → Ref", [60, 160, 80], self.data_paths.hap1_to_ref_bam.as_deref()),
-                ("Hap2 → Ref", [180, 100, 60], self.data_paths.hap2_to_ref_bam.as_deref()),
-            ], &region_str);
+            self.ref_data.assembly_tracks = load_assembly_tracks(
+                &[
+                    (
+                        "Hap1 → Ref",
+                        [60, 160, 80],
+                        self.data_paths.hap1_to_ref_bam.as_deref(),
+                    ),
+                    (
+                        "Hap2 → Ref",
+                        [180, 100, 60],
+                        self.data_paths.hap2_to_ref_bam.as_deref(),
+                    ),
+                ],
+                &region_str,
+            );
         }
 
         // -- Haplotype 1 panel: BAM reads + FASTA sequence --
@@ -626,10 +644,21 @@ impl ViewerApp {
             }
             // Assembly cross-alignment tracks for hap1 panel
             let region_str = region.to_string();
-            self.hap1_data.assembly_tracks = load_assembly_tracks(&[
-                ("Ref → Hap1", [70, 130, 180], self.data_paths.ref_to_hap1_bam.as_deref()),
-                ("Hap2 → Hap1", [180, 100, 60], self.data_paths.hap2_to_hap1_bam.as_deref()),
-            ], &region_str);
+            self.hap1_data.assembly_tracks = load_assembly_tracks(
+                &[
+                    (
+                        "Ref → Hap1",
+                        [70, 130, 180],
+                        self.data_paths.ref_to_hap1_bam.as_deref(),
+                    ),
+                    (
+                        "Hap2 → Hap1",
+                        [180, 100, 60],
+                        self.data_paths.hap2_to_hap1_bam.as_deref(),
+                    ),
+                ],
+                &region_str,
+            );
         }
 
         // -- Haplotype 2 panel: BAM reads + FASTA sequence --
@@ -646,10 +675,21 @@ impl ViewerApp {
             }
             // Assembly cross-alignment tracks for hap2 panel
             let region_str = region.to_string();
-            self.hap2_data.assembly_tracks = load_assembly_tracks(&[
-                ("Ref → Hap2", [70, 130, 180], self.data_paths.ref_to_hap2_bam.as_deref()),
-                ("Hap1 → Hap2", [60, 160, 80], self.data_paths.hap1_to_hap2_bam.as_deref()),
-            ], &region_str);
+            self.hap2_data.assembly_tracks = load_assembly_tracks(
+                &[
+                    (
+                        "Ref → Hap2",
+                        [70, 130, 180],
+                        self.data_paths.ref_to_hap2_bam.as_deref(),
+                    ),
+                    (
+                        "Hap1 → Hap2",
+                        [60, 160, 80],
+                        self.data_paths.hap1_to_hap2_bam.as_deref(),
+                    ),
+                ],
+                &region_str,
+            );
         }
 
         // -- Dot plot: recompute if visible --
@@ -887,8 +927,7 @@ impl ViewerApp {
                 .on_hover_text("Toggle haplotype-based read grouping")
                 .clicked()
             {
-                self.display_config.sort_by_haplotype =
-                    !self.display_config.sort_by_haplotype;
+                self.display_config.sort_by_haplotype = !self.display_config.sort_by_haplotype;
                 // Re-pack reads with the new sort mode
                 self.load_region_data();
             }
@@ -1026,12 +1065,7 @@ impl ViewerApp {
 
                     if bp_per_px >= 5.0 {
                         // High zoom: render individual nucleotide letters
-                        Self::paint_base_sequence(
-                            ui,
-                            seq,
-                            params.view_start,
-                            params.view_end,
-                        );
+                        Self::paint_base_sequence(ui, seq, params.view_start, params.view_end);
                     } else {
                         // Low zoom: show text summary
                         let seq_info = format!(
@@ -1085,15 +1119,9 @@ impl ViewerApp {
                         continue;
                     }
                     // Small label for the assembly track
-                    ui.label(
-                        egui::RichText::new(&track.label)
-                            .small()
-                            .color(egui::Color32::from_rgb(
-                                track.color[0],
-                                track.color[1],
-                                track.color[2],
-                            )),
-                    );
+                    ui.label(egui::RichText::new(&track.label).small().color(
+                        egui::Color32::from_rgb(track.color[0], track.color[1], track.color[2]),
+                    ));
                     // Assembly tracks always use squished display
                     let asm_config = params.config.with_squished(true);
                     let asm_pw = ui.available_width();
@@ -1118,7 +1146,11 @@ impl ViewerApp {
 
             // Mouse interaction: capture drag (pan) and scroll (zoom) on the panel body
             let panel_rect = ui.min_rect();
-            let panel_resp = ui.interact(panel_rect, ui.id().with("mouse"), egui::Sense::click_and_drag());
+            let panel_resp = ui.interact(
+                panel_rect,
+                ui.id().with("mouse"),
+                egui::Sense::click_and_drag(),
+            );
 
             // Drag → pan
             if panel_resp.dragged() {
@@ -1137,8 +1169,8 @@ impl ViewerApp {
             if scroll_delta.abs() > 0.1
                 && let Some(hover_pos) = ui.input(|i| i.pointer.hover_pos())
             {
-                let frac = ((hover_pos.x - panel_rect.left()) / panel_rect.width())
-                    .clamp(0.0, 1.0) as f64;
+                let frac =
+                    ((hover_pos.x - panel_rect.left()) / panel_rect.width()).clamp(0.0, 1.0) as f64;
                 // Scroll up → zoom in, scroll down → zoom out
                 let factor = if scroll_delta > 0.0 { 1.2 } else { 1.0 / 1.2 };
                 interaction.zoom = Some((factor, frac));
@@ -1253,10 +1285,8 @@ impl ViewerApp {
         let max_depth = bins.iter().map(|b| b.depth).max().unwrap_or(1).max(1);
         let bin_width = panel_width / bins.len() as f32;
 
-        let (response, painter) = ui.allocate_painter(
-            egui::vec2(panel_width, track_height),
-            egui::Sense::hover(),
-        );
+        let (response, painter) =
+            ui.allocate_painter(egui::vec2(panel_width, track_height), egui::Sense::hover());
         let origin = response.rect.left_top();
         let bottom = response.rect.bottom();
 
@@ -1282,7 +1312,11 @@ impl ViewerApp {
                     egui::pos2(x, bottom - h1_h),
                     egui::pos2(x + bin_width, bottom),
                 );
-                painter.rect_filled(r, 0.0, egui::Color32::from_rgba_premultiplied(80, 180, 80, 180));
+                painter.rect_filled(
+                    r,
+                    0.0,
+                    egui::Color32::from_rgba_premultiplied(80, 180, 80, 180),
+                );
             }
             // Draw HP2 (orange) above HP1
             if h2_h > 0.1 {
@@ -1290,7 +1324,11 @@ impl ViewerApp {
                     egui::pos2(x, bottom - h1_h - h2_h),
                     egui::pos2(x + bin_width, bottom - h1_h),
                 );
-                painter.rect_filled(r, 0.0, egui::Color32::from_rgba_premultiplied(200, 140, 50, 180));
+                painter.rect_filled(
+                    r,
+                    0.0,
+                    egui::Color32::from_rgba_premultiplied(200, 140, 50, 180),
+                );
             }
             // Draw unphased (grey) on top
             if other_h > 0.1 {
@@ -1298,7 +1336,11 @@ impl ViewerApp {
                     egui::pos2(x, bottom - total_h),
                     egui::pos2(x + bin_width, bottom - h1_h - h2_h),
                 );
-                painter.rect_filled(r, 0.0, egui::Color32::from_rgba_premultiplied(140, 140, 140, 160));
+                painter.rect_filled(
+                    r,
+                    0.0,
+                    egui::Color32::from_rgba_premultiplied(140, 140, 140, 160),
+                );
             }
         }
 
@@ -1313,12 +1355,7 @@ impl ViewerApp {
     }
 
     /// Paint per-base nucleotide letters for a reference sequence at high zoom.
-    fn paint_base_sequence(
-        ui: &mut egui::Ui,
-        seq: &FastaSequence,
-        view_start: u64,
-        view_end: u64,
-    ) {
+    fn paint_base_sequence(ui: &mut egui::Ui, seq: &FastaSequence, view_start: u64, view_end: u64) {
         let panel_width = ui.available_width();
         let view_span = view_end.saturating_sub(view_start);
         if view_span == 0 {
@@ -1501,19 +1538,11 @@ impl ViewerApp {
                     };
                     let events: Vec<String> = results
                         .iter()
-                        .filter(|r| {
-                            r.event_type
-                                == genome::coordinate_mapper::EventType::Alignment
-                        })
-                        .map(|r| {
-                            format!("{}:{}-{}", r.asm_chrom, r.asm_start, r.asm_end)
-                        })
+                        .filter(|r| r.event_type == genome::coordinate_mapper::EventType::Alignment)
+                        .map(|r| format!("{}:{}-{}", r.asm_chrom, r.asm_start, r.asm_end))
                         .collect();
                     if !events.is_empty() {
-                        msg.push_str(&format!(
-                            " | {prefix}: {}",
-                            events.join(", ")
-                        ));
+                        msg.push_str(&format!(" | {prefix}: {}", events.join(", ")));
                     }
                 }
             }
@@ -2290,18 +2319,20 @@ mod tests {
             Some(std::path::Path::new("/cram_ref.fa.gz"))
         );
         // Verify discovered file names contain expected suffix
-        assert!(dp
-            .hap1_coord_index
-            .as_ref()
-            .unwrap()
-            .to_string_lossy()
-            .ends_with("_hap1_to_ref.mapping.json.gz"));
-        assert!(dp
-            .reads_to_hap2_bam
-            .as_ref()
-            .unwrap()
-            .to_string_lossy()
-            .ends_with("_reads_to_hap2.bam"));
+        assert!(
+            dp.hap1_coord_index
+                .as_ref()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with("_hap1_to_ref.mapping.json.gz")
+        );
+        assert!(
+            dp.reads_to_hap2_bam
+                .as_ref()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with("_reads_to_hap2.bam")
+        );
     }
 
     #[test]
@@ -2472,19 +2503,20 @@ mod tests {
             ],
             "chr1:100-200",
         );
-        assert!(tracks.is_empty(), "should gracefully return empty when no BAMs");
+        assert!(
+            tracks.is_empty(),
+            "should gracefully return empty when no BAMs"
+        );
     }
 
     #[test]
     fn test_load_assembly_tracks_with_nonexistent_bam() {
         let tracks = load_assembly_tracks(
-            &[
-                (
-                    "Hap1 → Ref",
-                    [60, 160, 80],
-                    Some(std::path::Path::new("/nonexistent/file.bam")),
-                ),
-            ],
+            &[(
+                "Hap1 → Ref",
+                [60, 160, 80],
+                Some(std::path::Path::new("/nonexistent/file.bam")),
+            )],
             "chr1:100-200",
         );
         assert!(
@@ -2500,9 +2532,18 @@ mod tests {
     #[test]
     fn test_viewer_app_default_new_toggles() {
         let app = ViewerApp::default();
-        assert!(!app.display_config.show_mismatches, "mismatches off by default");
-        assert!(!app.display_config.show_soft_clips, "soft clips off by default");
-        assert!(!app.display_config.sort_by_haplotype, "HP sort off by default");
+        assert!(
+            !app.display_config.show_mismatches,
+            "mismatches off by default"
+        );
+        assert!(
+            !app.display_config.show_soft_clips,
+            "soft clips off by default"
+        );
+        assert!(
+            !app.display_config.sort_by_haplotype,
+            "HP sort off by default"
+        );
         assert_eq!(
             app.display_config.indel_threshold,
             pileup::DEFAULT_INDEL_THRESHOLD

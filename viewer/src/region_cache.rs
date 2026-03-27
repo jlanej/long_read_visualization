@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
 
-use crate::genome::pileup::PileupRow;
 use crate::genome::FastaSequence;
+use crate::genome::pileup::PileupRow;
 
 // ---------------------------------------------------------------------------
 // Cached panel data
