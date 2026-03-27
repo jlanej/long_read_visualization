@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -155,6 +156,95 @@ impl DataPaths {
     }
 }
 
+/// Parse ALL samples from a TSV config file, returning (sample_id, DataPaths)
+/// for each data row.
+pub fn parse_all_samples(tsv_path: &std::path::Path) -> Result<Vec<(String, DataPaths)>, String> {
+    let content =
+        std::fs::read_to_string(tsv_path).map_err(|e| format!("Failed to read config TSV: {e}"))?;
+
+    let mut header: Option<Vec<String>> = None;
+    let mut samples = Vec::new();
+
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with('#') {
+            if header.is_none() {
+                header = Some(
+                    line.trim_start_matches('#')
+                        .trim()
+                        .split('\t')
+                        .map(|s| s.trim().to_string())
+                        .collect(),
+                );
+            }
+            continue;
+        }
+        if header.is_none() {
+            header = Some(line.split('\t').map(|s| s.trim().to_string()).collect());
+            continue;
+        }
+        // Data row
+        let cols: Vec<&str> = line.split('\t').collect();
+        let h = header.as_ref().unwrap();
+        let mut row = std::collections::HashMap::new();
+        for (i, col_name) in h.iter().enumerate() {
+            let val = cols.get(i).unwrap_or(&"").trim().to_string();
+            row.insert(col_name.clone(), val);
+        }
+
+        let non_empty = |key: &str| -> Option<PathBuf> {
+            row.get(key).filter(|v| !v.is_empty()).map(PathBuf::from)
+        };
+
+        let sample_id = non_empty("sample_id")
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        let output_dir = non_empty("output_dir");
+        let sid_for_discover = non_empty("sample_id");
+
+        let discover = |suffix: &str| -> Option<PathBuf> {
+            let dir = output_dir.as_ref()?;
+            let sid = sid_for_discover.as_ref()?.to_string_lossy().to_string();
+            let candidate = dir.join(format!("{sid}{suffix}"));
+            if candidate.is_file() {
+                Some(candidate)
+            } else {
+                None
+            }
+        };
+
+        let dp = DataPaths {
+            reference_fasta: non_empty("reference"),
+            hap1_fasta: non_empty("hap1_assembly"),
+            hap2_fasta: non_empty("hap2_assembly"),
+            reads_bam: non_empty("reads_bam"),
+            coordinate_index: None,
+            regions: non_empty("regions"),
+            hap1_coord_index: discover("_hap1_to_ref.mapping.json.gz"),
+            hap2_coord_index: discover("_hap2_to_ref.mapping.json.gz"),
+            reads_to_hap1_bam: discover("_reads_to_hap1.bam"),
+            reads_to_hap2_bam: discover("_reads_to_hap2.bam"),
+            cram_ref: non_empty("cram_ref"),
+            hap1_to_ref_bam: discover("_hap1_to_ref.bam"),
+            hap2_to_ref_bam: discover("_hap2_to_ref.bam"),
+            ref_to_hap1_bam: discover("_ref_to_hap1.bam"),
+            ref_to_hap2_bam: discover("_ref_to_hap2.bam"),
+            hap1_to_hap2_bam: discover("_hap1_to_hap2.bam"),
+            hap2_to_hap1_bam: discover("_hap2_to_hap1.bam"),
+        };
+        samples.push((sample_id, dp));
+    }
+
+    if samples.is_empty() {
+        return Err("No data rows found in TSV".to_string());
+    }
+    Ok(samples)
+}
+
 // ---------------------------------------------------------------------------
 // Per-panel loaded data
 // ---------------------------------------------------------------------------
@@ -274,6 +364,60 @@ impl Panel {
 }
 
 // ---------------------------------------------------------------------------
+// Compare Reads result
+// ---------------------------------------------------------------------------
+
+/// Statistics from comparing read names across the three panels.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CompareReadsResult {
+    pub ref_only: usize,
+    pub hap1_only: usize,
+    pub hap2_only: usize,
+    pub ref_and_hap1: usize,
+    pub ref_and_hap2: usize,
+    pub hap1_and_hap2: usize,
+    pub all_three: usize,
+    pub total_unique: usize,
+}
+
+// ---------------------------------------------------------------------------
+// SV annotation overlay
+// ---------------------------------------------------------------------------
+
+/// An SV gap event annotation for inter-panel display.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct SvAnnotation {
+    pub event_type: genome::coordinate_mapper::EventType,
+    pub ref_start: u64,
+    pub ref_end: u64,
+    pub asm_start: u64,
+    pub asm_end: u64,
+    pub gap_size: Option<u64>,
+    pub label: String,
+}
+
+impl SvAnnotation {
+    /// Return the display color for this SV event type.
+    pub fn color(&self) -> [u8; 3] {
+        sv_event_color(&self.event_type)
+    }
+}
+
+/// Map an SV event type to a display color.
+pub fn sv_event_color(event_type: &genome::coordinate_mapper::EventType) -> [u8; 3] {
+    use genome::coordinate_mapper::EventType;
+    match event_type {
+        EventType::Deletion => [200, 60, 60],       // red
+        EventType::Insertion => [60, 100, 200],     // blue
+        EventType::Inversion => [150, 60, 200],     // purple
+        EventType::Translocation => [200, 200, 60], // yellow
+        EventType::Complex => [140, 140, 140],      // grey
+        EventType::Alignment => [100, 100, 100],    // dark grey (shouldn't appear)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main application
 // ---------------------------------------------------------------------------
 
@@ -309,6 +453,21 @@ pub struct ViewerApp {
     last_pan_zoom_time: Option<Instant>,
     /// Whether a debounced reload is pending.
     pending_debounce_reload: bool,
+    // -- Phase 4 fields --
+    /// All available samples from TSV config (sample_id → DataPaths).
+    samples: Vec<(String, DataPaths)>,
+    /// Index of the currently selected sample in `samples`.
+    selected_sample_idx: usize,
+    /// Whether to show the compare-reads modal.
+    show_compare_reads: bool,
+    /// Cached compare-reads result.
+    compare_result: Option<CompareReadsResult>,
+    /// Whether to show SV overlay markers between panels.
+    show_sv_overlay: bool,
+    /// SV gap annotations for the current region.
+    sv_annotations: Vec<SvAnnotation>,
+    /// Whether a PNG screenshot export is pending.
+    pending_screenshot: bool,
 }
 
 impl Default for ViewerApp {
@@ -333,6 +492,13 @@ impl Default for ViewerApp {
             region_cache: RegionCache::new(DEFAULT_CACHE_CAPACITY),
             last_pan_zoom_time: None,
             pending_debounce_reload: false,
+            samples: Vec::new(),
+            selected_sample_idx: 0,
+            show_compare_reads: false,
+            compare_result: None,
+            show_sv_overlay: false,
+            sv_annotations: Vec::new(),
+            pending_screenshot: false,
         }
     }
 }
@@ -346,6 +512,8 @@ struct PanelRenderParams<'a> {
     view_start: u64,
     view_end: u64,
     coord_info: Option<&'a str>,
+    /// Optional metadata to show in the header (genotype, size).
+    metadata: Option<&'a str>,
 }
 
 /// Result of mouse interaction within a panel.
@@ -362,11 +530,13 @@ impl ViewerApp {
         cc: &eframe::CreationContext<'_>,
         manifest_path: Option<&std::path::Path>,
         data_paths: DataPaths,
+        samples: Vec<(String, DataPaths)>,
     ) -> Self {
         configure_fonts(&cc.egui_ctx);
         let mut app = Self {
             data_paths,
             loader: Some(DataLoader::new(cc.egui_ctx.clone())),
+            samples,
             ..Self::default()
         };
 
@@ -542,6 +712,7 @@ impl ViewerApp {
         if self.dot_plot.show {
             self.recompute_dot_plot();
         }
+        self.sv_annotations = self.collect_sv_annotations();
     }
 
     /// Poll the background loader for completed results.  Called each frame.
@@ -696,6 +867,9 @@ impl ViewerApp {
         if self.dot_plot.show {
             self.recompute_dot_plot();
         }
+
+        // -- Collect SV annotations for overlay --
+        self.sv_annotations = self.collect_sv_annotations();
     }
 
     /// Recompute the dot plot from loaded FASTA sequences.
@@ -723,6 +897,138 @@ impl ViewerApp {
             )),
             _ => None,
         };
+    }
+
+    /// Compare read names across the three panels and compute set statistics.
+    fn compare_reads(&self) -> CompareReadsResult {
+        let collect_names = |data: &PanelData| -> HashSet<String> {
+            data.rows
+                .iter()
+                .flat_map(|row| row.reads.iter().map(|r| r.name.clone()))
+                .collect()
+        };
+        let ref_names = collect_names(&self.ref_data);
+        let h1_names = collect_names(&self.hap1_data);
+        let h2_names = collect_names(&self.hap2_data);
+
+        let all_names: HashSet<&String> = ref_names
+            .iter()
+            .chain(h1_names.iter())
+            .chain(h2_names.iter())
+            .collect();
+
+        let mut result = CompareReadsResult::default();
+        for name in &all_names {
+            let in_ref = ref_names.contains(*name);
+            let in_h1 = h1_names.contains(*name);
+            let in_h2 = h2_names.contains(*name);
+            match (in_ref, in_h1, in_h2) {
+                (true, true, true) => result.all_three += 1,
+                (true, true, false) => result.ref_and_hap1 += 1,
+                (true, false, true) => result.ref_and_hap2 += 1,
+                (false, true, true) => result.hap1_and_hap2 += 1,
+                (true, false, false) => result.ref_only += 1,
+                (false, true, false) => result.hap1_only += 1,
+                (false, false, true) => result.hap2_only += 1,
+                (false, false, false) => {} // impossible
+            }
+        }
+        result.total_unique = all_names.len();
+        result
+    }
+
+    /// Collect SV annotations from coordinate mapper indices for the current region.
+    fn collect_sv_annotations(&self) -> Vec<SvAnnotation> {
+        let entry = match self.navigator.current() {
+            Some(e) => e,
+            None => return Vec::new(),
+        };
+
+        let mut annotations = Vec::new();
+        let indices: Vec<(&str, &genome::coordinate_mapper::MappingIndex)> = [
+            ("hap1", self.hap1_coord_index.as_ref()),
+            ("hap2", self.hap2_coord_index.as_ref()),
+            ("", self.coord_index.as_ref()),
+        ]
+        .into_iter()
+        .filter_map(|(label, idx)| idx.map(|i| (label, i)))
+        .collect();
+
+        for (label_prefix, index) in indices {
+            let results = genome::coordinate_mapper::query(
+                index,
+                &entry.ref_region.chrom,
+                entry.ref_region.start,
+                entry.ref_region.end,
+                0,
+            );
+            for r in &results {
+                if r.event_type == genome::coordinate_mapper::EventType::Alignment {
+                    continue;
+                }
+                let gap_size = r.ref_gap_size;
+                let label = if label_prefix.is_empty() {
+                    format!("{:?}", r.event_type)
+                } else {
+                    format!("{label_prefix}: {:?}", r.event_type)
+                };
+                annotations.push(SvAnnotation {
+                    event_type: r.event_type.clone(),
+                    ref_start: r.ref_start,
+                    ref_end: r.ref_end,
+                    asm_start: r.asm_start,
+                    asm_end: r.asm_end,
+                    gap_size,
+                    label,
+                });
+            }
+        }
+        annotations
+    }
+
+    /// Paint SV overlay markers between panels.
+    fn paint_sv_overlay(&self, ui: &mut egui::Ui) {
+        if self.sv_annotations.is_empty() {
+            return;
+        }
+        let panel_width = ui.available_width();
+        let ref_view = self.sync_manager.view(PanelId::Reference);
+        let view_span = ref_view.view_end.saturating_sub(ref_view.view_start).max(1) as f32;
+        let bar_height = 16.0_f32;
+
+        let (response, painter) =
+            ui.allocate_painter(egui::vec2(panel_width, bar_height), egui::Sense::hover());
+        let origin = response.rect.left_top();
+
+        painter.rect_filled(
+            response.rect,
+            0.0,
+            egui::Color32::from_rgba_premultiplied(30, 30, 40, 200),
+        );
+
+        for ann in &self.sv_annotations {
+            let x_start = (ann.ref_start.saturating_sub(ref_view.view_start)) as f32 / view_span
+                * panel_width;
+            let x_end =
+                (ann.ref_end.saturating_sub(ref_view.view_start)) as f32 / view_span * panel_width;
+            let w = (x_end - x_start).max(3.0);
+            let c = ann.color();
+            let rect = egui::Rect::from_min_size(
+                origin + egui::vec2(x_start, 1.0),
+                egui::vec2(w, bar_height - 2.0),
+            );
+            painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(c[0], c[1], c[2]));
+            // Label
+            if w > 20.0 {
+                painter.text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    &ann.label,
+                    egui::FontId::monospace(8.0),
+                    egui::Color32::WHITE,
+                );
+            }
+        }
     }
 
     // -- Toolbar ------------------------------------------------------------
@@ -799,12 +1105,64 @@ impl ViewerApp {
                     ui.close_menu();
                 }
                 ui.separator();
+                if ui.button("Export PNG…").clicked() {
+                    self.pending_screenshot = true;
+                    ui.close_menu();
+                }
+                ui.separator();
                 if ui.button("Quit").clicked() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });
 
             ui.separator();
+
+            // Sample selector (multi-sample support)
+            if self.samples.len() > 1 {
+                let current_sample = self
+                    .samples
+                    .get(self.selected_sample_idx)
+                    .map(|(id, _)| id.clone())
+                    .unwrap_or_default();
+                let prev_idx = self.selected_sample_idx;
+                egui::ComboBox::from_id_salt("sample_selector")
+                    .selected_text(format!("Sample: {current_sample}"))
+                    .width(150.0)
+                    .show_ui(ui, |ui| {
+                        for (i, (id, _)) in self.samples.iter().enumerate() {
+                            if ui
+                                .selectable_label(i == self.selected_sample_idx, id)
+                                .clicked()
+                            {
+                                self.selected_sample_idx = i;
+                            }
+                        }
+                    });
+                if self.selected_sample_idx != prev_idx {
+                    // Switch sample: update data_paths, reload coord indices, clear cache
+                    if let Some((_, dp)) = self.samples.get(self.selected_sample_idx) {
+                        self.data_paths = dp.clone();
+                        self.coord_index = None;
+                        self.hap1_coord_index = None;
+                        self.hap2_coord_index = None;
+                        if let Some(idx_path) = &self.data_paths.hap1_coord_index
+                            && let Ok(index) =
+                                genome::coordinate_mapper::load_index(&idx_path.to_string_lossy())
+                        {
+                            self.hap1_coord_index = Some(index);
+                        }
+                        if let Some(idx_path) = &self.data_paths.hap2_coord_index
+                            && let Ok(index) =
+                                genome::coordinate_mapper::load_index(&idx_path.to_string_lossy())
+                        {
+                            self.hap2_coord_index = Some(index);
+                        }
+                        self.region_cache.clear();
+                        self.load_region_data();
+                    }
+                }
+                ui.separator();
+            }
 
             // Navigation controls
             let has_regions = !self.navigator.is_empty();
@@ -946,6 +1304,35 @@ impl ViewerApp {
                 self.display_config.show_coverage = !self.display_config.show_coverage;
             }
 
+            // Display toggle: colorblind palette
+            let cb_label = if self.display_config.use_colorblind_palette {
+                "🎨 Colorblind"
+            } else {
+                "🎨 Default"
+            };
+            if ui
+                .button(cb_label)
+                .on_hover_text("Toggle colorblind-safe palette")
+                .clicked()
+            {
+                self.display_config.use_colorblind_palette =
+                    !self.display_config.use_colorblind_palette;
+            }
+
+            // Display toggle: SV overlay
+            let sv_label = if self.show_sv_overlay {
+                "SV Overlay: on"
+            } else {
+                "SV Overlay: off"
+            };
+            if ui
+                .button(sv_label)
+                .on_hover_text("Toggle SV gap event overlay between panels")
+                .clicked()
+            {
+                self.show_sv_overlay = !self.show_sv_overlay;
+            }
+
             ui.separator();
 
             // Sync toggle
@@ -1001,6 +1388,16 @@ impl ViewerApp {
                     self.recompute_dot_plot();
                 }
             }
+
+            // Compare Reads button
+            if ui
+                .button("Compare Reads")
+                .on_hover_text("Compare read names across all three panels")
+                .clicked()
+            {
+                self.compare_result = Some(self.compare_reads());
+                self.show_compare_reads = true;
+            }
         });
     }
 
@@ -1017,6 +1414,11 @@ impl ViewerApp {
         ui.painter().rect_filled(header_rect, 0.0, header_color);
 
         let mut header_text = format!("{}  |  {}", params.panel.label(), params.region_text);
+        if let Some(meta) = params.metadata
+            && !meta.is_empty()
+        {
+            header_text.push_str(&format!("  {meta}"));
+        }
         if let Some(info) = params.coord_info {
             header_text.push_str(&format!("  [{info}]"));
         }
@@ -1511,6 +1913,14 @@ impl ViewerApp {
                 entry.ref_region
             );
 
+            // Append variant metadata.
+            if !entry.genotype.is_empty() {
+                msg.push_str(&format!(" | GT: {}", entry.genotype));
+            }
+            if entry.sv_size > 0 {
+                msg.push_str(&format!(" | size: {} bp", entry.sv_size));
+            }
+
             // Show coordinate mapper info if available (legacy single index
             // or hap-specific indices).
             let indices: Vec<(&str, &genome::coordinate_mapper::MappingIndex)> = [
@@ -1639,6 +2049,68 @@ impl eframe::App for ViewerApp {
 
         self.handle_keyboard(ctx);
 
+        // Handle pending screenshot export.
+        if self.pending_screenshot {
+            self.pending_screenshot = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+        }
+        // Check for screenshot result in events.
+        let screenshot_image = ctx.input(|i| {
+            for event in &i.raw.events {
+                if let egui::Event::Screenshot { image, .. } = event {
+                    return Some(image.clone());
+                }
+            }
+            None
+        });
+        if let Some(image) = screenshot_image
+            && let Some(path) = rfd::FileDialog::new()
+                .add_filter("PPM Image", &["ppm"])
+                .set_file_name("screenshot.ppm")
+                .save_file()
+        {
+            let w = image.width() as u32;
+            let h = image.height() as u32;
+            let mut data = Vec::new();
+            data.extend_from_slice(format!("P6\n{w} {h}\n255\n").as_bytes());
+            for pixel in image.pixels.iter() {
+                data.push(pixel.r());
+                data.push(pixel.g());
+                data.push(pixel.b());
+            }
+            if let Err(e) = std::fs::write(&path, &data) {
+                self.status_message = format!("Export failed: {e}");
+            } else {
+                self.status_message = format!("Exported screenshot to {}", path.display());
+            }
+        }
+
+        // Compare Reads modal window
+        if self.show_compare_reads {
+            let mut open = self.show_compare_reads;
+            egui::Window::new("Compare Reads")
+                .open(&mut open)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    if let Some(ref result) = self.compare_result {
+                        ui.label(format!("Total unique reads: {}", result.total_unique));
+                        ui.separator();
+                        ui.label(format!("Ref only: {}", result.ref_only));
+                        ui.label(format!("Hap1 only: {}", result.hap1_only));
+                        ui.label(format!("Hap2 only: {}", result.hap2_only));
+                        ui.separator();
+                        ui.label(format!("Ref ∩ Hap1: {}", result.ref_and_hap1));
+                        ui.label(format!("Ref ∩ Hap2: {}", result.ref_and_hap2));
+                        ui.label(format!("Hap1 ∩ Hap2: {}", result.hap1_and_hap2));
+                        ui.separator();
+                        ui.label(format!("All three: {}", result.all_three));
+                    } else {
+                        ui.label("No data");
+                    }
+                });
+            self.show_compare_reads = open;
+        }
+
         // Top toolbar
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             self.show_toolbar(ui);
@@ -1667,7 +2139,23 @@ impl eframe::App for ViewerApp {
         // Clone display_config for immutable borrow inside closure
         let config = self.display_config.clone();
 
-        // Central area: 3 panels + optional dot plot
+        // Build metadata string for Reference panel header
+        let metadata_text: Option<String> = self.navigator.current().and_then(|entry| {
+            let mut parts = Vec::new();
+            if !entry.genotype.is_empty() {
+                parts.push(format!("GT:{}", entry.genotype));
+            }
+            if entry.sv_size > 0 {
+                parts.push(format!("{} bp", entry.sv_size));
+            }
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join(" | "))
+            }
+        });
+
+        // Central area: 3 panels + optional SV overlay + optional dot plot
         let mut interactions: Vec<(PanelId, PanelInteraction)> = Vec::new();
         egui::CentralPanel::default().show(ctx, |ui| {
             let current = self.navigator.current();
@@ -1675,9 +2163,6 @@ impl eframe::App for ViewerApp {
                 .map(|e| e.ref_region.to_string())
                 .unwrap_or_else(|| "—".to_string());
 
-            // Use sync manager's view regions for hap panel headers (these
-            // reflect coordinate-mapper-derived regions when the manifest/VCF
-            // does not provide them).
             let h1_view = self.sync_manager.view(PanelId::Haplotype1);
             let h2_view = self.sync_manager.view(PanelId::Haplotype2);
             let hap1_text = if h1_view.view_start > 0 || h1_view.view_end > 0 {
@@ -1697,14 +2182,12 @@ impl eframe::App for ViewerApp {
                 "—".to_string()
             };
 
-            // Use per-panel view ranges from sync manager
             let ref_view = self.sync_manager.view(PanelId::Reference);
 
             let (ref_start, ref_end) = (ref_view.view_start, ref_view.view_end);
             let (h1_start, h1_end) = (h1_view.view_start, h1_view.view_end);
             let (h2_start, h2_end) = (h2_view.view_start, h2_view.view_end);
 
-            // Compute coordinate mapper info for header display
             let ref_coord_info = self.coord_index.as_ref().and_then(|index| {
                 let entry = self.navigator.current()?;
                 let results = genome::coordinate_mapper::query(
@@ -1734,10 +2217,14 @@ impl eframe::App for ViewerApp {
                 None
             };
 
-            // Calculate available space
+            let sv_overlay_height = if self.show_sv_overlay && !self.sv_annotations.is_empty() {
+                20.0
+            } else {
+                0.0
+            };
             let dot_plot_height = if self.dot_plot.show { 280.0 } else { 0.0 };
-            let available = ui.available_height() - dot_plot_height;
-            let panel_height = (available - 16.0) / 3.0; // 16px for spacing
+            let available = ui.available_height() - dot_plot_height - sv_overlay_height * 2.0;
+            let panel_height = (available - 16.0) / 3.0;
 
             ui.allocate_ui(egui::vec2(ui.available_width(), panel_height), |ui| {
                 let inter = Self::show_panel(
@@ -1750,10 +2237,16 @@ impl eframe::App for ViewerApp {
                         view_start: ref_start,
                         view_end: ref_end,
                         coord_info: ref_coord_info.as_deref(),
+                        metadata: metadata_text.as_deref(),
                     },
                 );
                 interactions.push((PanelId::Reference, inter));
             });
+
+            // SV overlay between Reference and Hap1
+            if self.show_sv_overlay {
+                self.paint_sv_overlay(ui);
+            }
 
             ui.add_space(4.0);
 
@@ -1768,10 +2261,16 @@ impl eframe::App for ViewerApp {
                         view_start: h1_start,
                         view_end: h1_end,
                         coord_info: hap1_coord_info.as_deref(),
+                        metadata: None,
                     },
                 );
                 interactions.push((PanelId::Haplotype1, inter));
             });
+
+            // SV overlay between Hap1 and Hap2
+            if self.show_sv_overlay {
+                self.paint_sv_overlay(ui);
+            }
 
             ui.add_space(4.0);
 
@@ -1786,6 +2285,7 @@ impl eframe::App for ViewerApp {
                         view_start: h2_start,
                         view_end: h2_end,
                         coord_info: hap2_coord_info.as_deref(),
+                        metadata: None,
                     },
                 );
                 interactions.push((PanelId::Haplotype2, inter));
@@ -2549,5 +3049,303 @@ mod tests {
             pileup::DEFAULT_INDEL_THRESHOLD
         );
         assert_eq!(app.display_config.indel_threshold, 50);
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 4: Colorblind palette defaults
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_viewer_app_default_colorblind_off() {
+        let app = ViewerApp::default();
+        assert!(
+            !app.display_config.use_colorblind_palette,
+            "colorblind palette off by default"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 4: Multi-sample support
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_all_samples_single() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tsv_path = tmp.path().join("config.tsv");
+        std::fs::write(
+            &tsv_path,
+            "sample_id\treference\thap1_assembly\thap2_assembly\n\
+             sample1\t/ref.fa.gz\t/hap1.fa.gz\t/hap2.fa.gz\n",
+        )
+        .unwrap();
+
+        let samples = parse_all_samples(&tsv_path).unwrap();
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].0, "sample1");
+        assert_eq!(
+            samples[0].1.reference_fasta.as_deref(),
+            Some(std::path::Path::new("/ref.fa.gz"))
+        );
+    }
+
+    #[test]
+    fn test_parse_all_samples_multiple() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tsv_path = tmp.path().join("config.tsv");
+        std::fs::write(
+            &tsv_path,
+            "#sample_id\treference\thap1_assembly\thap2_assembly\n\
+             sample1\t/ref1.fa.gz\t/hap1a.fa.gz\t/hap2a.fa.gz\n\
+             sample2\t/ref2.fa.gz\t/hap1b.fa.gz\t/hap2b.fa.gz\n\
+             sample3\t/ref3.fa.gz\t/hap1c.fa.gz\t/hap2c.fa.gz\n",
+        )
+        .unwrap();
+
+        let samples = parse_all_samples(&tsv_path).unwrap();
+        assert_eq!(samples.len(), 3);
+        assert_eq!(samples[0].0, "sample1");
+        assert_eq!(samples[1].0, "sample2");
+        assert_eq!(samples[2].0, "sample3");
+        assert_eq!(
+            samples[1].1.reference_fasta.as_deref(),
+            Some(std::path::Path::new("/ref2.fa.gz"))
+        );
+    }
+
+    #[test]
+    fn test_parse_all_samples_empty_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tsv_path = tmp.path().join("config.tsv");
+        std::fs::write(&tsv_path, "sample_id\treference\n").unwrap();
+
+        let result = parse_all_samples(&tsv_path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_viewer_app_default_samples_empty() {
+        let app = ViewerApp::default();
+        assert!(app.samples.is_empty());
+        assert_eq!(app.selected_sample_idx, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 4: Compare Reads
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_compare_reads_empty_panels() {
+        let app = ViewerApp::default();
+        let result = app.compare_reads();
+        assert_eq!(result.total_unique, 0);
+        assert_eq!(result.ref_only, 0);
+        assert_eq!(result.hap1_only, 0);
+        assert_eq!(result.hap2_only, 0);
+        assert_eq!(result.all_three, 0);
+    }
+
+    #[test]
+    fn test_compare_reads_with_data() {
+        use crate::genome::AlignedRead;
+
+        let make_read = |name: &str| AlignedRead {
+            name: name.to_string(),
+            start: 100,
+            end: 200,
+            is_reverse: false,
+            mapping_quality: Some(60),
+            haplotype: None,
+            flags: 0,
+            indels: vec![],
+            soft_clips: vec![],
+            mismatches: vec![],
+        };
+
+        let mut app = ViewerApp::default();
+        // Ref panel: reads A, B, C
+        app.ref_data.rows = vec![PileupRow {
+            y_offset: 0,
+            reads: vec![make_read("A"), make_read("B"), make_read("C")],
+        }];
+        // Hap1 panel: reads B, D
+        app.hap1_data.rows = vec![PileupRow {
+            y_offset: 0,
+            reads: vec![make_read("B"), make_read("D")],
+        }];
+        // Hap2 panel: reads C, D, E
+        app.hap2_data.rows = vec![PileupRow {
+            y_offset: 0,
+            reads: vec![make_read("C"), make_read("D"), make_read("E")],
+        }];
+
+        let result = app.compare_reads();
+        assert_eq!(result.total_unique, 5); // A, B, C, D, E
+        assert_eq!(result.ref_only, 1); // A
+        assert_eq!(result.hap1_only, 0); // (B shared with ref, D shared with hap2)
+        assert_eq!(result.hap2_only, 1); // E
+        assert_eq!(result.ref_and_hap1, 1); // B
+        assert_eq!(result.ref_and_hap2, 1); // C
+        assert_eq!(result.hap1_and_hap2, 1); // D
+        assert_eq!(result.all_three, 0);
+    }
+
+    #[test]
+    fn test_compare_reads_all_shared() {
+        use crate::genome::AlignedRead;
+
+        let make_read = |name: &str| AlignedRead {
+            name: name.to_string(),
+            start: 100,
+            end: 200,
+            is_reverse: false,
+            mapping_quality: Some(60),
+            haplotype: None,
+            flags: 0,
+            indels: vec![],
+            soft_clips: vec![],
+            mismatches: vec![],
+        };
+
+        let mut app = ViewerApp::default();
+        let reads = vec![make_read("X"), make_read("Y")];
+        app.ref_data.rows = vec![PileupRow {
+            y_offset: 0,
+            reads: reads.clone(),
+        }];
+        app.hap1_data.rows = vec![PileupRow {
+            y_offset: 0,
+            reads: reads.clone(),
+        }];
+        app.hap2_data.rows = vec![PileupRow { y_offset: 0, reads }];
+
+        let result = app.compare_reads();
+        assert_eq!(result.total_unique, 2);
+        assert_eq!(result.all_three, 2);
+        assert_eq!(result.ref_only, 0);
+        assert_eq!(result.hap1_only, 0);
+        assert_eq!(result.hap2_only, 0);
+    }
+
+    #[test]
+    fn test_compare_reads_result_default() {
+        let result = CompareReadsResult::default();
+        assert_eq!(result.total_unique, 0);
+        assert_eq!(result.ref_only, 0);
+    }
+
+    #[test]
+    fn test_viewer_app_default_compare_reads_off() {
+        let app = ViewerApp::default();
+        assert!(!app.show_compare_reads);
+        assert!(app.compare_result.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 4: SV Annotation overlay
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_sv_event_color_deletion() {
+        use crate::genome::coordinate_mapper::EventType;
+        assert_eq!(sv_event_color(&EventType::Deletion), [200, 60, 60]);
+    }
+
+    #[test]
+    fn test_sv_event_color_insertion() {
+        use crate::genome::coordinate_mapper::EventType;
+        assert_eq!(sv_event_color(&EventType::Insertion), [60, 100, 200]);
+    }
+
+    #[test]
+    fn test_sv_event_color_inversion() {
+        use crate::genome::coordinate_mapper::EventType;
+        assert_eq!(sv_event_color(&EventType::Inversion), [150, 60, 200]);
+    }
+
+    #[test]
+    fn test_sv_event_color_translocation() {
+        use crate::genome::coordinate_mapper::EventType;
+        assert_eq!(sv_event_color(&EventType::Translocation), [200, 200, 60]);
+    }
+
+    #[test]
+    fn test_sv_event_color_complex() {
+        use crate::genome::coordinate_mapper::EventType;
+        assert_eq!(sv_event_color(&EventType::Complex), [140, 140, 140]);
+    }
+
+    #[test]
+    fn test_sv_annotation_color_method() {
+        use crate::genome::coordinate_mapper::EventType;
+        let ann = SvAnnotation {
+            event_type: EventType::Deletion,
+            ref_start: 100,
+            ref_end: 200,
+            asm_start: 100,
+            asm_end: 100,
+            gap_size: Some(100),
+            label: "test".to_string(),
+        };
+        assert_eq!(ann.color(), [200, 60, 60]);
+    }
+
+    #[test]
+    fn test_viewer_app_default_sv_overlay_off() {
+        let app = ViewerApp::default();
+        assert!(!app.show_sv_overlay);
+        assert!(app.sv_annotations.is_empty());
+    }
+
+    #[test]
+    fn test_collect_sv_annotations_no_index() {
+        let mut app = ViewerApp::default();
+        let json = r#"{
+          "variants": [{
+            "chrom": "chr1", "pos": 100, "size": 50,
+            "ref_region": "chr1:100-150"
+          }]
+        }"#;
+        app.navigator.load_manifest_str(json).unwrap();
+        let annotations = app.collect_sv_annotations();
+        assert!(annotations.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 4: Export/Screenshot defaults
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_viewer_app_default_pending_screenshot() {
+        let app = ViewerApp::default();
+        assert!(!app.pending_screenshot);
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 4: Variant metadata in status message
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_status_message_includes_metadata() {
+        let mut app = ViewerApp::default();
+        let json = r#"{
+          "variants": [{
+            "chrom": "chr1", "pos": 100, "size": 5000,
+            "genotype": "0|1",
+            "ref_region": "chr1:100-5100"
+          }]
+        }"#;
+        app.navigator.load_manifest_str(json).unwrap();
+        app.load_region_data();
+        app.update_status_for_current_region();
+        assert!(
+            app.status_message.contains("GT: 0|1"),
+            "status should contain genotype, got: {}",
+            app.status_message
+        );
+        assert!(
+            app.status_message.contains("size: 5000 bp"),
+            "status should contain size, got: {}",
+            app.status_message
+        );
     }
 }

@@ -9,7 +9,7 @@ mod ruler;
 
 use std::path::PathBuf;
 
-use app::{DataPaths, ViewerApp};
+use app::{DataPaths, ViewerApp, parse_all_samples};
 
 fn main() -> eframe::Result<()> {
     let args = parse_args();
@@ -30,6 +30,7 @@ fn main() -> eframe::Result<()> {
                 cc,
                 args.manifest.as_deref(),
                 args.data_paths,
+                args.samples,
             )))
         }),
     );
@@ -58,6 +59,7 @@ fn main() -> eframe::Result<()> {
 struct CliArgs {
     manifest: Option<PathBuf>,
     data_paths: DataPaths,
+    samples: Vec<(String, DataPaths)>,
 }
 
 fn parse_args() -> CliArgs {
@@ -159,8 +161,15 @@ fn parse_args() -> CliArgs {
         }
     }
 
+    // Parse all samples from TSV if available.
+    let samples = config_tsv
+        .as_ref()
+        .and_then(|path| parse_all_samples(path).ok())
+        .unwrap_or_default();
+
     CliArgs {
         manifest,
         data_paths,
+        samples,
     }
 }

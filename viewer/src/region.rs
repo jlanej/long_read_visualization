@@ -78,11 +78,18 @@ pub struct Manifest {
 
 /// Summary of the region currently being displayed.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct RegionEntry {
     pub label: String,
     pub ref_region: GenomicRegion,
     pub hap1_region: Option<GenomicRegion>,
     pub hap2_region: Option<GenomicRegion>,
+    /// Genotype string (e.g. "0|1", "1|1").
+    pub genotype: String,
+    /// SV size in base pairs.
+    pub sv_size: u64,
+    /// Free-form description.
+    pub description: String,
 }
 
 impl fmt::Display for RegionEntry {
@@ -197,6 +204,9 @@ impl RegionNavigator {
                 ref_region,
                 hap1_region,
                 hap2_region,
+                genotype: v.genotype.clone(),
+                sv_size: v.size,
+                description: String::new(),
             });
         }
 
@@ -276,6 +286,9 @@ impl RegionNavigator {
                 },
                 hap1_region: None,
                 hap2_region: None,
+                genotype: gt,
+                sv_size: sv_len,
+                description: String::new(),
             });
         }
 
@@ -757,5 +770,58 @@ mod tests {
         assert_eq!(format_bp(999_999), "1000.0 kb");
         assert_eq!(format_bp(1_000_000), "1.0 Mb");
         assert_eq!(format_bp(2_500_000), "2.5 Mb");
+    }
+
+    // -- Variant metadata tests --
+
+    #[test]
+    fn test_manifest_metadata_genotype() {
+        let mut nav = RegionNavigator::new();
+        nav.load_manifest_str(sample_manifest_json()).unwrap();
+
+        let e0 = nav.current().unwrap();
+        assert_eq!(e0.genotype, "0|1");
+        assert_eq!(e0.sv_size, 5000);
+        assert_eq!(e0.description, "");
+
+        nav.next();
+        let e1 = nav.current().unwrap();
+        assert_eq!(e1.genotype, "1|0");
+        assert_eq!(e1.sv_size, 3000);
+    }
+
+    #[test]
+    fn test_vcf_metadata_genotype() {
+        let mut nav = RegionNavigator::new();
+        nav.load_vcf_str(&sample_vcf()).unwrap();
+
+        let e0 = nav.current().unwrap();
+        assert_eq!(e0.genotype, "0|1");
+        assert_eq!(e0.sv_size, 834);
+
+        nav.next();
+        let e1 = nav.current().unwrap();
+        assert_eq!(e1.genotype, "1|0");
+        assert_eq!(e1.sv_size, 1500);
+    }
+
+    #[test]
+    fn test_region_entry_default_metadata() {
+        let entry = RegionEntry {
+            label: "test".to_string(),
+            ref_region: GenomicRegion {
+                chrom: "chr1".into(),
+                start: 1,
+                end: 100,
+            },
+            hap1_region: None,
+            hap2_region: None,
+            genotype: String::new(),
+            sv_size: 0,
+            description: String::new(),
+        };
+        assert!(entry.genotype.is_empty());
+        assert_eq!(entry.sv_size, 0);
+        assert!(entry.description.is_empty());
     }
 }
