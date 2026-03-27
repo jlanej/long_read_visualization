@@ -1,12 +1,15 @@
 use std::path::PathBuf;
+use std::time::Instant;
 
 use eframe::egui;
 
+use crate::data_loader::{self, DataLoader, LoadPaths, LoadRequest};
 use crate::dot_plot::{self, DEFAULT_K, DotPlotComparison, DotPlotResult};
 use crate::genome::pileup::{self, PileupDisplayConfig, PileupRow, ReadRect};
 use crate::genome::{self, FastaSequence};
 use crate::panel_sync::{PanelId, PanelSyncManager};
 use crate::region::RegionNavigator;
+use crate::region_cache::{CachedAssemblyTrack, CachedPanelData, CachedRegion, RegionCache, DEFAULT_CACHE_CAPACITY};
 
 // ---------------------------------------------------------------------------
 // Data file paths
@@ -175,6 +178,26 @@ struct AssemblyTrack {
     rows: Vec<PileupRow>,
 }
 
+impl AssemblyTrack {
+    fn from_cached(t: &CachedAssemblyTrack) -> Self {
+        Self {
+            label: t.label.clone(),
+            color: t.color,
+            rows: t.rows.clone(),
+        }
+    }
+}
+
+impl PanelData {
+    fn from_cached(c: &CachedPanelData) -> Self {
+        Self {
+            rows: c.rows.clone(),
+            sequence: c.sequence.clone(),
+            assembly_tracks: c.assembly_tracks.iter().map(AssemblyTrack::from_cached).collect(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Dot plot state
 // ---------------------------------------------------------------------------
@@ -269,6 +292,16 @@ pub struct ViewerApp {
     hap1_coord_index: Option<genome::coordinate_mapper::MappingIndex>,
     /// Hap2-to-ref coordinate mapping index.
     hap2_coord_index: Option<genome::coordinate_mapper::MappingIndex>,
+    /// Background data loader (None in tests, Some when GUI is active).
+    loader: Option<DataLoader>,
+    /// Whether a background load is currently in flight.
+    is_loading: bool,
+    /// LRU cache for previously loaded region data.
+    region_cache: RegionCache,
+    /// Timestamp of last pan/zoom input, used for debounce.
+    last_pan_zoom_time: Option<Instant>,
+    /// Whether a debounced reload is pending.
+    pending_debounce_reload: bool,
 }
 
 impl Default for ViewerApp {
@@ -288,6 +321,11 @@ impl Default for ViewerApp {
             coord_index: None,
             hap1_coord_index: None,
             hap2_coord_index: None,
+            loader: None,
+            is_loading: false,
+            region_cache: RegionCache::new(DEFAULT_CACHE_CAPACITY),
+            last_pan_zoom_time: None,
+            pending_debounce_reload: false,
         }
     }
 }
@@ -312,6 +350,7 @@ impl ViewerApp {
         configure_fonts(&cc.egui_ctx);
         let mut app = Self {
             data_paths,
+            loader: Some(DataLoader::new(cc.egui_ctx.clone())),
             ..Self::default()
         };
 
@@ -387,6 +426,11 @@ impl ViewerApp {
     }
 
     /// Load BAM reads and FASTA sequences for the current region.
+    ///
+    /// When a background loader is available, this first checks the LRU cache
+    /// for an instant hit, then dispatches the work to the background thread.
+    /// When no loader is present (unit tests), it falls back to synchronous
+    /// loading so existing tests continue to pass without a GUI context.
     fn load_region_data(&mut self) {
         let entry = match self.navigator.current() {
             Some(e) => e.clone(),
@@ -422,10 +466,93 @@ impl ViewerApp {
             hap2_region.as_ref(),
         );
 
+        let cache_key = data_loader::make_cache_key(
+            &entry.ref_region,
+            hap1_region.as_ref(),
+            hap2_region.as_ref(),
+            self.display_config.sort_by_haplotype,
+        );
+
+        // -- Check LRU cache first --
+        if let Some(cached) = self.region_cache.get(&cache_key).cloned() {
+            self.apply_cached_region(&cached);
+            return;
+        }
+
+        // -- Dispatch to background loader if available --
+        if let Some(loader) = &self.loader {
+            let id = loader.next_id();
+            let paths = LoadPaths {
+                reads_bam: self.data_paths.reads_bam.clone(),
+                reference_fasta: self.data_paths.reference_fasta.clone(),
+                hap1_fasta: self.data_paths.hap1_fasta.clone(),
+                hap2_fasta: self.data_paths.hap2_fasta.clone(),
+                reads_to_hap1_bam: self.data_paths.reads_to_hap1_bam.clone(),
+                reads_to_hap2_bam: self.data_paths.reads_to_hap2_bam.clone(),
+                cram_ref: self.data_paths.cram_ref.clone(),
+                hap1_to_ref_bam: self.data_paths.hap1_to_ref_bam.clone(),
+                hap2_to_ref_bam: self.data_paths.hap2_to_ref_bam.clone(),
+                ref_to_hap1_bam: self.data_paths.ref_to_hap1_bam.clone(),
+                ref_to_hap2_bam: self.data_paths.ref_to_hap2_bam.clone(),
+                hap1_to_hap2_bam: self.data_paths.hap1_to_hap2_bam.clone(),
+                hap2_to_hap1_bam: self.data_paths.hap2_to_hap1_bam.clone(),
+            };
+            let request = LoadRequest {
+                id,
+                ref_region: entry.ref_region.clone(),
+                hap1_region,
+                hap2_region,
+                sort_by_haplotype: self.display_config.sort_by_haplotype,
+                paths,
+                cache_key,
+            };
+            loader.submit(request);
+            self.is_loading = true;
+            self.status_message = "Loading…".to_string();
+            return;
+        }
+
+        // -- Fallback: synchronous load (unit tests without GUI context) --
+        self.load_region_data_sync(&entry.ref_region, hap1_region.as_ref(), hap2_region.as_ref());
+    }
+
+    /// Apply a cached region result to the panel data.
+    fn apply_cached_region(&mut self, cached: &CachedRegion) {
+        self.ref_data = PanelData::from_cached(&cached.ref_data);
+        self.hap1_data = PanelData::from_cached(&cached.hap1_data);
+        self.hap2_data = PanelData::from_cached(&cached.hap2_data);
+        self.status_message = cached.status_message.clone();
+        if self.dot_plot.show {
+            self.recompute_dot_plot();
+        }
+    }
+
+    /// Poll the background loader for completed results.  Called each frame.
+    fn poll_load_results(&mut self) {
+        let result = match &self.loader {
+            Some(loader) => loader.try_recv(),
+            None => None,
+        };
+        if let Some(result) = result {
+            self.is_loading = false;
+            // Store in cache before applying
+            self.region_cache
+                .insert(result.cache_key.clone(), result.data.clone());
+            self.apply_cached_region(&result.data);
+        }
+    }
+
+    /// Synchronous data loading — used only in tests (no GUI context).
+    fn load_region_data_sync(
+        &mut self,
+        ref_region: &crate::region::GenomicRegion,
+        hap1_region: Option<&crate::region::GenomicRegion>,
+        hap2_region: Option<&crate::region::GenomicRegion>,
+    ) {
         // -- Reference panel: BAM/CRAM reads + FASTA sequence --
         self.ref_data = PanelData::default();
         if let Some(reads_path) = &self.data_paths.reads_bam {
-            let region_str = entry.ref_region.to_string();
+            let region_str = ref_region.to_string();
             let cram_ref = self
                 .data_paths
                 .cram_ref
@@ -464,11 +591,11 @@ impl ViewerApp {
             }
         }
         if let Some(fasta_path) = &self.data_paths.reference_fasta {
-            self.ref_data.sequence = load_fasta_for_region(fasta_path, &entry.ref_region);
+            self.ref_data.sequence = load_fasta_for_region(fasta_path, ref_region);
         }
         // Assembly cross-alignment tracks for reference panel
         {
-            let region_str = entry.ref_region.to_string();
+            let region_str = ref_region.to_string();
             self.ref_data.assembly_tracks = load_assembly_tracks(&[
                 ("Hap1 → Ref", [60, 160, 80], self.data_paths.hap1_to_ref_bam.as_deref()),
                 ("Hap2 → Ref", [180, 100, 60], self.data_paths.hap2_to_ref_bam.as_deref()),
@@ -477,7 +604,7 @@ impl ViewerApp {
 
         // -- Haplotype 1 panel: BAM reads + FASTA sequence --
         self.hap1_data = PanelData::default();
-        if let Some(region) = &hap1_region {
+        if let Some(region) = hap1_region {
             if let Some(bam_path) = &self.data_paths.reads_to_hap1_bam {
                 let region_str = region.to_string();
                 if let Ok(reads) = genome::bam::query_bam(bam_path, &region_str) {
@@ -497,7 +624,7 @@ impl ViewerApp {
 
         // -- Haplotype 2 panel: BAM reads + FASTA sequence --
         self.hap2_data = PanelData::default();
-        if let Some(region) = &hap2_region {
+        if let Some(region) = hap2_region {
             if let Some(bam_path) = &self.data_paths.reads_to_hap2_bam {
                 let region_str = region.to_string();
                 if let Ok(reads) = genome::bam::query_bam(bam_path, &region_str) {
@@ -583,6 +710,7 @@ impl ViewerApp {
                         .pick_file()
                     {
                         self.data_paths.reads_bam = Some(path);
+                        self.region_cache.clear();
                         self.load_region_data();
                     }
                     ui.close_menu();
@@ -593,6 +721,7 @@ impl ViewerApp {
                         .pick_file()
                     {
                         self.data_paths.reference_fasta = Some(path);
+                        self.region_cache.clear();
                         self.load_region_data();
                     }
                     ui.close_menu();
@@ -603,6 +732,7 @@ impl ViewerApp {
                         .pick_file()
                     {
                         self.data_paths.hap1_fasta = Some(path);
+                        self.region_cache.clear();
                         self.load_region_data();
                     }
                     ui.close_menu();
@@ -613,6 +743,7 @@ impl ViewerApp {
                         .pick_file()
                     {
                         self.data_paths.hap2_fasta = Some(path);
+                        self.region_cache.clear();
                         self.load_region_data();
                     }
                     ui.close_menu();
@@ -771,18 +902,22 @@ impl ViewerApp {
             // Zoom controls
             if ui.button("🔍+").on_hover_text("Zoom in (+)").clicked() {
                 self.sync_manager.zoom(PanelId::Reference, 2.0);
+                self.schedule_debounced_reload();
             }
             if ui.button("🔍−").on_hover_text("Zoom out (-)").clicked() {
                 self.sync_manager.zoom(PanelId::Reference, 0.5);
+                self.schedule_debounced_reload();
             }
 
             // Pan controls
             let pan_delta = self.sync_manager.view(PanelId::Reference).span() as i64 / 4;
             if ui.button("◀◀").on_hover_text("Pan left").clicked() {
                 self.sync_manager.pan(PanelId::Reference, -pan_delta);
+                self.schedule_debounced_reload();
             }
             if ui.button("▶▶").on_hover_text("Pan right").clicked() {
                 self.sync_manager.pan(PanelId::Reference, pan_delta);
+                self.schedule_debounced_reload();
             }
 
             ui.separator();
@@ -1099,6 +1234,20 @@ impl ViewerApp {
         }
     }
 
+    /// Schedule a debounced data reload after pan/zoom.
+    ///
+    /// Each call resets the debounce timer.  The actual reload fires in
+    /// `update()` once `PAN_ZOOM_DEBOUNCE_MS` has elapsed without another
+    /// pan/zoom event.
+    fn schedule_debounced_reload(&mut self) {
+        self.last_pan_zoom_time = Some(Instant::now());
+        self.pending_debounce_reload = true;
+        // Cancel any in-flight background load for stale view.
+        if let Some(loader) = &self.loader {
+            loader.cancel();
+        }
+    }
+
     /// Handle keyboard shortcuts for region navigation and zoom.
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
         if ctx.wants_keyboard_input() {
@@ -1128,9 +1277,11 @@ impl ViewerApp {
         }
         if zoom_in {
             self.sync_manager.zoom(PanelId::Reference, 2.0);
+            self.schedule_debounced_reload();
         }
         if zoom_out {
             self.sync_manager.zoom(PanelId::Reference, 0.5);
+            self.schedule_debounced_reload();
         }
         if toggle_sync {
             self.sync_manager.sync_enabled = !self.sync_manager.sync_enabled;
@@ -1138,8 +1289,29 @@ impl ViewerApp {
     }
 }
 
+/// Debounce interval for pan/zoom before triggering data reload (ms).
+const PAN_ZOOM_DEBOUNCE_MS: u128 = 200;
+
 impl eframe::App for ViewerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Poll for background load results.
+        self.poll_load_results();
+
+        // Handle debounced pan/zoom reload.
+        if self.pending_debounce_reload
+            && self
+                .last_pan_zoom_time
+                .is_some_and(|t| t.elapsed().as_millis() >= PAN_ZOOM_DEBOUNCE_MS)
+        {
+            self.pending_debounce_reload = false;
+            self.load_region_data();
+        }
+
+        // Request continuous repaints while loading or debouncing.
+        if self.is_loading || self.pending_debounce_reload {
+            ctx.request_repaint();
+        }
+
         self.handle_keyboard(ctx);
 
         // Top toolbar
@@ -1150,11 +1322,20 @@ impl eframe::App for ViewerApp {
         // Bottom status bar
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(&self.status_message)
-                        .small()
-                        .color(egui::Color32::from_gray(180)),
-                );
+                if self.is_loading {
+                    ui.spinner();
+                    ui.label(
+                        egui::RichText::new("Loading…")
+                            .small()
+                            .color(egui::Color32::from_gray(180)),
+                    );
+                } else {
+                    ui.label(
+                        egui::RichText::new(&self.status_message)
+                            .small()
+                            .color(egui::Color32::from_gray(180)),
+                    );
+                }
             });
         });
 

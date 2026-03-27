@@ -1,8 +1,10 @@
 mod app;
+mod data_loader;
 mod dot_plot;
 mod genome;
 mod panel_sync;
 mod region;
+mod region_cache;
 
 use std::path::PathBuf;
 
