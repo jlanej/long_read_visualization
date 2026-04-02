@@ -3233,6 +3233,35 @@ mod tests {
     }
 
     #[test]
+    fn test_load_region_data_with_repo_toy_bam() {
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
+        let manifest_path = repo_root.join("resources/toy_dataset/toy_manifest.json");
+        let reads_bam = repo_root.join("resources/toy_dataset/toy_reads.bam");
+
+        if !manifest_path.exists() || !reads_bam.exists() {
+            eprintln!("skipping: repository toy manifest/BAM not found");
+            return;
+        }
+
+        let mut app = ViewerApp::default();
+        app.data_paths.reads_bam = Some(reads_bam);
+        app.navigator.load_manifest(&manifest_path).unwrap();
+        app.load_region_data();
+
+        assert!(
+            !app.ref_data.rows.is_empty(),
+            "expected toy BAM reads for first toy manifest region"
+        );
+        assert!(
+            !app.status_message.starts_with("Reads error:"),
+            "unexpected read load error: {}",
+            app.status_message
+        );
+    }
+
+    #[test]
     fn test_data_paths_from_tsv() {
         let tmp = tempfile::tempdir().unwrap();
         let tsv_path = tmp.path().join("config.tsv");
